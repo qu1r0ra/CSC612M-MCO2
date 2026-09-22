@@ -8,7 +8,7 @@ Do not headline a CUDA speedup from Python interpreter overhead or from separate
 ## Comparison backends
 
 - Use a native C++/CUDA executable for the compiled CPU and CUDA backends; use Python for the reference and analysis.
-- Keep the course's sequential Python reference explicit and scalar. A vectorized thesis implementation is useful reference material, not the sequential baseline.
+- Keep the course's sequential Python reference explicit and scalar. A vectorized implementation may be useful for comparison, but it is not the sequential baseline.
 - Use a single-threaded compiled CPU comparator. Record compiler vectorization settings and identify a scalar configuration for the course comparison.
 
 ## Timing boundaries

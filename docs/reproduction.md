@@ -30,6 +30,6 @@ Preserve verified results and provenance in a frozen snapshot for downstream ana
 
 ## Scope boundary
 
-The course implementation does not require full federated training, network transport, or thesis-wire-format compatibility.
+The course implementation does not require full federated training, network transport, or compatibility with other wire formats.
 Host-ready means packed bytes in host memory.
 Remote GPU experiment execution remains author-run and is outside this repository scaffold.
