@@ -111,7 +111,8 @@ static void test_overflow(void)
 
 static void test_geometry(void)
 {
-    static const int geometry[][2] = {{32, 1}, {96, 13}, {128, 7}, {256, 0}, {1024, 3}};
+    /* grid 0 picks the capped automatic grid; block 1 forces the cap. */
+    static const int geometry[][2] = {{1, 0}, {32, 1}, {96, 13}, {128, 7}, {256, 0}, {1024, 3}};
     const uint64_t n = 1000003; /* not a multiple of 4 */
     uint32_t *cpu = malloc(n * sizeof *cpu);
     uint32_t *gpu = malloc(n * sizeof *gpu);

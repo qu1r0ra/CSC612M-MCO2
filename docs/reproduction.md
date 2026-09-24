@@ -44,7 +44,7 @@ It checks:
 - Upstream Philox4x32-10 known-answer vectors on CPU and GPU.
 - The seed, group, tensor, and invocation mapping from the technical contract, including 64-bit group splitting.
 - Rejection of tensor and invocation identifiers above `2^32-1`.
-- Bitwise CPU/GPU agreement for 1,000,003 elements under five block and grid geometries.
+- Bitwise CPU/GPU agreement for 1,000,003 elements under six block and grid geometries, including the capped automatic grid.
 - The Bernoulli threshold at `p=0`, `p=1`, `p=1-2^-24`, and `p=0.5` on CPU and GPU.
 
 On Linux, including Google Colab, the `[unix]` recipes call `nvcc` directly with the system host compiler.

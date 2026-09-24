@@ -13,6 +13,16 @@
         }                                    \
     } while (0)
 
+/* Kernels are grid-stride loops, so capping the grid never skips elements. */
+#define MAX_AUTO_GRID 65535
+
+static int auto_grid(uint64_t n, int block_size)
+{
+    uint64_t blocks = (n + block_size - 1) / block_size;
+
+    return blocks < MAX_AUTO_GRID ? (int)blocks : MAX_AUTO_GRID;
+}
+
 __global__ void philox_raw_kernel(philox4x32_ctr_t ctr, philox4x32_key_t key,
                                   philox4x32_ctr_t *out)
 {
@@ -36,9 +46,10 @@ __global__ void rng_words_kernel(mco2_rng_stream s, uint64_t n, uint32_t *out)
 __global__ void bernoulli_kernel(const uint32_t *words, const float *p, uint64_t n,
                                  uint8_t *out)
 {
-    uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    uint64_t i;
 
-    if (i < n)
+    for (i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride)
         out[i] = (uint8_t)mco2_bernoulli(words[i], p[i]);
 }
 
@@ -80,7 +91,7 @@ extern "C" int mco2_rng_words_cuda(const mco2_rng_stream *s, uint64_t n, uint32_
     if (n == 0)
         return 0;
     if (grid_size <= 0)
-        grid_size = (int)((n + block_size - 1) / block_size);
+        grid_size = auto_grid(n, block_size);
 
     CHECK(cudaMalloc(&d_out, n * sizeof *d_out));
     rng_words_kernel<<<grid_size, block_size>>>(*s, n, d_out);
@@ -108,7 +119,7 @@ extern "C" int mco2_bernoulli_cuda(const uint32_t *words, const float *p, uint64
     CHECK(cudaMalloc(&d_out, n * sizeof *d_out));
     CHECK(cudaMemcpy(d_words, words, n * sizeof *words, cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(d_p, p, n * sizeof *p, cudaMemcpyHostToDevice));
-    bernoulli_kernel<<<(unsigned)((n + block - 1) / block), block>>>(d_words, d_p, n, d_out);
+    bernoulli_kernel<<<auto_grid(n, block), block>>>(d_words, d_p, n, d_out);
     CHECK(cudaGetLastError());
     CHECK(cudaMemcpy(out, d_out, n * sizeof *out, cudaMemcpyDeviceToHost));
 done:
