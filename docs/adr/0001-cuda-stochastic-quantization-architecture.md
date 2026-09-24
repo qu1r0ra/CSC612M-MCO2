@@ -1,10 +1,10 @@
 ---
 status: accepted
-updated: 2026-09-23
+updated: 2026-09-24
 ---
 # CUDA stochastic quantization architecture
 
-Implement a published norm-scaled stochastic quantizer as a native C++/CUDA compression pipeline, with a Python reference, a single-thread compiled CPU comparator, and real 4/8-bit packed output checked by a decoder. This exposes SIMT work while keeping the course deliverable focused on quantization rather than an end-to-end training system; the compiled comparator also prevents Python overhead from carrying the performance claim.
+Implement a published norm-scaled stochastic quantizer as a native CUDA compression pipeline driven by a C host program, with a Python reference, a single-thread C comparator, and real 4/8-bit packed output checked by a decoder. CUDA kernels are reached through `extern "C"` launch functions, matching the course's C-caller convention. This exposes SIMT work while keeping the course deliverable focused on quantization rather than an end-to-end training system; the C comparator also prevents Python overhead from carrying the performance claim.
 
 ## Consequences
 

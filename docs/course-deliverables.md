@@ -4,7 +4,7 @@ The public repository must eventually contain the course source or a source link
 
 ## Bounded deliverables
 
-- Proposal: inputs, algorithm, SIMT mapping, sequential work, related implementations, outputs, platform, and milestone.
+- Proposal and pitch: inputs, algorithm, SIMT mapping, sequential work, related implementations, outputs, platform, and milestone.
 - Mid-project update: a correct CPU pipeline and the first correct CUDA reconstruction with preliminary stage timings.
 - Final submission: packed pipeline, decoder checks, compact evaluation, source, explanation, and demonstration.
 

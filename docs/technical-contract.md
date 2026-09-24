@@ -5,6 +5,15 @@ Status: accepted course scope; executable implementation pending.
 This document carries the technical requirements needed to understand and reproduce the course implementation.
 The code and tests become execution authority once they exist.
 
+## Course scope
+
+Everything in this contract is required for the week-13 course submission except the items listed below, which are later extensions and must not block course completion:
+
+- Malformed-record validation beyond header magic, version, reserved bytes, element count, and payload length.
+- The full empirical-expectation suite in correctness layer 3; the course requires only a small unbiasedness check across independent seeds.
+
+The benchmark protocol records its own course scope.
+
 ## Input and quantizer
 
 - Inputs are finite FP32 vectors with one scale per tensor.
@@ -45,7 +54,7 @@ Reject identifier overflow.
 
 1. Exact codes and bytes for prescribed scales and prescribed RNG words.
 2. Numerical reconstruction against the FP64 oracle with documented FP32 error bounds.
-3. Empirical expectation checks across independent seeds with fixed sample counts and acceptance rules.
+3. Empirical expectation checks across independent seeds with fixed sample counts and acceptance rules (see Course scope).
 
 Include signed zero, representable extremes, saturation boundaries, non-multiple block sizes, odd payload lengths, and malformed records.
 Do not infer correctness from one seed or require identical codes when independently reduced scales differ.

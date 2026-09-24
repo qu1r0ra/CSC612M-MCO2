@@ -5,11 +5,19 @@ Status: accepted protocol; executable benchmark pending.
 The benchmark must expose the cost of normalization, random-number generation, rounding, packing, and required transfers.
 Do not headline a CUDA speedup from Python interpreter overhead or from separately timed stages summed into a complete path.
 
+## Course scope
+
+The week-13 course submission requires the protocol below except these later extensions, which must not block course completion:
+
+- The GPU-origin, host-ready timing boundary.
+- The sparse input family and the synthetic collection shaped like reference-model tensors.
+- Crossover and stability analysis beyond reporting median and interquartile range per case.
+
 ## Comparison backends
 
-- Use a native C++/CUDA executable for the compiled CPU and CUDA backends; use Python for the reference and analysis.
-- Keep the course's sequential Python reference explicit and scalar. A vectorized implementation may be useful for comparison, but it is not the sequential baseline.
-- Use a single-threaded compiled CPU comparator. Record compiler vectorization settings and identify a scalar configuration for the course comparison.
+- Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.
+- The course sequential/parallel comparison is the single-thread C comparator against CUDA. Record compiler vectorization settings and identify a scalar configuration for that comparison.
+- The scalar Python reference is the correctness oracle; its timings may appear as an additional row but never as the headline baseline. A vectorized Python implementation may be useful for comparison.
 
 ## Timing boundaries
 

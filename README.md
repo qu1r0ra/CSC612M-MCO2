@@ -20,7 +20,7 @@ Project-wide planning and issue tracking are handled separately from this public
 
 ## Build status
 
-The native C++/CUDA build is not implemented by this scaffold.
+The native C/CUDA build is not implemented by this scaffold.
 When implementation begins, add the exact build and test commands to `docs/reproduction.md` before claiming reproducibility.
 
 ## Quality gates

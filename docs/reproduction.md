@@ -6,7 +6,7 @@ This document is the public entry point for reproducing the course implementatio
 
 ## Before implementation exists
 
-The repository currently contains the accepted contract and architecture decision but not the native C++/CUDA executable.
+The repository currently contains the accepted contract and architecture decision but not the native C/CUDA executable.
 Do not interpret a successful documentation check as a successful CUDA build or benchmark.
 
 ## Local quality preflight
@@ -18,8 +18,8 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 
 Before claiming reproducibility, add the following verified commands and outputs:
 
-1. Toolchain and GPU inventory commands.
-2. Native CPU and CUDA build commands.
+1. Toolchain and GPU inventory commands. On Windows, record the MSVC host compiler that `nvcc` uses and confirm the CUDA toolkit supports the target GPU architecture.
+2. Native CPU and CUDA build commands for both a local NVIDIA GPU and Google Colab; record the Colab GPU model with each Colab run.
 3. RNG known-answer checks on CPU and GPU.
 4. Python oracle, codec, decoder, and malformed-input test commands.
 5. Benchmark command with matrix, warmup, repetition, and timing-boundary configuration.
