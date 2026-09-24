@@ -28,14 +28,21 @@ The benchmark protocol records its own course scope.
 ## Randomness
 
 Use shared Philox4x32-10 behavior on CPU and CUDA.
-The dependency revision and license must be pinned when implementation starts.
+The generator is Random123 v1.14.0 (commit `726a093cd9a73f3ec3c8d7a70ff10ed8efec8d13`), vendored under `third_party/random123` with its BSD-style license.
 The logical mapping uses a 64-bit seed, a 64-bit group index, a 32-bit tensor identifier, and a 32-bit invocation identifier.
 Element `i` uses group `floor(i/4)` and lane `i mod 4`.
 Launch geometry must not change this mapping.
 
-Convert a 32-bit word `r` to a Bernoulli decision with `r < floor(p*2^32)` using a sufficiently wide threshold type.
+The Philox words are laid out as follows, low word first:
+
+| Philox input | Word 0 | Word 1 | Word 2 | Word 3 |
+| --- | --- | --- | --- | --- |
+| Key | seed bits 0-31 | seed bits 32-63 | — | — |
+| Counter | group bits 0-31 | group bits 32-63 | tensor identifier | invocation identifier |
+
+Convert a 32-bit word `r` to a Bernoulli decision with `r < floor(p*2^32)`, holding the threshold in 64 bits because `p=1` gives `2^32`.
 Test `p=0` and `p=1` explicitly.
-Reject identifier overflow.
+Identifier overflow means a tensor or invocation identifier above `2^32-1`: the stream constructor rejects it rather than truncating it, so two logical streams never share a counter.
 
 ## Packed codec
 
