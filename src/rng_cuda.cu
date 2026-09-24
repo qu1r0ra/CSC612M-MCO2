@@ -88,6 +88,8 @@ extern "C" int mco2_rng_words_cuda(const mco2_rng_stream *s, uint64_t n, uint32_
     uint32_t *d_out = NULL;
     int status = 0;
 
+    if (block_size <= 0)
+        return (int)cudaErrorInvalidValue;
     if (n == 0)
         return 0;
     if (grid_size <= 0)
