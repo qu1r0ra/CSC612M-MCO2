@@ -11,7 +11,7 @@ The week-13 course submission requires the protocol below except these later ext
 
 - The GPU-origin, host-ready timing boundary.
 - The sparse input family and the synthetic collection shaped like reference-model tensors.
-- Crossover analysis (locating the element count where CUDA overtakes the comparator). The course driver does include a between-process stability check, described below; it is not a crossover study.
+- Crossover analysis (locating the element count where CUDA overtakes the comparator). The course run includes only a between-process stability check; the crossover study is the size sweep below.
 
 The in-process benchmark driver is implemented in `benchmark_driver.py` and can be reproduced with `just bench-matrix`. The course matrix evidence is the frozen snapshot `results/2026-09-25-59c8967`; its `summary.csv` is the source for every reported figure. In that snapshot, `claim_supported` holds for these cases only (speedup vs the C comparator as pooled-median point estimate [trial-median range]):
 
@@ -28,6 +28,18 @@ The in-process benchmark driver is implemented in `benchmark_driver.py` and can 
 Every other case supports no claim: its verdict is inconclusive, or the case or its comparator is unstable. No boundary inversion occurred, and the vectorization report shows no vectorized comparator loop.
 
 Known limitations: case order is fixed by element count, smallest first, and path order is balanced only within a case, so GPU clock ramp-up from idle (recorded as P8 at the start of this run) falls on the smallest cases. The claim rule flags such cases as unstable rather than reporting them. An earlier six-trial run at revision `8622430` was discarded because its vectorization report failed to compile. Under the same thresholds, its claim set differed at the margins: 2^22 4-bit was unsupported because its comparator was unstable, 2^18 8-bit host-origin was unsupported, and 2^10 8-bit resident was not a supported slowdown. Cases near the thresholds should therefore be read as marginal.
+
+## Size sweep (paper extension)
+
+This protocol was fixed before the sweep ran. The course snapshot above stays the course evidence; the sweep is a separate snapshot.
+
+- Grid: every power of two from `2^10` to `2^26` elements (17 sizes) at 4 and 8 bits, for the C comparator, CUDA resident, and CUDA host-origin paths. This is the driver default.
+- Per case: 10 warmups, 30 measured repetitions, 6 trials covering every path ordering, the same statistics, and the same claim rule. The rule is unchanged from the course run.
+- Case order: the 34 (size, bits) cases run in a random order drawn with `numpy.random.default_rng(612)`. The manifest records the seed and the order, and each case JSON records its `execution_index`. Path order within a case stays balanced across trials.
+- GPU warm-up: before the first timed process, the driver runs the resident path untimed on the largest input for 20 seconds. Before each case's timed processes, after its correctness gate, it runs the same work on that case's input for 3 seconds, so clocks recover after the gate and after long CPU processes of the previous case. The manifest records `nvidia-smi` state before and after the initial warm-up and after the last timed process; each case JSON records its state after its own warm-up.
+- Copy timing: the host-origin path records H2D and D2H times for every repetition with CUDA events. Each case also records the median of each stage, plus `other_ms`, the median of wall time minus the timed stages. The wall-clock total stays the headline measure. Stage times are diagnosis only, never summed into a path time.
+- Crossover: for one path at one bit width, the crossover is the interval between two adjacent grid sizes whose verdicts differ (`slower` on one side, `faster` on the other), with `claim_supported` true on both sides. If no such interval exists, or more than one exists, the crossover is reported as not resolved, bracketed by the largest supported slower size and the smallest supported faster size.
+- Outputs: `just figures <snapshot>` writes F1 (time vs elements, log-log, band = trial-median range), F2 (speedup vs elements with a 1× line; filled markers where `claim_supported`, hollow otherwise), F3 (CUDA stage shares at `2^14`, `2^18`, `2^22`, `2^26`), and `report.md` (crossover and the T1 table) into the snapshot folder.
 
 ## Comparison backends
 
@@ -50,7 +62,7 @@ Verify decoding outside the measured compression interval.
 ## Matrix
 
 - Main platform: the local RTX 5060, subject to fresh inventory and successful build verification.
-- Element counts: `2^10`, `2^14`, `2^18`, and `2^22`.
+- Element counts: `2^10`, `2^14`, `2^18`, and `2^22` for the course run; the size sweep covers every power of two to `2^26`.
 - Bit widths: 4 and 8.
 - Input families: dense centered values and sparse values.
 - Add one pinned synthetic collection shaped like reference-model tensors without requiring training data.

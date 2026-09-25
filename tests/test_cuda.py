@@ -100,9 +100,18 @@ def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, bounda
     assert payload["configuration"]["reps"] == 2
     assert payload["configuration"]["repetition_invocation_ids"] == [41, 42]
     assert payload["configuration"]["warmup_invocation_ids"] == [43]
-    for key in ("samples_ms", "k1_ms", "k2_ms", "k3_ms"):
+    copy_keys = ("h2d_ms", "d2h_ms") if boundary == "host-origin" else ()
+    for key in ("samples_ms", "k1_ms", "k2_ms", "k3_ms", *copy_keys):
         assert len(payload[key]) == 2
         assert all(sample >= 0 for sample in payload[key])
+    if boundary == "host-origin":
+        assert all(sample > 0 for sample in payload["h2d_ms"])
+        assert all(sample > 0 for sample in payload["d2h_ms"])
+        for index, wall in enumerate(payload["samples_ms"]):
+            stages = sum(payload[k][index] for k in ("k1_ms", "k2_ms", "k3_ms", *copy_keys))
+            assert stages <= wall
+    else:
+        assert "h2d_ms" not in payload and "d2h_ms" not in payload
     assert payload["header_bytes"] == HEADER.size
     assert payload["payload_bytes"] == (len(values) + (bits == 4)) // (2 if bits == 4 else 1)
 

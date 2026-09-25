@@ -10,6 +10,7 @@ from benchmark_driver import (
     DEFAULT_COUNTS,
     DEFAULT_TRIALS,
     SUMMARY_FIELDS,
+    case_order,
     compare_to_comparator,
     compute_case_statistics,
     run_benchmark_matrix,
@@ -44,10 +45,11 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "2.0"
+    assert manifest["manifest_version"] == "2.1"
     assert manifest["transfer_policy"] == "pageable"
     assert len(manifest["cases"]) == 2  # 1 size * 2 bit widths * 1 CPU path
     assert manifest["all_cases_passed"] is True
+    assert manifest["gpu_state"]["warmup"] is None
 
     csv_path = snapshot_dir / manifest["summary_csv"]
     assert csv_path.is_file()
@@ -66,12 +68,15 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     result_dir = run_benchmark_matrix(
         root=ROOT,
         output_dir=snapshot_dir,
-        counts=[1024],
+        counts=[1024, 2048],
         bit_widths=[4, 8],
         backends=["cpu", "cuda"],
         warmups=1,
         reps=2,
         trials=2,
+        case_order_seed=7,
+        gpu_warmup_seconds=0.5,
+        case_warmup_seconds=0.2,
         allow_existing=True,
         allow_dirty=True,
     )
@@ -82,7 +87,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "2.0"
+    assert manifest["manifest_version"] == "2.1"
     assert "date" in manifest
     assert "created_at_utc" in manifest
     assert "git_provenance" in manifest
@@ -100,8 +105,23 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert "/DMCO2_ENABLE_CUDA" in manifest["build_flags"]["comparator_c"]
     assert "--fmad=false" in manifest["build_flags"]["cuda_nvcc"]
     assert manifest["transfer_policy"] == "pageable"
-    assert set(manifest["gpu_state"]) == {"note", "start", "end"}
+    gpu_state = manifest["gpu_state"]
+    assert set(gpu_state) == {"note", "start", "warmup", "after_warmup", "end"}
+    assert gpu_state["warmup"]["processes"] >= 1
+    assert gpu_state["warmup"]["seconds_elapsed"] >= 0.5
+    assert "2048" in gpu_state["warmup"]["workload"]
+    assert gpu_state["after_warmup"] is not None
     params = manifest["matrix_parameters"]
+    assert params["case_order_seed"] == 7
+    assert params["case_order"] == [
+        {"count": c, "bits": b} for c, b in case_order([1024, 2048], [4, 8], 7)
+    ]
+    assert sorted((c["count"], c["bits"]) for c in params["case_order"]) == [
+        (1024, 4),
+        (1024, 8),
+        (2048, 4),
+        (2048, 8),
+    ]
     assert params["trials"] == 2
     assert len(params["trial_orders"]) == 2
     assert params["trial_orders"][0] != params["trial_orders"][1]
@@ -110,7 +130,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert "linear" in method["quantile_method"]
 
     # Inputs provenance
-    assert "1024" in manifest["inputs"]
+    assert set(manifest["inputs"]) == {"1024", "2048"}
     inp = manifest["inputs"]["1024"]
     assert inp["count"] == 1024
     assert inp["generator"] == "numpy.random.default_rng"
@@ -130,8 +150,8 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert str(ROOT.resolve()) not in vec_report
 
     # Cases
-    # 1 size (1024) * 2 bits (4, 8) * 3 paths (cpu, cuda-resident, cuda-host-origin) = 6 cases
-    assert len(manifest["cases"]) == 6
+    # 2 sizes * 2 bits (4, 8) * 3 paths (cpu, cuda-resident, cuda-host-origin) = 12 cases
+    assert len(manifest["cases"]) == 12
     assert manifest["all_cases_passed"] is True
 
     # 2. Case JSONs
@@ -141,8 +161,14 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         case_data = json.loads(case_file.read_text(encoding="utf-8"))
 
         assert case_data["case_id"] == case_id
-        assert case_data["count"] == 1024
+        assert case_data["count"] in (1024, 2048)
+        assert case_data["case_warmup"]["processes"] >= 1
+        assert case_data["case_warmup"]["gpu_state_after"] is not None
         assert case_data["bits"] in (4, 8)
+        assert params["case_order"][case_data["execution_index"]] == {
+            "count": case_data["count"],
+            "bits": case_data["bits"],
+        }
         assert case_data["backend"] in ("cpu", "cuda")
         assert case_data["timing_boundary"] in ("comparator", "resident", "host-origin")
         assert case_data["transfer_policy"] == "pageable"
@@ -153,7 +179,8 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         assert case_data["warmup_invocation_ids"] == [2]
         assert len(case_data["warmup_invocation_ids"]) == 1
         assert case_data["header_bytes"] == 20
-        assert case_data["payload_bytes"] == (1024 if case_data["bits"] == 8 else 512)
+        count = case_data["count"]
+        assert case_data["payload_bytes"] == (count if case_data["bits"] == 8 else count // 2)
         assert case_data["correctness"]["status"] == "passed"
         assert case_data["correctness"]["byte_identical_to_compress"] is True
         assert case_data["correctness"]["cpu_cuda_byte_identical"] is True
@@ -172,6 +199,21 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
                 for k in ("k1_ms", "k2_ms", "k3_ms"):
                     assert len(run[k]) == 2
                     assert all(s >= 0 for s in run[k])
+            if case_data["timing_boundary"] == "host-origin":
+                for k in ("h2d_ms", "d2h_ms"):
+                    assert len(run[k]) == 2
+                    assert all(s > 0 for s in run[k])
+            else:
+                assert "h2d_ms" not in run and "d2h_ms" not in run
+
+        stages = case_data["stage_medians_ms"]
+        if case_data["backend"] == "cpu":
+            assert stages is None
+        else:
+            expected = {"k1_ms", "k2_ms", "k3_ms", "other_ms"}
+            if case_data["timing_boundary"] == "host-origin":
+                expected |= {"h2d_ms", "d2h_ms"}
+            assert set(stages) == expected
 
         stats = case_data["statistics"]
         assert stats is not None
@@ -195,10 +237,16 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         reader = csv.DictReader(f)
         rows = list(reader)
 
-    assert len(rows) == 6
+    assert len(rows) == 12
     assert reader.fieldnames == SUMMARY_FIELDS
+    order = ["cpu-comparator", "cuda-resident", "cuda-host-origin"]
+    keys = [
+        (int(r["count"]), int(r["bits"]), order.index(f"{r['backend']}-{r['boundary']}"))
+        for r in rows
+    ]
+    assert keys == sorted(keys)
     for row in rows:
-        assert row["count"] == "1024"
+        assert row["count"] in ("1024", "2048")
         assert row["bits"] in ("4", "8")
         assert row["correctness"] == "passed"
         assert float(row["median_ms"]) >= 0
@@ -218,6 +266,8 @@ def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
         warmups=1,
         reps=2,
         trials=2,
+        gpu_warmup_seconds=0,
+        case_warmup_seconds=0,
         force_fail=True,
         allow_existing=True,
         allow_dirty=True,
@@ -267,10 +317,9 @@ def test_driver_refuses_to_overwrite_existing_snapshot(tmp_path):
         )
 
 
-def test_full_matrix_counts_never_run_in_tests():
-    # Verify that test suite does not include the full matrix element counts
-    # (2^14, 2^18, 2^22), only 2^10 is used for testing driver.
-    assert DEFAULT_COUNTS == (1024, 16384, 262144, 4194304)
+def test_default_counts_are_the_power_of_two_sweep():
+    # Tests pass explicit tiny counts; the default grid is the full sweep.
+    assert DEFAULT_COUNTS == tuple(2**e for e in range(10, 27))
 
 
 def test_driver_refuses_dirty_tree(tmp_path):

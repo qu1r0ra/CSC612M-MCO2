@@ -423,7 +423,9 @@ typedef enum {
     BENCH_SAMPLE_WALL_TIME,
     BENCH_SAMPLE_K1_TIME,
     BENCH_SAMPLE_K2_TIME,
-    BENCH_SAMPLE_K3_TIME
+    BENCH_SAMPLE_K3_TIME,
+    BENCH_SAMPLE_H2D_TIME,
+    BENCH_SAMPLE_D2H_TIME
 } mco2_bench_timing_field;
 
 static void print_double_array(const mco2_bench_sample *samples,
@@ -446,6 +448,12 @@ static void print_double_array(const mco2_bench_sample *samples,
             break;
         case BENCH_SAMPLE_K3_TIME:
             value = samples[i].k3_ms;
+            break;
+        case BENCH_SAMPLE_H2D_TIME:
+            value = samples[i].h2d_ms;
+            break;
+        case BENCH_SAMPLE_D2H_TIME:
+            value = samples[i].d2h_ms;
             break;
         default:
             value = 0.0;
@@ -504,6 +512,12 @@ static void print_bench_json(
         print_double_array(samples, reps, BENCH_SAMPLE_K2_TIME);
         printf(",\"k3_ms\":");
         print_double_array(samples, reps, BENCH_SAMPLE_K3_TIME);
+        if (strcmp(boundary, "host-origin") == 0) {
+            printf(",\"h2d_ms\":");
+            print_double_array(samples, reps, BENCH_SAMPLE_H2D_TIME);
+            printf(",\"d2h_ms\":");
+            print_double_array(samples, reps, BENCH_SAMPLE_D2H_TIME);
+        }
     }
     printf(",\"header_bytes\":%d,\"payload_bytes\":%llu}\n",
            MCO2_Q8_HEADER_SIZE, (unsigned long long)payload_bytes);
