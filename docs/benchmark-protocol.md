@@ -27,7 +27,7 @@ The in-process benchmark driver is implemented in `benchmark_driver.py` and can 
 
 Every other case supports no claim: its verdict is inconclusive, or the case or its comparator is unstable. No boundary inversion occurred, and the vectorization report shows no vectorized comparator loop.
 
-Known limitations: case order is fixed by element count, smallest first, and path order is balanced only within a case, so GPU clock ramp-up from idle (recorded as P8 at the start of this run) falls on the smallest cases. The claim rule flags such cases as unstable rather than reporting them. An earlier six-trial run at revision `8622430` was discarded because its vectorization report failed to compile. Under the same thresholds, its claim set differed at the margins: 2^22 4-bit was unsupported because its comparator was unstable, 2^18 8-bit host-origin was unsupported, and 2^10 8-bit resident was not a supported slowdown. Cases near the thresholds should therefore be read as marginal.
+Known limitations: case order is fixed by element count, smallest first, and path order is balanced only within a case, so GPU clock ramp-up from idle (recorded as P8 at the start of this run) falls on the smallest cases. The claim rule flags such cases as unstable rather than reporting them. An earlier six-trial run at revision `8622430` was discarded because its vectorization report failed to compile. Under the same thresholds, its claim set differed at the margins: 2^22 4-bit was unsupported because its comparator was unstable, 2^18 8-bit host-origin was unsupported, and 2^10 8-bit resident was not a supported slowdown. Cases near the thresholds should therefore be read as marginal. The size sweep's run 1 (below) shows the resident path's between-process instability is not confined to small cases.
 
 ## Size sweep (paper extension)
 
@@ -40,6 +40,25 @@ This protocol was fixed before the sweep ran. The course snapshot above stays th
 - Copy timing: the host-origin path records H2D and D2H times for every repetition with CUDA events. Each case also records the median of each stage, plus `other_ms`, the median of wall time minus the timed stages. The wall-clock total stays the headline measure. Stage times are diagnosis only, never summed into a path time.
 - Crossover: for one path at one bit width, the crossover is the interval between two adjacent grid sizes whose verdicts differ (`slower` on one side, `faster` on the other), with `claim_supported` true on both sides. If no such interval exists, or more than one exists, the crossover is reported as not resolved, bracketed by the largest supported slower size and the smallest supported faster size.
 - Outputs: `just figures <snapshot>` writes F1 (time vs elements, log-log, band = trial-median range), F2 (speedup vs elements with a 1× line; filled markers where `claim_supported`, hollow otherwise), F3 (CUDA stage shares at `2^14`, `2^18`, `2^22`, `2^26`), and `report.md` (crossover and the T1 table) into the snapshot folder.
+
+### Sweep result (run 1)
+
+Snapshot `results/2026-09-25-674bd5b`, from clean revision `674bd5b`: 102 cases, all passing the correctness gates. The T1 table and crossover lines are in [its `report.md`](../results/2026-09-25-674bd5b/report.md), and the figures are [F1](../results/2026-09-25-674bd5b/f1_time_vs_elements.png), [F2](../results/2026-09-25-674bd5b/f2_speedup_vs_elements.png) and [F3](../results/2026-09-25-674bd5b/f3_stage_breakdown.png). The GPU stayed in P1 at 2,932–2,947 MHz SM with no active clock-event reasons at the start, after the warm-up, and at the end.
+
+- Crossover: not resolved for any path or bit width. No slowdown has claim support. The smallest supported faster sizes are `2^18` (host-origin, 4-bit), `2^20` (host-origin, 8-bit), and `2^26` (resident, both widths). Pooled-median point estimates cross 1× between `2^13` and `2^14` for 4-bit resident and between `2^14` and `2^15` for host-origin at both widths; 8-bit resident rises above 1× at `2^13`, dips below at `2^14`, and stays above from `2^15`. These point estimates support no claim.
+- Supported claims: resident at `2^26` only (257× 4-bit, 230× 8-bit). Host-origin at `2^18` 4-bit, `2^20` 8-bit, `2^23` 8-bit, and every case from `2^24` up (27–31×).
+- Resident instability: the resident path is unstable (spread ratio above 1.25) at 32 of 34 cells, with ratios of 2–7 below `2^22`. The slow trials inflate the summed K1+K2+K3 event times, not just the wall time, so the slowdown is on the device side. They are not clustered after any particular preceding path, and they persist from the first ten repetitions of the process to the last ten, so they are neither clock ramp-up within a process nor a carry-over from the comparator. This data does not identify the cause; contention on the display GPU under WDDM and per-process power-state behavior are candidates. The course snapshot showed the same pattern less often (resident kernel medians more than 1.5× the case minimum in 6 of 48 trials, against 79 of 204 here).
+- Stage shares: the scale step K1 is 62–79% of the resident stage time at every plotted size. For host-origin at `2^22` and above, H2D is 64–78% and D2H 10–20%.
+
+Known limitations of the sweep:
+
+- Resident between-process instability, above, limits claims to the top of the grid. The warm-ups set clocks before each case but do not hold them within or between the timed processes, and the `nvidia-smi` readings are instantaneous.
+- The comparator is also flagged unstable at 6 of 34 cells (`2^11` and `2^12` at 4-bit, `2^11`, `2^15`, `2^21` at 8-bit, and `2^22` at 4-bit), which removes claim support there regardless of the CUDA path.
+- Host transfers use pageable memory. Pinned buffers would shorten the H2D share that dominates host-origin time.
+- The comparator is scalar and single-threaded, as the course requires. Speedups against it overstate the gain over an optimized CPU implementation.
+- All results come from one RTX 5060 on Windows, which is also the display GPU.
+
+Run 1 stays the pre-registered result. A revised protocol that targets resident stability must be recorded before its own run and produces a separate snapshot.
 
 ## Comparison backends
 
