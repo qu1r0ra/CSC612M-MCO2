@@ -62,7 +62,7 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
 
 @CUDA_SKIP
 def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
-    snapshot_dir = tmp_path / "test-snapshot"
+    snapshot_dir = tmp_path / "path with space" / "test-snapshot"
     result_dir = run_benchmark_matrix(
         root=ROOT,
         output_dir=snapshot_dir,
@@ -126,6 +126,8 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     vec_report = vec_report_path.read_text(encoding="utf-8")
     assert "/DMCO2_ENABLE_CUDA" in vec_report
     assert "/Qvec-report:2" in vec_report
+    assert "Exit code: 0" in vec_report
+    assert str(ROOT.resolve()) not in vec_report
 
     # Cases
     # 1 size (1024) * 2 bits (4, 8) * 3 paths (cpu, cuda-resident, cuda-host-origin) = 6 cases

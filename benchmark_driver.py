@@ -322,6 +322,13 @@ def generate_msvc_vectorization_report(
     script = root / "scripts" / "with-msvc.ps1"
     if os.name == "nt" and script.is_file() and host_flags is not None:
         object_dir.mkdir(parents=True, exist_ok=True)
+        # A quoted path ending in "\" escapes its closing quote through the
+        # PowerShell wrapper, so the directory ends in "/" instead.
+        try:
+            object_arg = str(object_dir.resolve().relative_to(root.resolve()))
+        except ValueError:
+            object_arg = str(object_dir.resolve())
+        object_arg = object_arg.replace("\\", "/")
         compile_args = [
             "cl.exe",
             *host_flags,
@@ -331,7 +338,7 @@ def generate_msvc_vectorization_report(
             "src\\codec.c",
             "src\\quantizer.c",
             "src\\rng_cpu.c",
-            f"/Fo:{object_dir}\\",
+            f"/Fo:{object_arg}/",
         ]
         cmd = [
             "powershell.exe",
@@ -343,9 +350,11 @@ def generate_msvc_vectorization_report(
             *compile_args,
         ]
         res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=False)
+        diagnostics = (res.stdout + "\n" + res.stderr).strip()
+        # cl reports absolute source paths; keep the published report root-relative.
+        diagnostics = diagnostics.replace(str(root.resolve()) + "\\", "")
         output_text = (
-            f"Command: {' '.join(compile_args)}\n"
-            f"Exit code: {res.returncode}\n\n" + (res.stdout + "\n" + res.stderr).strip()
+            f"Command: {' '.join(compile_args)}\nExit code: {res.returncode}\n\n" + diagnostics
         )
 
     if not output_text:
