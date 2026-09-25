@@ -1,15 +1,15 @@
 # Reproduction path
 
-Status: The CPU 8-bit and 4-bit pipelines, the CUDA 8-bit pipeline, full decoder validation, and Layer 3 unbiasedness checks are implemented. CUDA 4-bit support and the benchmark matrix remain.
+Status: The CPU 8-bit and 4-bit pipelines, the CUDA 8-bit and 4-bit pipelines, launch-geometry independence, full decoder validation, and Layer 3 unbiasedness checks are implemented. The benchmark matrix remains.
 
 This document is the public entry point for reproducing the course implementation.
 
 ## What exists
 
-The repository builds the CPU command-line tool `build/mco2`, the CUDA-enabled 8-bit command-line tool `build/mco2`, and the CUDA RNG check `build/test_rng`.
+The repository builds the CPU command-line tool `build/mco2`, the CUDA-enabled command-line tool `build/mco2`, and the CUDA RNG check `build/test_rng`.
 The CPU tool compresses raw little-endian FP32 vectors into version-1 8-bit or 4-bit records. It decodes each record to raw FP32.
 The NumPy oracle independently implements Philox4x32-10 and the CPU quantization path at both 8-bit and 4-bit widths.
-The CUDA tool supports 8-bit compression and shares the CPU decoder. `just test-cuda` checks byte parity, prescribed-scale parity, the FP64 reconstruction bound, invalid inputs, and timing output on a local CUDA device.
+The CUDA tool supports 8-bit and 4-bit compression and shares the CPU decoder. `just test-cuda` checks byte parity, prescribed-scale parity, the FP64 reconstruction bound, launch-geometry independence, determinism, invalid inputs, and timing output on a local CUDA device.
 
 ## Verified toolchain
 
@@ -52,7 +52,7 @@ It checks:
 - Bitwise CPU/GPU agreement for 1,000,003 elements under six block and grid geometries, including the capped automatic grid.
 - The Bernoulli threshold at `p=0`, `p=1`, `p=1-2^-24`, and `p=0.5` on CPU and GPU.
 
-`just build-cuda` compiles the C host sources as C and the CUDA kernels with precise FP32 division and square root, flush-to-zero disabled, and fused multiply-add disabled. CUDA quantization currently accepts 8-bit records. Run `just test-cuda` to build that executable and exercise its acceptance suite.
+`just build-cuda` compiles the C host sources as C and the CUDA kernels with precise FP32 division and square root, flush-to-zero disabled, and fused multiply-add disabled. CUDA quantization accepts 8-bit and 4-bit records. Run `just test-cuda` to build that executable and exercise its acceptance suite.
 
 ## CPU pipeline
 
@@ -87,13 +87,20 @@ build\mco2.exe compress --input input.f32 --output tensor_q4.msq --bits 4 --seed
 
 The CLI requires `--seed` for every compression command. `--words` supplies the random decisions for prescribed-scale tests. `--bits` accepts `4` or `8` (defaulting to `8`). The exact header layout, 4-bit nibble packing, pairwise FP32 reduction, and layer-2 bounds are in [the technical contract](technical-contract.md).
 
-The CUDA backend is selected with `--backend cuda`; it supports 8-bit records. Add `--timings` to emit a single JSON line to stderr with K1, K2, K3 device event times and host measured H2D/D2H copy times. For the Issue #13 acceptance timing, use an input of `2^22` FP32 elements and record the output line with the GPU and toolkit from `just toolchain`:
+The CUDA backend is selected with `--backend cuda`; it supports both 8-bit and 4-bit records (`--bits 8|4`). Optional `--block-size` and `--grid-size` configure execution geometry. Add `--timings` to emit a single JSON line to stderr with K1, K2, K3 device event times and host measured H2D/D2H copy times. For acceptance timing, use an input of `2^22` FP32 elements and record the output line with the GPU and toolkit from `just toolchain`:
 
 ```powershell
-build\mco2.exe compress --input input-2m22.f32 --output tensor-q8.msq --seed 123 --backend cuda --timings
+# 8-bit CUDA compression with timings
+build\mco2.exe compress --input input-2m22.f32 --output tensor-q8.msq --bits 8 --seed 123 --backend cuda --timings
+
+# 4-bit CUDA compression with timings
+build\mco2.exe compress --input input-2m22.f32 --output tensor-q4.msq --bits 4 --seed 123 --backend cuda --timings
 ```
 
-Recorded acceptance run on 2026-09-25: the input was generated with NumPy `default_rng(2026).normal(size=2^22).astype(float32)`. On the RTX 5060 with driver 610.88, compute capability 12.0, CUDA 13.4 V13.4.59, and MSVC 19.51.36260, the CUDA timing was `{"k1_ms":1.308544,"k2_ms":0.124288,"k3_ms":0.057600,"h2d_ms":3.072600,"d2h_ms":0.901900}`. The CUDA and CPU records were byte-identical at 4,194,324 bytes. This is one local acceptance run, not the benchmark matrix.
+Recorded acceptance runs on 2026-09-25: the input was generated with NumPy `default_rng(2026).normal(size=2^22).astype(float32)`. On the RTX 5060 with driver 610.88, compute capability 12.0, CUDA 13.4 V13.4.59, and MSVC 19.51.36260:
+- 8-bit: `{"k1_ms":1.181216,"k2_ms":0.170496,"k3_ms":0.135264,"h2d_ms":3.087400,"d2h_ms":1.346900}` (CUDA and CPU records byte-identical at 4,194,324 bytes).
+- 4-bit: `{"k1_ms":1.091520,"k2_ms":0.141280,"k3_ms":0.069504,"h2d_ms":3.094700,"d2h_ms":1.172900}` (CUDA and CPU records byte-identical at 2,097,172 bytes).
+This is a local acceptance run, not the benchmark matrix.
 
 ### Verified test commands
 
@@ -152,9 +159,8 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 Before claiming reproducibility of the full pipeline, add the following verified commands and outputs:
 
 1. Google Colab build and RNG check, with the Colab GPU model.
-2. CUDA 4-bit parity and broader launch-geometry comparisons.
-3. Benchmark command with matrix, warmup, repetition, and timing-boundary configuration.
-4. Result-inspection command that verifies manifests, raw samples, byte counts, and correctness status.
+2. Benchmark command with matrix, warmup, repetition, and timing-boundary configuration.
+3. Result-inspection command that verifies manifests, raw samples, byte counts, and correctness status.
 
 The implementation must record the exact compiler, CUDA toolkit, dependency revision, build flags, hardware, and transfer policy.
 Preserve verified results and provenance in a frozen snapshot for downstream analysis.

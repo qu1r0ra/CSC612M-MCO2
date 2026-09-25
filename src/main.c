@@ -20,7 +20,7 @@ static void usage(FILE *stream)
             "  mco2 compress --input INPUT.f32 --output RECORD --seed UINT64\n"
             "      [--backend cpu|cuda] [--bits 4|8] [--tensor-id UINT32]\n"
             "      [--invocation-id UINT32] [--scale FP32] [--words WORDS.u32]\n"
-            "      [--timings]\n"
+            "      [--block-size UINT32] [--grid-size UINT32] [--timings]\n"
             "  mco2 decompress --input RECORD --output OUTPUT.f32\n"
             "\n"
             "Input and output tensors use little-endian raw FP32. Prescribed\n"
@@ -115,8 +115,10 @@ static mco2_q8_status compress_file(int argc, char **argv)
     const char *input_path = NULL, *output_path = NULL, *words_path = NULL;
     const char *backend = "cpu";
     uint64_t seed = 0, tensor_id = 0, invocation_id = 0, bits = MCO2_Q8_BITS;
+    uint64_t block_size = 256, grid_size = 0;
     float prescribed_scale = 0.0f, scale;
-    int seed_seen = 0, scale_seen = 0, timings_seen = 0, i;
+    int seed_seen = 0, scale_seen = 0, timings_seen = 0;
+    int block_size_seen = 0, grid_size_seen = 0, i;
     uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
     float *values = NULL;
     uint32_t *words = NULL;
@@ -162,6 +164,16 @@ static mco2_q8_status compress_file(int argc, char **argv)
             if (strcmp(value, "cpu") != 0 && strcmp(value, "cuda") != 0)
                 return MCO2_Q8_ERR_ARGUMENT;
             backend = value;
+        } else if (strcmp(option, "--block-size") == 0) {
+            if (!parse_u64(value, &block_size) || block_size == 0 ||
+                block_size > 1024)
+                return MCO2_Q8_ERR_ARGUMENT;
+            block_size_seen = 1;
+        } else if (strcmp(option, "--grid-size") == 0) {
+            if (!parse_u64(value, &grid_size) || grid_size == 0 ||
+                grid_size > 65535)
+                return MCO2_Q8_ERR_ARGUMENT;
+            grid_size_seen = 1;
         } else {
             return MCO2_Q8_ERR_ARGUMENT;
         }
@@ -170,8 +182,8 @@ static mco2_q8_status compress_file(int argc, char **argv)
         return MCO2_Q8_ERR_ARGUMENT;
     if (bits != MCO2_Q4_BITS && bits != MCO2_Q8_BITS)
         return MCO2_Q8_ERR_BIT_WIDTH;
-    if (strcmp(backend, "cuda") == 0 && bits != MCO2_Q8_BITS)
-        return MCO2_Q8_ERR_CUDA_BIT_WIDTH;
+    if ((block_size_seen || grid_size_seen) && strcmp(backend, "cuda") != 0)
+        return MCO2_Q8_ERR_ARGUMENT;
     if (timings_seen && strcmp(backend, "cuda") != 0)
         return MCO2_Q8_ERR_TIMINGS_BACKEND;
 #ifndef MCO2_ENABLE_CUDA
@@ -206,7 +218,7 @@ static mco2_q8_status compress_file(int argc, char **argv)
     if (strcmp(backend, "cuda") == 0) {
 #ifdef MCO2_ENABLE_CUDA
         mco2_cuda_timings cuda_timings = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-        size_t payload_size = count;
+        size_t payload_size = (bits == MCO2_Q4_BITS) ? (count + 1) / 2 : count;
 
         if (words_path != NULL) {
             if (!read_file(words_path, &word_bytes, &word_size)) {
@@ -232,13 +244,14 @@ static mco2_q8_status compress_file(int argc, char **argv)
             status = MCO2_Q8_ERR_MEMORY;
             goto done;
         }
-        status = mco2_cuda_q8_compress(
-            values, count, seed, tensor_id, invocation_id, scale_seen,
-            prescribed_scale, words, record + MCO2_Q8_HEADER_SIZE, &scale,
+        status = mco2_cuda_compress(
+            (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
+            scale_seen, prescribed_scale, words, (int)block_size,
+            (int)grid_size, record + MCO2_Q8_HEADER_SIZE, &scale,
             timings_seen, &cuda_timings);
         if (status != MCO2_Q8_OK)
             goto done;
-        status = mco2_q8_header_encode(MCO2_Q8_BITS, (uint64_t)count,
+        status = mco2_q8_header_encode((uint8_t)bits, (uint64_t)count,
                                        scale, record);
         if (status != MCO2_Q8_OK)
             goto done;

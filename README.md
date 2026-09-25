@@ -6,7 +6,7 @@ Public course implementation repository for the CSC612M MCO2 data-level-parallel
 
 The public technical contract, benchmark protocol, and course-deliverables guide define how to implement and measure this course project.
 The CPU 8-bit and 4-bit quantizers, record codec, decoder, and NumPy oracle are implemented.
-The C-host/CUDA toolchain, Philox generator, and CUDA 8-bit quantizer are verified on the RTX 5060. One 2^22-element acceptance timing is recorded; the benchmark matrix remains for later work.
+The C-host/CUDA toolchain, Philox generator, and CUDA 8-bit and 4-bit quantizers with launch-geometry independence are verified on the RTX 5060. Acceptance timings for 2^22 elements at 8-bit and 4-bit are recorded; the benchmark matrix remains for later work.
 
 ## Start here
 
@@ -22,7 +22,7 @@ The implementation, build, and reproduction instructions live in this repository
 
 `just test-cpu` builds and verifies the CPU compression/decompression pipeline.
 `just test-rng` builds the native C/CUDA executable and runs the RNG checks on CPU and GPU.
-`just test-cuda` checks CUDA 8-bit parity and acceptance behavior on a CUDA device.
+`just test-cuda` checks CUDA 8-bit and 4-bit parity, launch-geometry independence, determinism, and acceptance behavior on a CUDA device.
 See [Reproduction path](docs/reproduction.md) for commands, dependencies, and current coverage.
 
 ## Quality gates
