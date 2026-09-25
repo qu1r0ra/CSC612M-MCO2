@@ -1,6 +1,6 @@
 # Reproduction path
 
-Status: The CPU 8-bit and 4-bit pipelines, the CUDA 8-bit and 4-bit pipelines, launch-geometry independence, full decoder validation, and Layer 3 unbiasedness checks are implemented. The benchmark matrix remains.
+Status: The CPU 8-bit and 4-bit pipelines, the CUDA 8-bit and 4-bit pipelines, launch-geometry independence, full decoder validation, Layer 3 unbiasedness checks, and the full course benchmark matrix snapshot are implemented.
 
 This document is the public entry point for reproducing the course implementation.
 
@@ -154,16 +154,32 @@ The Linux CUDA path has not been run; record the Colab GPU model and host compil
 After changing Python reference, analysis, or tooling code, run `just format` and then `just lint`.
 Before declaring a code change ready, run `just verify`, which includes Ruff linting and a formatting check.
 
-## Documentation still required
+## Benchmark matrix and frozen snapshot
 
-Before claiming reproducibility of the full pipeline, add the following verified commands and outputs:
+The benchmark driver measures in-process throughput across the course matrix ($2^{10}, 2^{14}, 2^{18}, 2^{22}$ element counts $\times$ 4 and 8 bits $\times$ C comparator, CUDA resident, CUDA host-origin) using `mco2 bench`. Each case is gated on Layer 2 correctness and CPU/CUDA byte parity before timing.
 
-1. Google Colab build and RNG check, with the Colab GPU model.
-2. Benchmark command with matrix, warmup, repetition, and timing-boundary configuration.
-3. Result-inspection command that verifies manifests, raw samples, byte counts, and correctness status.
+### Running the benchmark matrix
 
-The implementation must record the exact compiler, CUDA toolkit, dependency revision, build flags, hardware, and transfer policy.
-Preserve verified results and provenance in a frozen snapshot for downstream analysis.
+```powershell
+# Build CUDA executable and run the full 24-case course benchmark matrix
+just bench-matrix
+
+# Alternatively, run with custom repetition or output directory
+uv run python benchmark_driver.py --counts 1024 16384 262144 4194304 --bits 4 8 --warmup 10 --reps 30
+```
+
+### Inspecting results and provenance
+
+Snapshots are stored in `results/<date>-<short_rev>/`:
+- `manifest.json`: Run-level provenance including hardware, compiler flags, CUDA toolkit, driver, transfer policy (`pageable`), and input hashes.
+- `summary.csv`: Per-case median wall-clock time, IQR, and speedup vs C comparator.
+- `case_*.json`: Raw per-repetition samples (`samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`), configuration, and correctness validation results.
+- `msvc_vectorization_report.txt`: Vectorization diagnostics from MSVC `cl.exe /Qvec-report:2` verifying the scalar C comparator.
+
+```powershell
+# View summary table of latest snapshot
+Get-Content (Get-ChildItem results -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName\summary.csv
+```
 
 ## Scope boundary
 

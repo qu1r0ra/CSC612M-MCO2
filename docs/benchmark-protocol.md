@@ -1,6 +1,6 @@
 # Benchmark protocol
 
-Status: accepted protocol; executable benchmark pending.
+Status: accepted protocol; executable benchmark implemented with frozen course snapshot committed under `results/`.
 
 The benchmark must expose the cost of normalization, random-number generation, rounding, packing, and required transfers.
 Do not headline a CUDA speedup from Python interpreter overhead or from separately timed stages summed into a complete path.
@@ -12,6 +12,8 @@ The week-13 course submission requires the protocol below except these later ext
 - The GPU-origin, host-ready timing boundary.
 - The sparse input family and the synthetic collection shaped like reference-model tensors.
 - Crossover and stability analysis beyond reporting median and interquartile range per case.
+
+The in-process benchmark driver is implemented in `benchmark_driver.py` and can be reproduced with `just bench-matrix`. The course matrix evidence is committed in `results/2026-09-25-3840079`.
 
 ## Comparison backends
 

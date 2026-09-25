@@ -1,0 +1,86 @@
+main.c
+codec.c
+quantizer.c
+rng_cpu.c
+Generating Code...
+
+--- Analyzing function: mco2_bernoulli_cpu
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\rng_cpu.c(25) : info C5002: loop not vectorized due to reason '1101'
+
+--- Analyzing function: mco2_rng_words_cpu
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\rng_cpu.c(13) : info C5002: loop not vectorized due to reason '1305'
+
+--- Analyzing function: mco2_q8_validate_input
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(14) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: mco2_q8_scale_workspace_elements
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(54) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: reduce_block
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(38) : info C5002: loop not vectorized due to reason '502'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(33) : info C5002: loop not vectorized due to reason '1200'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(39) : info C5002: loop not vectorized due to reason '1203'
+
+--- Analyzing function: mco2_encode_payload
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(14) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(162) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(172) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(181) : info C5002: loop not vectorized due to reason '1103'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(190) : info C5002: loop not vectorized due to reason '1200'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(207) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: mco2_q8_compute_scale_with_workspace
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(75) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(54) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(38) : info C5002: loop not vectorized due to reason '502'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(101) : info C5002: loop not vectorized due to reason '502'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(33) : info C5002: loop not vectorized due to reason '1200'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(39) : info C5002: loop not vectorized due to reason '1203'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(99) : info C5002: loop not vectorized due to reason '1106'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(102) : info C5002: loop not vectorized due to reason '1203'
+
+--- Analyzing function: mco2_q8_compute_scale
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\quantizer.c(54) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: write_u64_le
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\codec.c(13) : info C5002: loop not vectorized due to reason '1103'
+
+--- Analyzing function: read_u64_le
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\codec.c(21) : info C5002: loop not vectorized due to reason '1103'
+
+--- Analyzing function: mco2_q8_header_encode
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\codec.c(13) : info C5002: loop not vectorized due to reason '1103'
+
+--- Analyzing function: mco2_q8_decode_record
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\codec.c(151) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\codec.c(174) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\codec.c(21) : info C5002: loop not vectorized due to reason '1103'
+
+--- Analyzing function: print_invocation_ids
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(466) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: print_double_array
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(435) : info C5002: loop not vectorized due to reason '503'
+
+--- Analyzing function: decompress_file
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(769) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(797) : info C5002: loop not vectorized due to reason '501'
+
+--- Analyzing function: print_bench_json
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(466) : info C5002: loop not vectorized due to reason '1200'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(466) : info C5002: loop not vectorized due to reason '1200'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(435) : info C5002: loop not vectorized due to reason '1200'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(435) : info C5002: loop not vectorized due to reason '1200'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(435) : info C5002: loop not vectorized due to reason '1200'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(435) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: compress_file
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(145) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(228) : info C5002: loop not vectorized due to reason '1300'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(316) : info C5002: loop not vectorized due to reason '1300'
+
+--- Analyzing function: bench_file
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(534) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(696) : info C5002: loop not vectorized due to reason '506'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(656) : info C5002: loop not vectorized due to reason '1300'
+C:\Users\Quirora\Documents\qu1r0raOS\qu1r0raOS-workspace\School\CSC612M - Advanced Computer Architecture\CSC612M-MCO2.worktrees\issue-16\src\main.c(670) : info C5002: loop not vectorized due to reason '1300'
