@@ -1,6 +1,6 @@
 # Technical contract
 
-Status: The 8-bit and 4-bit CPU pipelines, full decoder validation, and Layer 3 unbiasedness checks are implemented. The CUDA pipeline currently supports 8-bit records; CUDA 4-bit support and broader launch-geometry comparisons remain follow-on work.
+Status: The 8-bit and 4-bit CPU pipelines, the 8-bit and 4-bit CUDA pipelines, launch-geometry independence, full decoder validation, and Layer 3 unbiasedness checks are implemented.
 
 This document carries the technical requirements needed to understand and reproduce the course implementation.
 The code and tests define current behavior. This contract freezes the 8-bit and 4-bit record formats, numerical rules, overflow policy, and Layer 3 acceptance criteria.
@@ -9,7 +9,6 @@ The code and tests define current behavior. This contract freezes the 8-bit and 
 
 The week-13 course submission requires every item in this contract except these later extensions:
 
-- CUDA 4-bit quantization and broader launch-geometry comparisons.
 - The full empirical-expectation suite in correctness layer 3; the course requires only a small unbiasedness check across independent seeds.
 
 The benchmark protocol records its own course scope.
@@ -28,15 +27,15 @@ The benchmark protocol records its own course scope.
 - Decode with `scale*k/s`. Signed zero yields `k = 0` and decodes to `+0`.
 - This CPU pipeline implements `b=8` (`s=127`) and `b=4` (`s=7`).
 
-### CUDA 8-bit path
+### CUDA quantization pipeline
 
-The CUDA backend accepts 8-bit records. It writes the same header and payload bytes as the CPU backend for the same input, seed, identifiers, and prescribed words. A CPU-only executable rejects `--backend cuda` with an explicit unavailable-backend error.
+The CUDA backend is selected with `--backend cuda` (default `cpu`) and accepts both 8-bit (`--bits 8`) and 4-bit (`--bits 4`) records. It writes byte-identical headers and payloads to the CPU backend for the same input, seed, identifiers, and prescribed words. A CPU-only executable rejects `--backend cuda` with an explicit unavailable-backend error.
 
-K1 computes the maximum absolute value, 256-element normalized square sums, and the fixed pairwise reduction of block sums. Its logical block boundaries and reduction tree match the CPU implementation. The CUDA translation unit is built with `--fmad=false`, `--ftz=false`, `--prec-div=true`, and `--prec-sqrt=true`; fast math is disabled.
-
-K2 assigns one CUDA thread to each four-word Philox group. Grid-stride processing preserves the group and lane mapping for any launch geometry and handles the final partial group. It applies the same FP32 scaling, clipping, Bernoulli threshold, and signed-code conversion as the CPU path. K3 copies the byte codes into the 8-bit record payload.
-
-`--timings` writes one JSON object to stderr with `k1_ms`, `k2_ms`, `k3_ms`, `h2d_ms`, and `d2h_ms`. CUDA events measure the three device stages; host elapsed time measures the input, words, scale, status, and payload copies. The timing line describes one invocation and does not substitute for the benchmark protocol.
+- **K1 (Scale reduction)**: Computes the maximum absolute value, 256-element normalized square sums, and the fixed pairwise reduction of block sums. Its logical block boundaries (256 threads per block) and adjacent-pair reduction tree match the CPU implementation bit for bit. The reduction is structured as a grid-stride loop, producing identical scale values across all grid sizes. The CUDA translation unit is built with `--fmad=false`, `--ftz=false`, `--prec-div=true`, and `--prec-sqrt=true`; fast math is disabled.
+- **K2 (Stochastic rounding)**: Assigns one CUDA thread to each 4-element Philox group in a grid-stride loop, with remainder handling for final partial groups. Key and counter follow the contract mapping. Each thread computes `a = min((|x|/scale)*s, s)`, `l = floor(a)`, `p = a - l`, and the 64-bit Bernoulli decision threshold, generating unsigned codes `k + s` (`s=127` for 8-bit, `s=7` for 4-bit). A prescribed-word variant reads words from device memory for Layer 1 verification.
+- **K3 (Payload packing)**: Runs in a grid-stride loop with one thread per output byte. For 8-bit records, each thread copies one code byte to the payload. For 4-bit records, each thread packs two codes into one byte: the lower-index element `2*i` is stored in the low nibble (bits 0-3), the higher-index element `2*i + 1` is stored in the high nibble (bits 4-7), and the unused high nibble of an odd-length payload is strictly zeroed.
+- **Launch geometry**: `--block-size` and `--grid-size` configure K2 and K3 launch geometry (and `--grid-size` configures K1 grid); K1's block size is fixed at 256 by the reduction order. The grid-stride loop structure guarantees byte-identical output across all valid block and grid configurations, including grids smaller than the element count. Specifying launch geometry options with `--backend cpu` is rejected as an invalid argument.
+- **Timing boundary**: `--timings` writes one JSON object to stderr with `k1_ms`, `k2_ms`, `k3_ms`, `h2d_ms`, and `d2h_ms`. CUDA events measure resident kernel execution across K1, K2, and K3; host elapsed time measures the input, words, scale, status, and payload copies. The timing line describes one invocation and does not substitute for the benchmark protocol.
 
 ### FP32 scale and reconstruction bound
 
