@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import itertools
 import json
 import os
 import platform
@@ -33,18 +34,35 @@ DEFAULT_WARMUPS = 10
 DEFAULT_REPS = 30
 DEFAULT_INPUT_SEED = 2026
 DEFAULT_COMPRESSION_SEED = 42
+# Six trials run every ordering of the three paths once, balancing both the
+# position of each path and the path that precedes it.
+DEFAULT_TRIALS = 6
 
-CPU_BUILD_FLAGS = (
-    "/O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /Isrc /Ithird_party/random123/include"
+# Claim rule, fixed before any snapshot is generated. A CUDA speedup or
+# slowdown is claimable only when its trial-median range excludes 1.0, its
+# boundaries are not inverted, and neither it nor the comparator has a
+# between-trial median spread above SPREAD_THRESHOLD.
+SPREAD_THRESHOLD = 1.25
+QUANTILE_METHOD = "linear"
+CLAIM_RULE = (
+    "A CUDA case supports a speedup or slowdown claim only when (1) its verdict is "
+    "'faster' (CPU trial-median minimum / CUDA trial-median maximum > 1) or 'slower' "
+    "(CPU trial-median maximum / CUDA trial-median minimum < 1), (2) boundary_inversion "
+    "is false (host-origin pooled median is not below resident pooled median), and "
+    f"(3) both the CUDA case and the CPU comparator have spread_ratio <= {SPREAD_THRESHOLD} "
+    "(maximum over minimum trial median)."
 )
-CUDA_HOST_BUILD_FLAGS = (
-    "/O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc "
-    "/Ithird_party/random123/include"
+
+GPU_STATE_FIELDS = (
+    "pstate",
+    "clocks.sm",
+    "clocks.mem",
+    "clocks.max.sm",
+    "temperature.gpu",
+    "power.draw",
+    "clocks_event_reasons.active",
 )
-CUDA_NVCC_BUILD_FLAGS = (
-    "-O2 -arch=native -Isrc -Ithird_party/random123/include --fmad=false --ftz=false "
-    "--prec-div=true --prec-sqrt=true -Xcompiler /wd4068"
-)
+BUILD_RECIPE = "build-cuda"
 
 
 def find_binary(root: Path) -> Path:
@@ -76,16 +94,105 @@ def collect_git_provenance(root: Path) -> dict[str, Any]:
         rev = run_command(["git", "rev-parse", "HEAD"], root)
         short_rev = run_command(["git", "rev-parse", "--short", "HEAD"], root)
         status_output = run_command(["git", "status", "--porcelain"], root)
-        is_dirty = bool(status_output.strip())
+        dirty_files = [line for line in status_output.splitlines() if line.strip()]
     except (subprocess.SubprocessError, OSError, RuntimeError):
         rev = "unknown"
         short_rev = "unknown"
-        is_dirty = True
+        dirty_files = ["<git status unavailable>"]
     return {
         "code_revision": rev,
         "code_revision_short": short_rev,
-        "git_dirty": is_dirty,
+        "git_dirty": bool(dirty_files),
+        "dirty_files": dirty_files,
     }
+
+
+def collect_build_commands(root: Path) -> dict[str, Any]:
+    """Read the exact compile commands from the build recipe via `just --dry-run`."""
+    just = shutil.which("just")
+    commands: list[str] = []
+    if just is not None:
+        proc = subprocess.run(
+            [just, "--dry-run", BUILD_RECIPE],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            # just echoes dry-run commands on stderr.
+            text = proc.stderr if proc.stderr.strip() else proc.stdout
+            commands = [line.strip() for line in text.splitlines() if line.strip()]
+
+    host_flags: list[str] | None = None
+    nvcc_flags: list[str] | None = None
+    for command in commands:
+        tokens = command.split()
+        if tokens and tokens[0].endswith("with-msvc.ps1"):
+            tokens = tokens[1:]
+        if not tokens:
+            continue
+        tool = Path(tokens[0]).name.lower()
+        compiles = any(t.lower() in ("/c", "-c") for t in tokens)
+        if host_flags is None and compiles and tool in ("cl.exe", "cl", "gcc", "cc", "clang"):
+            host_flags = strip_compile_io(tokens[1:])
+        elif nvcc_flags is None and compiles and tool in ("nvcc", "nvcc.exe"):
+            nvcc_flags = strip_compile_io(tokens[1:])
+
+    return {
+        "source": f"just --dry-run {BUILD_RECIPE}",
+        "commands": commands,
+        "comparator_c": " ".join(host_flags) if host_flags is not None else "unknown",
+        "cuda_nvcc": " ".join(nvcc_flags) if nvcc_flags is not None else "unknown",
+        "_host_tokens": host_flags,
+    }
+
+
+def strip_compile_io(tokens: Sequence[str]) -> list[str]:
+    """Drop the compile switch, source file, and output path, keeping the flags."""
+    kept: list[str] = []
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        lowered = token.lower()
+        if lowered in ("/c", "-c"):
+            continue
+        if lowered == "-o":
+            skip_next = True
+            continue
+        if lowered.startswith("/fo"):
+            continue
+        if lowered.endswith((".c", ".cu", ".obj", ".o")):
+            continue
+        kept.append(token)
+    return kept
+
+
+def query_gpu_state() -> dict[str, str]:
+    """Record the GPU's clock, power, and thermal state at one instant."""
+    try:
+        proc = subprocess.run(
+            [
+                "nvidia-smi",
+                f"--query-gpu={','.join(GPU_STATE_FIELDS)}",
+                "--format=csv,noheader",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return {"status": "unavailable"}
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {"status": "unavailable"}
+    values = [v.strip() for v in proc.stdout.strip().splitlines()[0].split(",")]
+    if len(values) != len(GPU_STATE_FIELDS):
+        return {"status": "unparsed", "raw": proc.stdout.strip()}
+    state = dict(zip(GPU_STATE_FIELDS, values, strict=True))
+    state["captured_at_utc"] = datetime.now(UTC).isoformat()
+    return state
 
 
 def collect_hardware_and_toolchain(root: Path) -> dict[str, Any]:
@@ -171,11 +278,6 @@ def collect_hardware_and_toolchain(root: Path) -> dict[str, Any]:
             "driver_version": driver_version,
             "c_compiler": c_compiler,
         },
-        "build_flags": {
-            "cpu": CPU_BUILD_FLAGS,
-            "cuda_host": CUDA_HOST_BUILD_FLAGS,
-            "cuda_nvcc": CUDA_NVCC_BUILD_FLAGS,
-        },
         "transfer_policy": "pageable",
     }
 
@@ -209,40 +311,42 @@ def generate_inputs(
     return provenance
 
 
-def generate_msvc_vectorization_report(root: Path, output_file: Path) -> str:
-    """Run MSVC cl.exe with /Qvec-report:2 to inspect vectorization decisions."""
+def generate_msvc_vectorization_report(
+    root: Path,
+    output_file: Path,
+    host_flags: Sequence[str] | None,
+    object_dir: Path,
+) -> str:
+    """Recompile the comparator's C sources with its exact build flags plus /Qvec-report:2."""
     output_text = ""
-    if os.name == "nt":
-        script = root / "scripts" / "with-msvc.ps1"
-        build_dir = root / "build"
-        build_dir.mkdir(parents=True, exist_ok=True)
-        if script.is_file():
-            cmd = [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(script),
-                "cl.exe",
-                "/nologo",
-                "/O2",
-                "/W4",
-                "/std:c11",
-                "/fp:strict",
-                "/Qvec-report:2",
-                "/D_CRT_SECURE_NO_WARNINGS",
-                "/Isrc",
-                "/Ithird_party/random123/include",
-                "/c",
-                "src\\main.c",
-                "src\\codec.c",
-                "src\\quantizer.c",
-                "src\\rng_cpu.c",
-                "/Fo:build\\",
-            ]
-            res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=False)
-            output_text = (res.stdout + "\n" + res.stderr).strip()
+    script = root / "scripts" / "with-msvc.ps1"
+    if os.name == "nt" and script.is_file() and host_flags is not None:
+        object_dir.mkdir(parents=True, exist_ok=True)
+        compile_args = [
+            "cl.exe",
+            *host_flags,
+            "/Qvec-report:2",
+            "/c",
+            "src\\main.c",
+            "src\\codec.c",
+            "src\\quantizer.c",
+            "src\\rng_cpu.c",
+            f"/Fo:{object_dir}\\",
+        ]
+        cmd = [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            *compile_args,
+        ]
+        res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=False)
+        output_text = (
+            f"Command: {' '.join(compile_args)}\n"
+            f"Exit code: {res.returncode}\n\n" + (res.stdout + "\n" + res.stderr).strip()
+        )
 
     if not output_text:
         output_text = "MSVC vectorization report not available on this platform/configuration."
@@ -575,8 +679,8 @@ def compute_statistics(samples_ms: Sequence[float]) -> dict[str, float]:
     arr = np.asarray(samples_ms, dtype=np.float64)
     if len(arr) == 0:
         return {}
-    q25 = float(np.percentile(arr, 25))
-    q75 = float(np.percentile(arr, 75))
+    q25 = float(np.percentile(arr, 25, method=QUANTILE_METHOD))
+    q75 = float(np.percentile(arr, 75, method=QUANTILE_METHOD))
     return {
         "median_ms": float(np.median(arr)),
         "iqr_ms": float(q75 - q25),
@@ -589,6 +693,127 @@ def compute_statistics(samples_ms: Sequence[float]) -> dict[str, float]:
     }
 
 
+def compute_case_statistics(trial_samples: Sequence[Sequence[float]]) -> dict[str, Any]:
+    """Pooled statistics plus the between-trial spread of per-trial medians."""
+    pooled = [sample for samples in trial_samples for sample in samples]
+    stats: dict[str, Any] = compute_statistics(pooled)
+    trial_medians = [float(np.median(np.asarray(s, dtype=np.float64))) for s in trial_samples]
+    low = min(trial_medians)
+    high = max(trial_medians)
+    stats["trial_medians_ms"] = trial_medians
+    stats["trial_median_min_ms"] = low
+    stats["trial_median_max_ms"] = high
+    stats["spread_ratio"] = high / low if low > 0 else float("inf")
+    stats["unstable"] = stats["spread_ratio"] > SPREAD_THRESHOLD
+    return stats
+
+
+def compare_to_comparator(cpu_stats: dict[str, Any], cuda_stats: dict[str, Any]) -> dict[str, Any]:
+    """Point speedup from pooled medians and a conservative range from trial medians."""
+    point = cpu_stats["median_ms"] / cuda_stats["median_ms"]
+    low = cpu_stats["trial_median_min_ms"] / cuda_stats["trial_median_max_ms"]
+    high = cpu_stats["trial_median_max_ms"] / cuda_stats["trial_median_min_ms"]
+    if low > 1.0:
+        verdict = "faster"
+    elif high < 1.0:
+        verdict = "slower"
+    else:
+        verdict = "inconclusive"
+    return {
+        "speedup_vs_cpu": point,
+        "speedup_low": low,
+        "speedup_high": high,
+        "verdict": verdict,
+    }
+
+
+def trial_orders(paths: Sequence[tuple[str, str, list[str]]], trials: int) -> list[list[int]]:
+    """Cycle through every ordering of the paths in a fixed lexicographic sequence."""
+    perms = [list(p) for p in itertools.permutations(range(len(paths)))]
+    return [perms[t % len(perms)] for t in range(trials)]
+
+
+def run_bench_process(
+    binary: Path,
+    input_path: Path,
+    *,
+    bits: int,
+    backend: str,
+    extra_args: Sequence[str],
+    seed: int,
+    warmups: int,
+    reps: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    bench_cmd = [
+        str(binary),
+        "bench",
+        "--input",
+        str(input_path),
+        "--seed",
+        str(seed),
+        "--bits",
+        str(bits),
+        "--tensor-id",
+        "0",
+        "--invocation-id",
+        "0",
+        "--backend",
+        backend,
+        "--warmup",
+        str(warmups),
+        "--reps",
+        str(reps),
+        *extra_args,
+    ]
+    proc = subprocess.run(bench_cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return None, f"mco2 bench failed: {proc.stderr.strip()}"
+    return json.loads(proc.stdout), None
+
+
+def failed_row(
+    count: int, bits: int, backend: str, boundary: str, warmups: int, reps: int, trials: int
+) -> dict[str, Any]:
+    row = dict.fromkeys(SUMMARY_FIELDS, "")
+    row.update(
+        {
+            "count": count,
+            "bits": bits,
+            "backend": backend,
+            "boundary": boundary,
+            "correctness": "failed",
+            "warmup": warmups,
+            "reps": reps,
+            "trials": trials,
+        }
+    )
+    return row
+
+
+SUMMARY_FIELDS = [
+    "count",
+    "bits",
+    "backend",
+    "boundary",
+    "correctness",
+    "warmup",
+    "reps",
+    "trials",
+    "median_ms",
+    "iqr_ms",
+    "trial_median_min_ms",
+    "trial_median_max_ms",
+    "spread_ratio",
+    "speedup_vs_c",
+    "speedup_low",
+    "speedup_high",
+    "verdict",
+    "boundary_inversion",
+    "unstable",
+    "claim_supported",
+]
+
+
 def run_benchmark_matrix(
     *,
     root: Path,
@@ -598,14 +823,19 @@ def run_benchmark_matrix(
     backends: Sequence[str] = ("cpu", "cuda"),
     warmups: int = DEFAULT_WARMUPS,
     reps: int = DEFAULT_REPS,
+    trials: int = DEFAULT_TRIALS,
     input_seed: int = DEFAULT_INPUT_SEED,
     compression_seed: int = DEFAULT_COMPRESSION_SEED,
     force_fail: bool = False,
     allow_existing: bool = False,
+    allow_dirty: bool = False,
 ) -> Path:
-    binary = find_binary(root)
+    if trials < 1:
+        raise ValueError("trials must be at least 1")
+    if "cpu" not in backends:
+        raise ValueError("the CPU comparator is required; include 'cpu' in backends")
+
     git_prov = collect_git_provenance(root)
-    toolchain_prov = collect_hardware_and_toolchain(root)
 
     # Determine snapshot directory name
     date_str = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -622,26 +852,41 @@ def run_benchmark_matrix(
             "Pass --allow-existing or an explicit --output-dir if intentional."
         )
 
-    target_dir.mkdir(parents=True, exist_ok=True)
-    existing_inputs_dir = target_dir / "inputs"
-    if existing_inputs_dir.exists():
-        shutil.rmtree(existing_inputs_dir, ignore_errors=True)
+    if git_prov["git_dirty"] and not allow_dirty:
+        raise RuntimeError(
+            "Working tree is dirty; a snapshot must be traceable to a committed revision. "
+            "Commit or remove these changes, or pass --allow-dirty for a non-evidence run: "
+            + "; ".join(git_prov["dirty_files"])
+        )
 
+    binary = find_binary(root)
+    toolchain_prov = collect_hardware_and_toolchain(root)
+    build_prov = collect_build_commands(root)
+    host_tokens = build_prov.pop("_host_tokens")
+    gpu_state_start = query_gpu_state() if "cuda" in backends else None
+
+    target_dir.mkdir(parents=True, exist_ok=True)
     temp_dir = target_dir / "_temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Inputs generation
-    inputs_dir = temp_dir / "inputs"
-    input_meta = generate_inputs(counts, inputs_dir, seed=input_seed)
+    input_meta = generate_inputs(counts, temp_dir / "inputs", seed=input_seed)
     input_files: dict[int, Path] = {c: Path(meta["_path"]) for c, meta in input_meta.items()}
     clean_input_meta: dict[int, dict[str, Any]] = {
         c: {k: v for k, v in meta.items() if not k.startswith("_")}
         for c, meta in input_meta.items()
     }
 
-    # 2. Vectorization report
+    # 2. Vectorization report, compiled with the comparator's own flags
     vec_report_path = target_dir / "msvc_vectorization_report.txt"
-    generate_msvc_vectorization_report(root, vec_report_path)
+    generate_msvc_vectorization_report(root, vec_report_path, host_tokens, temp_dir / "vec_obj")
+
+    paths: list[tuple[str, str, list[str]]] = [("cpu", "comparator", [])]
+    if "cuda" in backends:
+        paths.append(("cuda", "resident", ["--boundary", "resident"]))
+        paths.append(("cuda", "host-origin", ["--boundary", "host-origin"]))
+    orders = trial_orders(paths, trials)
+    order_labels = [[f"{paths[i][0]}-{paths[i][1]}" for i in order] for order in orders]
 
     # 3. Benchmark cases
     case_results: list[dict[str, Any]] = []
@@ -651,7 +896,9 @@ def run_benchmark_matrix(
         input_path = input_files[count]
 
         for bits in bit_widths:
-            # First: Gate on correctness before any timed run!
+            payload_bytes = count if bits == 8 else (count + 1) // 2
+
+            # Gate on correctness once, outside every timed process.
             passed, correctness_info = verify_correctness(
                 binary=binary,
                 input_path=input_path,
@@ -665,197 +912,249 @@ def run_benchmark_matrix(
                 force_fail=force_fail,
             )
 
-            paths = []
-            if "cpu" in backends:
-                paths.append(("cpu", "comparator", []))
-            if "cuda" in backends:
-                paths.append(("cuda", "resident", ["--boundary", "resident"]))
-                paths.append(("cuda", "host-origin", ["--boundary", "host-origin"]))
-
-            cpu_median_ms: float | None = None
-
-            for backend, boundary, extra_args in paths:
-                case_id = f"case_{backend}_{boundary}_bits{bits}_n{count}"
-                case_json_path = target_dir / f"{case_id}.json"
-
-                payload_bytes = count if bits == 8 else (count + 1) // 2
-
-                case_data: dict[str, Any] = {
-                    "case_id": case_id,
-                    "count": count,
-                    "bits": bits,
-                    "backend": backend,
-                    "timing_boundary": boundary,
-                    "transfer_policy": toolchain_prov["transfer_policy"],
-                    "seed": compression_seed,
-                    "tensor_id": 0,
-                    "invocation_id": 0,
-                    "repetition_invocation_ids": list(range(reps)),
-                    "warmup_invocation_ids": list(range(reps, reps + warmups)),
-                    "warmup": warmups,
-                    "reps": reps,
-                    "header_bytes": HEADER_STRUCT.size,
-                    "payload_bytes": payload_bytes,
-                    "code_revision": git_prov["code_revision"],
-                    "code_revision_short": git_prov["code_revision_short"],
-                    "git_dirty": git_prov["git_dirty"],
-                    "build_flags": toolchain_prov["build_flags"],
-                    "hardware": toolchain_prov["hardware"],
-                    "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
-                    "input_provenance": clean_input_meta[count],
-                    "correctness": correctness_info,
-                    "samples_ms": [],
-                    "statistics": None,
-                }
-
-                if not passed:
-                    # Marking failed with no speed figures
-                    case_results.append(case_data)
-                    case_json_path.write_text(json.dumps(case_data, indent=2), encoding="utf-8")
-                    summary_rows.append(
-                        {
-                            "count": count,
-                            "bits": bits,
-                            "backend": backend,
-                            "boundary": boundary,
-                            "correctness": "failed",
-                            "warmup": warmups,
-                            "reps": reps,
-                            "median_ms": "",
-                            "iqr_ms": "",
-                            "speedup_vs_c": "",
-                        }
-                    )
-                    continue
-
-                # Run timed benchmark
-                bench_cmd = [
-                    str(binary),
-                    "bench",
-                    "--input",
-                    str(input_path),
-                    "--seed",
-                    str(compression_seed),
-                    "--bits",
-                    str(bits),
-                    "--tensor-id",
-                    "0",
-                    "--invocation-id",
-                    "0",
-                    "--backend",
-                    backend,
-                    "--warmup",
-                    str(warmups),
-                    "--reps",
-                    str(reps),
-                    *extra_args,
-                ]
-
-                bench_proc = subprocess.run(bench_cmd, capture_output=True, text=True, check=False)
-                if bench_proc.returncode != 0:
-                    case_data["correctness"] = {
-                        "status": "failed",
-                        "error_message": f"mco2 bench failed: {bench_proc.stderr.strip()}",
+            cases: list[dict[str, Any]] = []
+            for backend, boundary, _ in paths:
+                cases.append(
+                    {
+                        "case_id": f"case_{backend}_{boundary}_bits{bits}_n{count}",
+                        "count": count,
+                        "bits": bits,
+                        "backend": backend,
+                        "timing_boundary": boundary,
+                        "transfer_policy": toolchain_prov["transfer_policy"],
+                        "seed": compression_seed,
+                        "tensor_id": 0,
+                        "invocation_id": 0,
+                        "warmup": warmups,
+                        "reps": reps,
+                        "trials": trials,
+                        "header_bytes": HEADER_STRUCT.size,
+                        "payload_bytes": payload_bytes,
+                        "code_revision": git_prov["code_revision"],
+                        "code_revision_short": git_prov["code_revision_short"],
+                        "git_dirty": git_prov["git_dirty"],
+                        "build_flags": {
+                            "comparator_c": build_prov["comparator_c"],
+                            "cuda_nvcc": build_prov["cuda_nvcc"],
+                        },
+                        "hardware": toolchain_prov["hardware"],
+                        "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
+                        "input_provenance": clean_input_meta[count],
+                        "correctness": correctness_info,
+                        "trial_runs": [],
+                        "samples_ms": [],
+                        "statistics": None,
                     }
-                    case_results.append(case_data)
-                    case_json_path.write_text(json.dumps(case_data, indent=2), encoding="utf-8")
-                    summary_rows.append(
+                )
+
+            if passed:
+                # Each trial runs every path as its own process, in a rotated order.
+                # Every trial reuses the same invocation identifiers, so trials are
+                # replicates of an identical workload.
+                for trial_index, order in enumerate(orders):
+                    for position, path_index in enumerate(order):
+                        case = cases[path_index]
+                        if case["correctness"]["status"] != "passed":
+                            continue
+                        backend, _, extra_args = paths[path_index]
+                        payload, error = run_bench_process(
+                            binary,
+                            input_path,
+                            bits=bits,
+                            backend=backend,
+                            extra_args=extra_args,
+                            seed=compression_seed,
+                            warmups=warmups,
+                            reps=reps,
+                        )
+                        if payload is None:
+                            case["correctness"] = {"status": "failed", "error_message": error}
+                            continue
+                        configuration = payload.get("configuration", {})
+                        run: dict[str, Any] = {
+                            "trial": trial_index,
+                            "position": position,
+                            "order": order_labels[trial_index],
+                            "repetition_invocation_ids": configuration.get(
+                                "repetition_invocation_ids"
+                            ),
+                            "warmup_invocation_ids": configuration.get("warmup_invocation_ids"),
+                            "samples_ms": payload.get("samples_ms", []),
+                        }
+                        for key in ("k1_ms", "k2_ms", "k3_ms"):
+                            if key in payload:
+                                run[key] = payload[key]
+                        case["trial_runs"].append(run)
+
+            for case in cases:
+                if case["correctness"]["status"] != "passed":
+                    case["trial_runs"] = []
+                    continue
+                runs = case["trial_runs"]
+                first = runs[0]
+                for run in runs[1:]:
+                    if (
+                        run["repetition_invocation_ids"] != first["repetition_invocation_ids"]
+                        or run["warmup_invocation_ids"] != first["warmup_invocation_ids"]
+                    ):
+                        raise RuntimeError(
+                            f"{case['case_id']}: trials used different invocation identifiers"
+                        )
+                case["repetition_invocation_ids"] = first["repetition_invocation_ids"]
+                case["warmup_invocation_ids"] = first["warmup_invocation_ids"]
+                case["samples_ms"] = [s for run in runs for s in run["samples_ms"]]
+                case["statistics"] = compute_case_statistics([run["samples_ms"] for run in runs])
+
+            # Comparisons and flags, only between cases that all passed.
+            cpu_case = cases[0]
+            by_boundary = {c["timing_boundary"]: c for c in cases}
+            inversion = False
+            resident = by_boundary.get("resident")
+            host_origin = by_boundary.get("host-origin")
+            if (
+                resident is not None
+                and host_origin is not None
+                and resident["statistics"] is not None
+                and host_origin["statistics"] is not None
+            ):
+                inversion = (
+                    host_origin["statistics"]["median_ms"] < resident["statistics"]["median_ms"]
+                )
+
+            for case in cases:
+                stats = case["statistics"]
+                if stats is None:
+                    continue
+                if case is cpu_case:
+                    stats.update(
                         {
-                            "count": count,
-                            "bits": bits,
-                            "backend": backend,
-                            "boundary": boundary,
-                            "correctness": "failed",
-                            "warmup": warmups,
-                            "reps": reps,
-                            "median_ms": "",
-                            "iqr_ms": "",
-                            "speedup_vs_c": "",
+                            "speedup_vs_cpu": 1.0,
+                            "speedup_low": 1.0,
+                            "speedup_high": 1.0,
+                            "verdict": "comparator",
+                            "boundary_inversion": False,
+                            "claim_supported": None,
                         }
                     )
                     continue
+                cpu_stats = cpu_case["statistics"]
+                if cpu_stats is None:
+                    continue
+                stats.update(compare_to_comparator(cpu_stats, stats))
+                stats["boundary_inversion"] = inversion
+                stats["claim_supported"] = (
+                    stats["verdict"] != "inconclusive"
+                    and not inversion
+                    and not stats["unstable"]
+                    and not cpu_stats["unstable"]
+                )
 
-                bench_payload = json.loads(bench_proc.stdout)
-                samples = bench_payload.get("samples_ms", [])
-                case_data["samples_ms"] = samples
-                if "k1_ms" in bench_payload:
-                    case_data["k1_ms"] = bench_payload["k1_ms"]
-                    case_data["k2_ms"] = bench_payload["k2_ms"]
-                    case_data["k3_ms"] = bench_payload["k3_ms"]
-
-                stats = compute_statistics(samples)
-                if backend == "cpu":
-                    cpu_median_ms = stats["median_ms"]
-                    stats["speedup_vs_cpu"] = 1.0
-                else:
-                    if cpu_median_ms is not None and stats["median_ms"] > 0:
-                        stats["speedup_vs_cpu"] = cpu_median_ms / stats["median_ms"]
-                    else:
-                        stats["speedup_vs_cpu"] = 0.0
-
-                case_data["statistics"] = stats
-                case_results.append(case_data)
-                case_json_path.write_text(json.dumps(case_data, indent=2), encoding="utf-8")
-
+            for case in cases:
+                (target_dir / f"{case['case_id']}.json").write_text(
+                    json.dumps(case, indent=2), encoding="utf-8"
+                )
+                case_results.append(case)
+                stats = case["statistics"]
+                if (
+                    case["correctness"]["status"] != "passed"
+                    or stats is None
+                    or "verdict" not in stats
+                ):
+                    summary_rows.append(
+                        failed_row(
+                            count,
+                            bits,
+                            case["backend"],
+                            case["timing_boundary"],
+                            warmups,
+                            reps,
+                            trials,
+                        )
+                    )
+                    continue
+                claim = stats["claim_supported"]
                 summary_rows.append(
                     {
                         "count": count,
                         "bits": bits,
-                        "backend": backend,
-                        "boundary": boundary,
+                        "backend": case["backend"],
+                        "boundary": case["timing_boundary"],
                         "correctness": "passed",
                         "warmup": warmups,
                         "reps": reps,
+                        "trials": trials,
                         "median_ms": f"{stats['median_ms']:.6f}",
                         "iqr_ms": f"{stats['iqr_ms']:.6f}",
+                        "trial_median_min_ms": f"{stats['trial_median_min_ms']:.6f}",
+                        "trial_median_max_ms": f"{stats['trial_median_max_ms']:.6f}",
+                        "spread_ratio": f"{stats['spread_ratio']:.4f}",
                         "speedup_vs_c": f"{stats['speedup_vs_cpu']:.4f}",
+                        "speedup_low": f"{stats['speedup_low']:.4f}",
+                        "speedup_high": f"{stats['speedup_high']:.4f}",
+                        "verdict": stats["verdict"],
+                        "boundary_inversion": str(stats["boundary_inversion"]).lower(),
+                        "unstable": str(stats["unstable"]).lower(),
+                        "claim_supported": "" if claim is None else str(claim).lower(),
                     }
                 )
 
-    # Clean up temp files
-    try:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-    except OSError:
-        pass
+    gpu_state_end = query_gpu_state() if "cuda" in backends else None
+
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
     # 4. Summary CSV
     csv_path = target_dir / "summary.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "count",
-                "bits",
-                "backend",
-                "boundary",
-                "correctness",
-                "warmup",
-                "reps",
-                "median_ms",
-                "iqr_ms",
-                "speedup_vs_c",
-            ],
-        )
+        writer = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS)
         writer.writeheader()
         writer.writerows(summary_rows)
 
     # 5. Run manifest
     manifest_data = {
-        "manifest_version": "1.0",
+        "manifest_version": "2.0",
         "date": date_str,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,
         "hardware": toolchain_prov["hardware"],
         "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
-        "build_flags": toolchain_prov["build_flags"],
+        "build_flags": build_prov,
         "transfer_policy": toolchain_prov["transfer_policy"],
+        "gpu_state": {
+            "note": (
+                "Instantaneous nvidia-smi readings before the first and after the last "
+                "timed process; they describe the GPU around the run, not clock stability "
+                "during it."
+            ),
+            "start": gpu_state_start,
+            "end": gpu_state_end,
+        },
         "matrix_parameters": {
             "counts": list(counts),
             "bit_widths": list(bit_widths),
+            "backends": list(backends),
             "warmup": warmups,
             "reps": reps,
+            "trials": trials,
+            "trial_orders": order_labels,
+            "invocation_scheme": (
+                "every trial reuses base invocation 0; identifiers per repetition are "
+                "copied from each mco2 bench configuration"
+            ),
             "input_seed": input_seed,
             "compression_seed": compression_seed,
+        },
+        "statistics_method": {
+            "pooled": "median and IQR over all measured repetitions of all trials",
+            "quantile_method": f"numpy.percentile(method='{QUANTILE_METHOD}')",
+            "numpy_version": np.__version__,
+            "speedup_point": "CPU pooled median / CUDA pooled median",
+            "speedup_range": (
+                "[CPU min trial median / CUDA max trial median, "
+                "CPU max trial median / CUDA min trial median]"
+            ),
+            "spread_ratio": "max trial median / min trial median",
+            "spread_threshold": SPREAD_THRESHOLD,
+            "claim_rule": CLAIM_RULE,
         },
         "inputs": clean_input_meta,
         "summary_csv": csv_path.name,
@@ -882,6 +1181,12 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUPS, help="Warmup runs")
     parser.add_argument("--reps", type=int, default=DEFAULT_REPS, help="Measured repetitions")
     parser.add_argument(
+        "--trials",
+        type=int,
+        default=DEFAULT_TRIALS,
+        help="Independent processes per path, each trial in a rotated path order",
+    )
+    parser.add_argument(
         "--input-seed", type=int, default=DEFAULT_INPUT_SEED, help="Seed for input generation"
     )
     parser.add_argument(
@@ -903,6 +1208,11 @@ def main() -> None:
     parser.add_argument(
         "--allow-existing", action="store_true", help="Allow writing into existing folder"
     )
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Run from an uncommitted tree (records the dirty files; not for evidence)",
+    )
 
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
@@ -916,10 +1226,12 @@ def main() -> None:
             backends=args.backends,
             warmups=args.warmup,
             reps=args.reps,
+            trials=args.trials,
             input_seed=args.input_seed,
             compression_seed=args.compression_seed,
             force_fail=args.force_fail,
             allow_existing=args.allow_existing,
+            allow_dirty=args.allow_dirty,
         )
         print(f"Benchmark completed successfully. Snapshot written to: {snapshot_dir}")
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:

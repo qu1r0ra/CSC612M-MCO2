@@ -156,7 +156,7 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 
 ## Benchmark matrix and frozen snapshot
 
-The benchmark driver measures in-process throughput across the course matrix ($2^{10}, 2^{14}, 2^{18}, 2^{22}$ element counts $\times$ 4 and 8 bits $\times$ C comparator, CUDA resident, CUDA host-origin) using `mco2 bench`. Each case is gated on Layer 2 correctness and CPU/CUDA byte parity before timing.
+The benchmark driver measures in-process throughput across the course matrix ($2^{10}, 2^{14}, 2^{18}, 2^{22}$ element counts $\times$ 4 and 8 bits $\times$ C comparator, CUDA resident, CUDA host-origin) using `mco2 bench`. Each matrix cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing, then every path runs as a separate process in each of six trials with balanced path order. The driver refuses a dirty working tree; commit first, or pass `--allow-dirty` for a non-evidence run.
 
 ### Running the benchmark matrix
 
@@ -165,16 +165,16 @@ The benchmark driver measures in-process throughput across the course matrix ($2
 just bench-matrix
 
 # Alternatively, run with custom repetition or output directory
-uv run python benchmark_driver.py --counts 1024 16384 262144 4194304 --bits 4 8 --warmup 10 --reps 30
+uv run python benchmark_driver.py --counts 1024 16384 262144 4194304 --bits 4 8 --warmup 10 --reps 30 --trials 6
 ```
 
 ### Inspecting results and provenance
 
 Snapshots are stored in `results/<date>-<short_rev>/`:
-- `manifest.json`: Run-level provenance including hardware, compiler flags, CUDA toolkit, driver, transfer policy (`pageable`), and input hashes.
-- `summary.csv`: Per-case median wall-clock time, IQR, and speedup vs C comparator.
-- `case_*.json`: Raw per-repetition samples (`samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`), configuration, and correctness validation results.
-- `msvc_vectorization_report.txt`: Vectorization diagnostics from MSVC `cl.exe /Qvec-report:2` verifying the scalar C comparator.
+- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policy (`pageable`), GPU state before and after the run, trial orders, the statistics method and claim rule, and input hashes.
+- `summary.csv`: Per-case pooled median and IQR, trial-median range and spread ratio, speedup vs the C comparator with its range and verdict, and the `boundary_inversion`, `unstable`, and `claim_supported` flags.
+- `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`) with each trial's path order and invocation identifiers, pooled samples, statistics, configuration, and correctness validation results.
+- `msvc_vectorization_report.txt`: MSVC `/Qvec-report:2` diagnostics from recompiling the comparator sources with the exact benchmarked host flags; the command is at the top of the file.
 
 ```powershell
 # View summary table of latest snapshot

@@ -11,7 +11,7 @@ The week-13 course submission requires the protocol below except these later ext
 
 - The GPU-origin, host-ready timing boundary.
 - The sparse input family and the synthetic collection shaped like reference-model tensors.
-- Crossover and stability analysis beyond reporting median and interquartile range per case.
+- Crossover analysis (locating the element count where CUDA overtakes the comparator). The course driver does include a between-process stability check, described below; it is not a crossover study.
 
 The in-process benchmark driver is implemented in `benchmark_driver.py` and can be reproduced with `just bench-matrix`. The course matrix evidence is committed in `results/2026-09-25-3840079`.
 
@@ -42,9 +42,11 @@ Verify decoding outside the measured compression interval.
 - Add one pinned synthetic collection shaped like reference-model tensors without requiring training data.
 - Use 10 warmups and at least 30 measured repetitions per case.
 - Report median and interquartile range.
+- Run each path as a separate process in several trials with balanced path order (default 6 trials, every ordering of the three paths once), and report each case's per-trial medians and spread ratio. Within-process IQR understates run-to-run variation, especially for sub-millisecond GPU paths dominated by launch and synchronization latency.
 
 ## Required provenance
 
 Each case records seeds, invocation identifiers, code revision, build flags, hardware, transfer policy, header and payload bytes, timing boundary, and correctness status.
 Preserve raw samples and configuration with the result.
 Inspect stability before making crossover claims, and report a missing crossover or slowdown honestly.
+A speedup or slowdown is claimed only for cases with `claim_supported = true` under the claim rule in the technical contract; other cases are reported as measured, with their flags, and support no claim.
