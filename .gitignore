@@ -54,3 +54,8 @@ dkms.conf
 # debug information files
 *.dwo
 build/
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]

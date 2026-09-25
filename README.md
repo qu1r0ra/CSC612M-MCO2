@@ -4,8 +4,9 @@ Public course implementation repository for the CSC612M MCO2 data-level-parallel
 
 ## Status
 
-The public technical contract, benchmark protocol, and course-deliverables guide define this repository's implementation-facing requirements.
-The C-host/CUDA toolchain and the Philox generator are verified on the RTX 5060; the quantizer, codec, and measurements have not started.
+The public technical contract, benchmark protocol, and course-deliverables guide define how to implement and measure this course project.
+The CPU 8-bit quantizer, record codec, decoder, and NumPy oracle are implemented.
+The C-host/CUDA toolchain and Philox generator are verified on the RTX 5060. CUDA quantization and measurements remain for later work.
 
 ## Start here
 
@@ -15,15 +16,16 @@ The C-host/CUDA toolchain and the Philox generator are verified on the RTX 5060;
 - [Course deliverables](docs/course-deliverables.md)
 - [Architecture ADR](docs/adr/0001-cuda-stochastic-quantization-architecture.md)
 
-This repository is independently understandable for implementation, build, and reproduction.
-Project-wide planning and issue tracking are handled separately from this public implementation repository.
+The implementation, build, and reproduction instructions live in this repository. Project planning and issue tracking live in the private paper repository.
 
 ## Build status
 
+`just test-cpu` builds and verifies the CPU compression/decompression pipeline.
 `just test-rng` builds the native C/CUDA executable and runs the RNG checks on CPU and GPU.
-See [Reproduction path](docs/reproduction.md) for the verified toolchain and what the build does not yet cover.
+See [Reproduction path](docs/reproduction.md) for commands, dependencies, and current coverage.
 
 ## Quality gates
 
-For every code change, run `just format`, then `just lint`, and `just verify` before closeout.
+For every code change, run `just format`, `just lint`, and `just verify` before closeout.
 For C or CUDA changes, also run `just test-rng`.
+For CPU quantizer, codec, or CLI changes, run `just test-cpu`.

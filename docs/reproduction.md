@@ -1,14 +1,15 @@
 # Reproduction path
 
-Status: toolchain and RNG verified; quantizer, codec, and benchmark pending.
+Status: The CPU 8-bit pipeline and Philox checks are implemented. CUDA quantization and benchmark work remain.
 
 This document is the public entry point for reproducing the course implementation.
 
 ## What exists
 
-The repository builds one native executable, `build/test_rng`: a C host driver and C CPU path, calling CUDA kernels through `extern "C"` launch functions.
-It checks the Philox generator and its logical mapping on CPU and GPU.
-The quantizer, codec, decoder, and benchmark are not implemented yet; a passing RNG check is not evidence for them.
+The repository builds a CPU command-line tool, `build/mco2`, and a CUDA RNG check, `build/test_rng`.
+The CPU tool compresses raw little-endian FP32 vectors into version-1 8-bit records. It decodes each record to raw FP32.
+The NumPy oracle independently implements Philox4x32-10 and the CPU quantization path.
+CUDA quantization and benchmark work need their own tests and measurements.
 
 ## Verified toolchain
 
@@ -18,9 +19,10 @@ Verified on 2026-09-25:
 | --- | --- |
 | GPU | NVIDIA GeForce RTX 5060, compute capability 12.0 (`sm_120`), driver 610.88 |
 | CUDA toolkit | 13.4 (`nvcc` V13.4.59) |
-| Host compiler used by `nvcc` | MSVC `cl` 19.51.36260 for x64 (Visual Studio Community 2026 18.10, toolset 14.51) |
+| C compiler | MSVC `cl` 19.51.36260 for x64 (Visual Studio Community 2026 18.10, toolset 14.51) |
 | RNG dependency | Random123 v1.14.0, commit `726a093`, vendored in `third_party/random123` |
-| Build flags | `-O2 -arch=sm_120 -Isrc -Ithird_party/random123/include -Xcompiler /wd4068` |
+| CUDA build flags | `-O2 -arch=sm_120 -Isrc -Ithird_party/random123/include -Xcompiler /wd4068` |
+| CPU build flags | `/O2 /W4 /std:c11 /fp:strict` |
 
 `nvcc --list-gpu-arch` includes `compute_120`, and `nvcc` accepted MSVC 19.51 without `-allow-unsupported-compiler`.
 The `/wd4068` flag silences MSVC warnings about CUDA-only pragmas in the vendored Random123 headers.
@@ -47,8 +49,36 @@ It checks:
 - Bitwise CPU/GPU agreement for 1,000,003 elements under six block and grid geometries, including the capped automatic grid.
 - The Bernoulli threshold at `p=0`, `p=1`, `p=1-2^-24`, and `p=0.5` on CPU and GPU.
 
-On Linux, including Google Colab, the `[unix]` recipes call `nvcc` directly with the system host compiler.
-This path has not yet been run; record the Colab GPU model and host compiler with its first run.
+## CPU pipeline
+
+Requires `just`, Python 3.11 or newer, `uv`, and a C compiler. On Windows, `scripts/with-msvc.ps1` enters the x64 MSVC environment.
+
+```powershell
+just test-cpu
+```
+
+`just test-cpu` builds the native CPU CLI and two C test executables, then runs the NumPy/pytest oracle and CLI suite. The first run resolves NumPy and pytest from the checked-in `pyproject.toml` and `uv.lock`.
+
+The CLI consumes and produces raw little-endian FP32 files. A seeded compression computes the FP32 L2 scale and uses the logical Philox stream:
+
+```powershell
+just build-cpu
+build\mco2.exe compress --input input.f32 --output tensor.msq --seed 123 --tensor-id 7 --invocation-id 9
+build\mco2.exe decompress --input tensor.msq --output reconstructed.f32
+```
+
+For layer-1 checks, pass a prescribed FP32 scale and a raw little-endian uint32 word file containing one word per input element:
+
+```powershell
+build\mco2.exe compress --input input.f32 --output tensor.msq --seed 123 --scale 2.0 --words prescribed-words.u32
+```
+
+The CLI requires `--seed` for every compression command. `--words` supplies the random decisions for prescribed-scale tests. `--bits` accepts only `8` in this slice. The exact header, pairwise FP32 reduction, and layer-2 bounds are in [the technical contract](technical-contract.md).
+
+The suite checks prescribed-word records, seeded CPU/oracle byte equality, edge inputs, malformed headers, and both FP32 bounds against the FP64 oracle.
+
+On Linux, including Google Colab, `build-rng` and `test-rng` call `nvcc` with the system host compiler.
+The Linux CUDA path has not been run; record the Colab GPU model and host compiler with its first run.
 
 ## Local quality preflight
 
@@ -60,7 +90,7 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 Before claiming reproducibility of the full pipeline, add the following verified commands and outputs:
 
 1. Google Colab build and RNG check, with the Colab GPU model.
-2. Python oracle, codec, decoder, and malformed-input test commands.
+2. CUDA-vs-CPU codec comparisons and decoder malformed-input cases beyond the CPU suite.
 3. Benchmark command with matrix, warmup, repetition, and timing-boundary configuration.
 4. Result-inspection command that verifies manifests, raw samples, byte counts, and correctness status.
 
