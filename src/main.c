@@ -15,7 +15,7 @@ static void usage(FILE *stream)
     fprintf(stream,
             "Usage:\n"
             "  mco2 compress --input INPUT.f32 --output RECORD --seed UINT64\n"
-            "      [--bits 8] [--tensor-id UINT32] [--invocation-id UINT32]\n"
+            "      [--bits 4|8] [--tensor-id UINT32] [--invocation-id UINT32]\n"
             "      [--scale FP32] [--words WORDS.u32]\n"
             "  mco2 decompress --input RECORD --output OUTPUT.f32\n"
             "\n"
@@ -155,7 +155,7 @@ static mco2_q8_status compress_file(int argc, char **argv)
     }
     if (input_path == NULL || output_path == NULL || !seed_seen)
         return MCO2_Q8_ERR_ARGUMENT;
-    if (bits != MCO2_Q8_BITS)
+    if (bits != MCO2_Q4_BITS && bits != MCO2_Q8_BITS)
         return MCO2_Q8_ERR_BIT_WIDTH;
     if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX)
         return MCO2_Q8_ERR_ID_OVERFLOW;
@@ -218,20 +218,23 @@ static mco2_q8_status compress_file(int argc, char **argv)
         mco2_rng_words_cpu(&stream, (uint64_t)count, words);
     }
 
-    record = (uint8_t *)malloc(MCO2_Q8_HEADER_SIZE + count);
-    if (record == NULL) {
-        status = MCO2_Q8_ERR_MEMORY;
-        goto done;
+    {
+        size_t payload_size = (bits == MCO2_Q4_BITS) ? (count + 1) / 2 : count;
+        record = (uint8_t *)malloc(MCO2_Q8_HEADER_SIZE + payload_size);
+        if (record == NULL) {
+            status = MCO2_Q8_ERR_MEMORY;
+            goto done;
+        }
+        status = mco2_q8_header_encode((uint8_t)bits, (uint64_t)count, scale, record);
+        if (status != MCO2_Q8_OK)
+            goto done;
+        codes = record + MCO2_Q8_HEADER_SIZE;
+        status = mco2_encode_payload((uint8_t)bits, values, count, scale, words, codes);
+        if (status != MCO2_Q8_OK)
+            goto done;
+        if (!write_file(output_path, record, MCO2_Q8_HEADER_SIZE + payload_size))
+            status = MCO2_Q8_ERR_IO;
     }
-    status = mco2_q8_header_encode((uint8_t)bits, (uint64_t)count, scale, record);
-    if (status != MCO2_Q8_OK)
-        goto done;
-    codes = record + MCO2_Q8_HEADER_SIZE;
-    status = mco2_q8_make_codes(values, count, scale, words, codes);
-    if (status != MCO2_Q8_OK)
-        goto done;
-    if (!write_file(output_path, record, MCO2_Q8_HEADER_SIZE + count))
-        status = MCO2_Q8_ERR_IO;
 
 done:
     free(record);

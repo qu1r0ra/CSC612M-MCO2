@@ -11,6 +11,9 @@
 mco2_q8_status mco2_q8_validate_input(const float *values, size_t count);
 mco2_q8_status mco2_q8_compute_scale(const float *values, size_t count,
                                      float *scale);
+mco2_q8_status mco2_encode_payload(uint8_t bit_width, const float *values,
+                                   size_t count, float scale,
+                                   const uint32_t *words, uint8_t *payload);
 mco2_q8_status mco2_q8_make_codes(const float *values, size_t count,
                                    float scale, const uint32_t *words,
                                    uint8_t *codes);

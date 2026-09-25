@@ -35,7 +35,7 @@ const char *mco2_q8_status_message(mco2_q8_status status)
     case MCO2_Q8_ERR_VERSION:
         return "unsupported record version";
     case MCO2_Q8_ERR_BIT_WIDTH:
-        return "unsupported bit width; this tool accepts 8-bit records";
+        return "unsupported bit width; this tool accepts 4-bit and 8-bit records";
     case MCO2_Q8_ERR_RESERVED:
         return "reserved header bytes must be zero";
     case MCO2_Q8_ERR_COUNT:
@@ -46,9 +46,11 @@ const char *mco2_q8_status_message(mco2_q8_status status)
         return "scale must be finite and non-negative; "
                "empty and all-zero inputs require zero scale";
     case MCO2_Q8_ERR_CODE:
-        return "record contains an invalid 8-bit code";
+        return "record contains an invalid code";
     case MCO2_Q8_ERR_ZERO_SCALE_CODE:
         return "zero-scale records must contain only the center code";
+    case MCO2_Q8_ERR_PADDING_NIBBLE:
+        return "unused padding nibble must be zero";
     case MCO2_Q8_ERR_NONFINITE:
         return "input contains a non-finite FP32 value";
     case MCO2_Q8_ERR_SCALE_OVERFLOW:
@@ -71,7 +73,7 @@ mco2_q8_status mco2_q8_header_encode(uint8_t bit_width, uint64_t count,
 
     if (header == NULL)
         return MCO2_Q8_ERR_ARGUMENT;
-    if (bit_width != MCO2_Q8_BITS)
+    if (bit_width != MCO2_Q4_BITS && bit_width != MCO2_Q8_BITS)
         return MCO2_Q8_ERR_BIT_WIDTH;
     if (!isfinite(scale) || scale < 0.0f)
         return MCO2_Q8_ERR_SCALE;
@@ -93,10 +95,11 @@ mco2_q8_status mco2_q8_decode_record(const uint8_t *record,
                                      size_t record_size, float **values,
                                      size_t *count)
 {
+    uint8_t bit_width;
     uint64_t count64;
     uint32_t scale_bits;
     float scale;
-    size_t n, i;
+    size_t n, payload_len, i;
     float *decoded = NULL;
 
     if (values == NULL || count == NULL || (record == NULL && record_size != 0))
@@ -109,7 +112,8 @@ mco2_q8_status mco2_q8_decode_record(const uint8_t *record,
         return MCO2_Q8_ERR_MAGIC;
     if (record[4] != 1)
         return MCO2_Q8_ERR_VERSION;
-    if (record[5] != MCO2_Q8_BITS)
+    bit_width = record[5];
+    if (bit_width != MCO2_Q4_BITS && bit_width != MCO2_Q8_BITS)
         return MCO2_Q8_ERR_BIT_WIDTH;
     if (record[6] != 0 || record[7] != 0)
         return MCO2_Q8_ERR_RESERVED;
@@ -119,7 +123,8 @@ mco2_q8_status mco2_q8_decode_record(const uint8_t *record,
         count64 > (uint64_t)(SIZE_MAX / sizeof(float)))
         return MCO2_Q8_ERR_COUNT;
     n = (size_t)count64;
-    if (record_size != MCO2_Q8_HEADER_SIZE + n)
+    payload_len = (bit_width == MCO2_Q4_BITS) ? (n + 1) / 2 : n;
+    if (record_size != MCO2_Q8_HEADER_SIZE + payload_len)
         return MCO2_Q8_ERR_PAYLOAD_LENGTH;
 
     scale_bits = mco2_load_u32_le(record + 16);
@@ -132,19 +137,45 @@ mco2_q8_status mco2_q8_decode_record(const uint8_t *record,
         if (decoded == NULL)
             return MCO2_Q8_ERR_MEMORY;
     }
-    for (i = 0; i < n; i++) {
-        uint8_t code = record[MCO2_Q8_HEADER_SIZE + i];
-        int signed_code;
-        if (code > 2 * MCO2_Q8_SIGNED_LIMIT) {
-            free(decoded);
-            return MCO2_Q8_ERR_CODE;
+    if (bit_width == MCO2_Q8_BITS) {
+        for (i = 0; i < n; i++) {
+            uint8_t code = record[MCO2_Q8_HEADER_SIZE + i];
+            int signed_code;
+            if (code > 2 * MCO2_Q8_SIGNED_LIMIT) {
+                free(decoded);
+                return MCO2_Q8_ERR_CODE;
+            }
+            if (scale == 0.0f && code != MCO2_Q8_SIGNED_LIMIT) {
+                free(decoded);
+                return MCO2_Q8_ERR_ZERO_SCALE_CODE;
+            }
+            signed_code = (int)code - MCO2_Q8_SIGNED_LIMIT;
+            decoded[i] = ((float)signed_code / (float)MCO2_Q8_SIGNED_LIMIT) * scale;
         }
-        if (scale == 0.0f && code != MCO2_Q8_SIGNED_LIMIT) {
-            free(decoded);
-            return MCO2_Q8_ERR_ZERO_SCALE_CODE;
+    } else {
+        const uint8_t *payload = record + MCO2_Q8_HEADER_SIZE;
+        if (n % 2 == 1) {
+            uint8_t last_byte = payload[n / 2];
+            if ((last_byte >> 4) != 0) {
+                free(decoded);
+                return MCO2_Q8_ERR_PADDING_NIBBLE;
+            }
         }
-        signed_code = (int)code - MCO2_Q8_SIGNED_LIMIT;
-        decoded[i] = ((float)signed_code / (float)MCO2_Q8_SIGNED_LIMIT) * scale;
+        for (i = 0; i < n; i++) {
+            uint8_t byte_val = payload[i / 2];
+            uint8_t code = (i % 2 == 0) ? (byte_val & 0x0F) : ((byte_val >> 4) & 0x0F);
+            int signed_code;
+            if (code > 2 * MCO2_Q4_SIGNED_LIMIT) {
+                free(decoded);
+                return MCO2_Q8_ERR_CODE;
+            }
+            if (scale == 0.0f && code != MCO2_Q4_SIGNED_LIMIT) {
+                free(decoded);
+                return MCO2_Q8_ERR_ZERO_SCALE_CODE;
+            }
+            signed_code = (int)code - MCO2_Q4_SIGNED_LIMIT;
+            decoded[i] = ((float)signed_code / (float)MCO2_Q4_SIGNED_LIMIT) * scale;
+        }
     }
 
     *values = decoded;

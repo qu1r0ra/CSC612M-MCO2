@@ -78,12 +78,12 @@ build-codec-test:
 [windows]
 build-quantizer-test:
     New-Item -ItemType Directory -Force build | Out-Null
-    ./scripts/with-msvc.ps1 cl.exe /nologo /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /Isrc /Ithird_party/random123/include tests\test_quantizer.c src\quantizer.c src\rng_cpu.c /Fe:build\test_quantizer.exe
+    ./scripts/with-msvc.ps1 cl.exe /nologo /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /Isrc /Ithird_party/random123/include tests\test_quantizer.c src\quantizer.c src\codec.c src\rng_cpu.c /Fe:build\test_quantizer.exe
 
 [unix]
 build-quantizer-test:
     mkdir -p build
-    ${CC:-cc} -std=c11 -Wall -Wextra -Werror -ffp-contract=off -Isrc -Ithird_party/random123/include tests/test_quantizer.c src/quantizer.c src/rng_cpu.c -lm -o build/test_quantizer
+    ${CC:-cc} -std=c11 -Wall -Wextra -Werror -ffp-contract=off -Isrc -Ithird_party/random123/include tests/test_quantizer.c src/quantizer.c src/codec.c src/rng_cpu.c -lm -o build/test_quantizer
 
 # Build the CPU tool, verify the C seams, and run the independent Python oracle/CLI suite
 [windows]
