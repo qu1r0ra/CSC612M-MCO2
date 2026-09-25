@@ -47,19 +47,19 @@ mco2_q8_status mco2_q8_compute_scale(const float *values, size_t count,
     float max_abs = 0.0f;
     float *partials;
     size_t block_count, padded_count = 1, start, stride, i;
-    mco2_q8_status status;
 
     if (scale == NULL || (count != 0 && values == NULL))
         return MCO2_Q8_ERR_ARGUMENT;
     *scale = 0.0f;
-    status = mco2_q8_validate_input(values, count);
-    if (status != MCO2_Q8_OK)
-        return status;
     if (count == 0)
         return MCO2_Q8_OK;
 
     for (i = 0; i < count; i++) {
-        float magnitude = fabsf(values[i]);
+        float magnitude;
+
+        if (!isfinite(values[i]))
+            return MCO2_Q8_ERR_NONFINITE;
+        magnitude = fabsf(values[i]);
         if (magnitude > max_abs)
             max_abs = magnitude;
     }

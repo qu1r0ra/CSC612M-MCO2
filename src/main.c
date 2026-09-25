@@ -200,19 +200,17 @@ static mco2_q8_status compress_file(int argc, char **argv)
             status = MCO2_Q8_ERR_PAYLOAD_LENGTH;
             goto done;
         }
-        words = count == 0 ? NULL : (uint32_t *)malloc(count * sizeof *words);
-        if (count != 0 && words == NULL) {
-            status = MCO2_Q8_ERR_MEMORY;
-            goto done;
-        }
+    }
+
+    words = count == 0 ? NULL : (uint32_t *)malloc(count * sizeof *words);
+    if (count != 0 && words == NULL) {
+        status = MCO2_Q8_ERR_MEMORY;
+        goto done;
+    }
+    if (words_path != NULL) {
         for (i_size = 0; i_size < count; i_size++)
             words[i_size] = mco2_load_u32_le(word_bytes + 4 * i_size);
     } else {
-        words = count == 0 ? NULL : (uint32_t *)malloc(count * sizeof *words);
-        if (count != 0 && words == NULL) {
-            status = MCO2_Q8_ERR_MEMORY;
-            goto done;
-        }
         if (mco2_rng_stream_init(&stream, seed, tensor_id, invocation_id) != MCO2_OK) {
             status = MCO2_Q8_ERR_ID_OVERFLOW;
             goto done;
