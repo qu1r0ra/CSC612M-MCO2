@@ -7,6 +7,9 @@
 #include "codec.h"
 #include "mco2_rng.h"
 
+#define MCO2_CUDA_MAX_BLOCK_SIZE 1024
+#define MCO2_CUDA_MAX_GRID_SIZE 65535
+
 typedef struct {
     float k1_ms;
     float k2_ms;

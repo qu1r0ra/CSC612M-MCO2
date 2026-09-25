@@ -379,6 +379,11 @@ def test_cuda_edge_cases_match_cpu(tmp_path, bits: int):
             ("--grid-size", "0"),
             "invalid argument",
         ),
+        (
+            np.asarray([1.0], dtype=np.float32),
+            ("--grid-size", "65536"),
+            "invalid argument",
+        ),
     ],
 )
 def test_cuda_rejects_invalid_input_and_scale(tmp_path, values, extra, message):

@@ -8,7 +8,7 @@
 #include <limits>
 
 #define MCO2_CUDA_REDUCTION_THREADS 256
-#define MCO2_CUDA_MAX_AUTO_GRID 65535
+#define MCO2_CUDA_MAX_AUTO_GRID MCO2_CUDA_MAX_GRID_SIZE
 
 enum {
     MCO2_CUDA_INPUT_NONFINITE = 1U,
@@ -277,6 +277,8 @@ extern "C" int mco2_cuda_launch_k1(const float *device_values,
                                    int grid_size,
                                    void *stream_handle)
 {
+    if (grid_size < 0 || grid_size > MCO2_CUDA_MAX_GRID_SIZE)
+        return (int)cudaErrorInvalidValue;
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_handle);
     const uint64_t expected_block_count =
         count / MCO2_CUDA_REDUCTION_THREADS +
@@ -375,13 +377,16 @@ extern "C" int mco2_cuda_launch_k2(uint8_t bit_width,
 {
     if (bit_width != MCO2_Q4_BITS && bit_width != MCO2_Q8_BITS)
         return (int)cudaErrorInvalidValue;
-    const uint64_t group_count = count / 4 + (count % 4 != 0);
-    const int grid = launch_grid(group_count, block_size, grid_size);
     if (count == 0)
         return 0;
+    if (grid_size < 0 || grid_size > MCO2_CUDA_MAX_GRID_SIZE ||
+        block_size <= 0 || block_size > MCO2_CUDA_MAX_BLOCK_SIZE)
+        return (int)cudaErrorInvalidValue;
+    const uint64_t group_count = count / 4 + (count % 4 != 0);
+    const int grid = launch_grid(group_count, block_size, grid_size);
     if (device_values == NULL || device_scale == NULL || device_codes == NULL ||
-        device_validation_flags == NULL || block_size <= 0 || block_size > 1024 ||
-        grid <= 0 || (prescribed_words && device_words == NULL))
+        device_validation_flags == NULL || grid <= 0 ||
+        (prescribed_words && device_words == NULL))
         return (int)cudaErrorInvalidValue;
 
     round_kernel<<<grid, block_size, 0,
@@ -416,11 +421,13 @@ extern "C" int mco2_cuda_launch_q8_k3(const uint8_t *device_codes,
                                       int grid_size,
                                       void *stream_handle)
 {
-    const int grid = launch_grid(count, block_size, grid_size);
     if (count == 0)
         return 0;
-    if (device_codes == NULL || device_payload == NULL || block_size <= 0 ||
-        block_size > 1024 || grid <= 0)
+    if (grid_size < 0 || grid_size > MCO2_CUDA_MAX_GRID_SIZE ||
+        block_size <= 0 || block_size > MCO2_CUDA_MAX_BLOCK_SIZE)
+        return (int)cudaErrorInvalidValue;
+    const int grid = launch_grid(count, block_size, grid_size);
+    if (device_codes == NULL || device_payload == NULL || grid <= 0)
         return (int)cudaErrorInvalidValue;
 
     pack_q8_kernel<<<grid, block_size, 0,
@@ -436,12 +443,14 @@ extern "C" int mco2_cuda_launch_q4_k3(const uint8_t *device_codes,
                                       int grid_size,
                                       void *stream_handle)
 {
-    const uint64_t output_bytes = (count + 1) / 2;
-    const int grid = launch_grid(output_bytes, block_size, grid_size);
     if (count == 0)
         return 0;
-    if (device_codes == NULL || device_payload == NULL || block_size <= 0 ||
-        block_size > 1024 || grid <= 0)
+    if (grid_size < 0 || grid_size > MCO2_CUDA_MAX_GRID_SIZE ||
+        block_size <= 0 || block_size > MCO2_CUDA_MAX_BLOCK_SIZE)
+        return (int)cudaErrorInvalidValue;
+    const uint64_t output_bytes = (count + 1) / 2;
+    const int grid = launch_grid(output_bytes, block_size, grid_size);
+    if (device_codes == NULL || device_payload == NULL || grid <= 0)
         return (int)cudaErrorInvalidValue;
 
     pack_q4_kernel<<<grid, block_size, 0,
@@ -531,7 +540,8 @@ mco2_q8_status mco2_cuda_compress(uint8_t bit_width, const float *values,
         count > SIZE_MAX / sizeof(float) || count > SIZE_MAX / sizeof(uint32_t) ||
         (collect_timings && timings == NULL))
         return MCO2_Q8_ERR_ARGUMENT;
-    if (block_size <= 0 || block_size > 1024 || grid_size < 0)
+    if (block_size <= 0 || block_size > MCO2_CUDA_MAX_BLOCK_SIZE ||
+        grid_size < 0 || grid_size > MCO2_CUDA_MAX_GRID_SIZE)
         return MCO2_Q8_ERR_ARGUMENT;
     if (prescribed_scale_seen &&
         (!isfinite(prescribed_scale) || prescribed_scale < 0.0f))
