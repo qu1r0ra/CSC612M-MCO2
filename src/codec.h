@@ -31,7 +31,8 @@ typedef enum {
     MCO2_Q8_ERR_CUDA_UNAVAILABLE,
     MCO2_Q8_ERR_CUDA,
     MCO2_Q8_ERR_CUDA_BIT_WIDTH,
-    MCO2_Q8_ERR_TIMINGS_BACKEND
+    MCO2_Q8_ERR_TIMINGS_BACKEND,
+    MCO2_Q8_ERR_CLOCK
 } mco2_q8_status;
 
 const char *mco2_q8_status_message(mco2_q8_status status);

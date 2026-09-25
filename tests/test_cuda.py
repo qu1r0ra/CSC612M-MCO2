@@ -60,6 +60,111 @@ def _compress(
 
 
 @pytest.mark.parametrize("bits", [4, 8])
+@pytest.mark.parametrize("boundary", ["resident", "host-origin"])
+def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, boundary):
+    values = np.random.default_rng(1515).normal(size=257).astype(np.float32)
+    input_path = tmp_path / "bench-input.f32"
+    record_path = tmp_path / "bench-record.msq"
+    _write_values(input_path, values)
+
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(record_path),
+        "--seed",
+        "615",
+        "--backend",
+        "cuda",
+        "--boundary",
+        boundary,
+        "--bits",
+        str(bits),
+        "--tensor-id",
+        "31",
+        "--invocation-id",
+        "41",
+        "--warmup",
+        "1",
+        "--reps",
+        "2",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["configuration"]["backend"] == "cuda"
+    assert payload["configuration"]["boundary"] == boundary
+    assert payload["configuration"]["bits"] == bits
+    assert payload["configuration"]["warmup"] == 1
+    assert payload["configuration"]["reps"] == 2
+    assert payload["configuration"]["repetition_invocation_ids"] == [41, 42]
+    assert payload["configuration"]["warmup_invocation_ids"] == [43]
+    for key in ("samples_ms", "k1_ms", "k2_ms", "k3_ms"):
+        assert len(payload[key]) == 2
+        assert all(sample >= 0 for sample in payload[key])
+    assert payload["header_bytes"] == HEADER.size
+    assert payload["payload_bytes"] == (len(values) + (bits == 4)) // (2 if bits == 4 else 1)
+
+    cuda_result, cuda_record = _compress(
+        tmp_path,
+        values,
+        backend="cuda",
+        seed=615,
+        extra=(
+            "--bits",
+            str(bits),
+            "--tensor-id",
+            "31",
+            "--invocation-id",
+            "41",
+        ),
+    )
+    assert cuda_result.returncode == 0, cuda_result.stderr
+    assert record_path.read_bytes() == cuda_record
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+def test_cuda_bench_prescribed_scale_skips_scale_overflow_failure(tmp_path, bits):
+    values = np.asarray([3.0e38, 3.0e38], dtype=np.float32)
+    input_path = tmp_path / "large-input.f32"
+    record_path = tmp_path / "large-bench-record.msq"
+    _write_values(input_path, values)
+
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(record_path),
+        "--seed",
+        "5",
+        "--backend",
+        "cuda",
+        "--bits",
+        str(bits),
+        "--scale",
+        "1e38",
+        "--warmup",
+        "0",
+        "--reps",
+        "1",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert len(payload["samples_ms"]) == 1
+    cuda_result, cuda_record = _compress(
+        tmp_path,
+        values,
+        backend="cuda",
+        extra=("--bits", str(bits), "--scale", "1e38"),
+    )
+    assert cuda_result.returncode == 0, cuda_result.stderr
+    assert record_path.read_bytes() == cuda_record
+
+
+@pytest.mark.parametrize("bits", [4, 8])
 @pytest.mark.parametrize("count", [0, 1, 3, 4, 5, 255, 256, 257, 1025, 65539])
 @pytest.mark.parametrize(
     "seed,tensor_id,invocation_id",
