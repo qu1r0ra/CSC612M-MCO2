@@ -13,7 +13,13 @@ The week-13 course submission requires the protocol below except these later ext
 - The sparse input family and the synthetic collection shaped like reference-model tensors.
 - Crossover analysis (locating the element count where CUDA overtakes the comparator). The course driver does include a between-process stability check, described below; it is not a crossover study.
 
-The in-process benchmark driver is implemented in `benchmark_driver.py` and can be reproduced with `just bench-matrix`. The course matrix evidence is committed in `results/2026-09-25-3840079`.
+The in-process benchmark driver is implemented in `benchmark_driver.py` and can be reproduced with `just bench-matrix`. The course matrix evidence is the frozen snapshot `results/2026-09-25-59c8967`; its `summary.csv` is the source for every reported figure. In that snapshot, `claim_supported` holds for these cases only:
+
+- `2^22`, both bit widths: CUDA resident about 211–221× and CUDA host-origin about 26–29× faster than the C comparator.
+- `2^18`, both bit widths: CUDA host-origin about 12× faster.
+- `2^10`, 8-bit: CUDA resident about 0.18× (a slowdown).
+
+Every other case is inconclusive or unstable at `2^14` and below, or has an unstable resident path at `2^18`, and supports no claim. No boundary inversion occurred.
 
 ## Comparison backends
 
@@ -48,5 +54,4 @@ Verify decoding outside the measured compression interval.
 
 Each case records seeds, invocation identifiers, code revision, build flags, hardware, transfer policy, header and payload bytes, timing boundary, and correctness status.
 Preserve raw samples and configuration with the result.
-Inspect stability before making crossover claims, and report a missing crossover or slowdown honestly.
-A speedup or slowdown is claimed only for cases with `claim_supported = true` under the claim rule in the technical contract; other cases are reported as measured, with their flags, and support no claim.
+A speedup or slowdown is claimed only for cases with `claim_supported = true` under the claim rule in the technical contract; every other case, including slowdowns and unstable cases, is reported as measured with its flags and supports no claim.
