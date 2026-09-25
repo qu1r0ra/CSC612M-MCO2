@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "mco2_rng.h"
 
@@ -41,12 +42,29 @@ static float reduce_block(const float *values, size_t count, size_t start,
     return terms[0];
 }
 
-mco2_q8_status mco2_q8_compute_scale(const float *values, size_t count,
-                                     float *scale)
+size_t mco2_q8_scale_workspace_elements(size_t count)
+{
+    size_t block_count, padded_count = 1;
+
+    if (count == 0)
+        return 0;
+    block_count = count / MCO2_Q8_SCALE_BLOCK_SIZE;
+    if (count % MCO2_Q8_SCALE_BLOCK_SIZE != 0)
+        block_count++;
+    while (padded_count < block_count) {
+        if (padded_count > SIZE_MAX / 2)
+            return SIZE_MAX;
+        padded_count *= 2;
+    }
+    return padded_count;
+}
+
+mco2_q8_status mco2_q8_compute_scale_with_workspace(
+    const float *values, size_t count, float *scale, float *partials,
+    size_t partial_capacity)
 {
     float max_abs = 0.0f;
-    float *partials;
-    size_t block_count, padded_count = 1, start, stride, i;
+    size_t block_count, padded_count, start, stride, i;
 
     if (scale == NULL || (count != 0 && values == NULL))
         return MCO2_Q8_ERR_ARGUMENT;
@@ -66,19 +84,17 @@ mco2_q8_status mco2_q8_compute_scale(const float *values, size_t count,
     if (max_abs == 0.0f)
         return MCO2_Q8_OK;
 
+    padded_count = mco2_q8_scale_workspace_elements(count);
+    if (padded_count == SIZE_MAX)
+        return MCO2_Q8_ERR_MEMORY;
     block_count = count / MCO2_Q8_SCALE_BLOCK_SIZE;
     if (count % MCO2_Q8_SCALE_BLOCK_SIZE != 0)
         block_count++;
-    while (padded_count < block_count) {
-        if (padded_count > SIZE_MAX / 2)
-            return MCO2_Q8_ERR_MEMORY;
-        padded_count *= 2;
-    }
     if (padded_count > SIZE_MAX / sizeof *partials)
         return MCO2_Q8_ERR_MEMORY;
-    partials = (float *)calloc(padded_count, sizeof *partials);
-    if (partials == NULL)
-        return MCO2_Q8_ERR_MEMORY;
+    if (partials == NULL || partial_capacity < padded_count)
+        return MCO2_Q8_ERR_ARGUMENT;
+    memset(partials, 0, padded_count * sizeof *partials);
 
     for (i = 0, start = 0; i < block_count; i++, start += MCO2_Q8_SCALE_BLOCK_SIZE)
         partials[i] = reduce_block(values, count, start, max_abs);
@@ -90,12 +106,35 @@ mco2_q8_status mco2_q8_compute_scale(const float *values, size_t count,
     {
         float root = sqrtf(partials[0]);
         float result = max_abs * root;
-        free(partials);
         if (!isfinite(result))
             return MCO2_Q8_ERR_SCALE_OVERFLOW;
         *scale = result;
     }
     return MCO2_Q8_OK;
+}
+
+mco2_q8_status mco2_q8_compute_scale(const float *values, size_t count,
+                                     float *scale)
+{
+    size_t workspace_elements;
+    float *partials = NULL;
+    mco2_q8_status status;
+
+    if (scale == NULL || (count != 0 && values == NULL))
+        return MCO2_Q8_ERR_ARGUMENT;
+    workspace_elements = mco2_q8_scale_workspace_elements(count);
+    if (workspace_elements == SIZE_MAX ||
+        workspace_elements > SIZE_MAX / sizeof *partials)
+        return MCO2_Q8_ERR_MEMORY;
+    if (workspace_elements != 0) {
+        partials = (float *)malloc(workspace_elements * sizeof *partials);
+        if (partials == NULL)
+            return MCO2_Q8_ERR_MEMORY;
+    }
+    status = mco2_q8_compute_scale_with_workspace(
+        values, count, scale, partials, workspace_elements);
+    free(partials);
+    return status;
 }
 
 mco2_q8_status mco2_encode_payload(uint8_t bit_width, const float *values,

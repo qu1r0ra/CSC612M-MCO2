@@ -1,3 +1,4 @@
+import json
 import os
 import struct
 import subprocess
@@ -516,3 +517,129 @@ def test_compress_rejects_id_overflow_and_nonzero_scale_for_all_zero_input(tmp_p
     )
     assert nonzero_scale.returncode != 0
     assert "zero scale" in nonzero_scale.stderr
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+def test_cpu_bench_reports_raw_samples_and_base_record(tmp_path, bits: int):
+    values = np.linspace(-1.5, 1.5, 17, dtype=np.float32)
+    input_path = tmp_path / "bench-input.f32"
+    bench_record_path = tmp_path / "bench-record.msq"
+    _write_f32(input_path, values)
+
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(bench_record_path),
+        "--seed",
+        "812",
+        "--bits",
+        str(bits),
+        "--tensor-id",
+        "17",
+        "--invocation-id",
+        "23",
+        "--warmup",
+        "2",
+        "--reps",
+        "3",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["configuration"] == {
+        "backend": "cpu",
+        "bits": bits,
+        "count": len(values),
+        "seed": 812,
+        "tensor_id": 17,
+        "invocation_id": 23,
+        "warmup": 2,
+        "reps": 3,
+        "boundary": "host-host",
+        "block_size": 256,
+        "grid_size": 0,
+        "prescribed_scale": None,
+    }
+    assert len(payload["samples_ms"]) == 3
+    assert all(sample >= 0 for sample in payload["samples_ms"])
+    assert "k1_ms" not in payload
+    assert payload["header_bytes"] == HEADER.size
+    assert payload["payload_bytes"] == (len(values) + (bits == 4)) // (2 if bits == 4 else 1)
+
+    bench_record = bench_record_path.read_bytes()
+    compress_record = _compress(
+        tmp_path,
+        values,
+        seed=812,
+        extra=(
+            "--bits",
+            str(bits),
+            "--tensor-id",
+            "17",
+            "--invocation-id",
+            "23",
+        ),
+    )
+    assert bench_record == compress_record
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ("--boundary", "resident"),
+        ("--block-size", "128"),
+        ("--grid-size", "3"),
+    ],
+)
+def test_cpu_bench_rejects_cuda_only_options(tmp_path, extra):
+    input_path = tmp_path / "input.f32"
+    _write_f32(input_path, np.ones(3, dtype=np.float32))
+    result = _run("bench", "--input", str(input_path), "--seed", "1", *extra)
+
+    assert result.returncode != 0
+    assert "invalid argument" in result.stderr
+    assert result.stdout == ""
+
+
+def test_bench_rejects_invocation_range_before_emitting_samples(tmp_path):
+    input_path = tmp_path / "input.f32"
+    _write_f32(input_path, np.ones(3, dtype=np.float32))
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--seed",
+        "1",
+        "--invocation-id",
+        str(0xFFFFFFFF),
+        "--warmup",
+        "0",
+        "--reps",
+        "2",
+    )
+
+    assert result.returncode != 0
+    assert "identifiers must fit in uint32" in result.stderr
+    assert result.stdout == ""
+
+
+def test_cpu_bench_rejects_nonfinite_input_before_emitting_samples(tmp_path):
+    input_path = tmp_path / "input.f32"
+    _write_f32(input_path, np.asarray([np.nan], dtype=np.float32))
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--seed",
+        "1",
+        "--warmup",
+        "0",
+        "--reps",
+        "1",
+    )
+
+    assert result.returncode != 0
+    assert "non-finite" in result.stderr
+    assert result.stdout == ""

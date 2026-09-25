@@ -786,3 +786,401 @@ mco2_q8_status mco2_cuda_q8_compress(const float *values, size_t count,
                               prescribed_scale, prescribed_words, 256, 0,
                               payload, scale, collect_timings, timings);
 }
+
+struct mco2_cuda_bench_context {
+    cudaStream_t stream;
+    cudaEvent_t k1_start;
+    cudaEvent_t k1_stop;
+    cudaEvent_t k2_start;
+    cudaEvent_t k2_stop;
+    cudaEvent_t k3_start;
+    cudaEvent_t k3_stop;
+    float *device_values;
+    float *device_scale;
+    float *device_k1_scale;
+    float *device_max_partials;
+    float *device_sums_a;
+    float *device_sums_b;
+    uint32_t *device_invalid_partials;
+    uint32_t *device_words;
+    uint32_t *device_validation_flags;
+    uint8_t *device_codes;
+    uint8_t *device_payload;
+    int *device_status;
+    uint8_t *host_payload;
+    float host_scale;
+};
+
+static void destroy_bench_context(mco2_cuda_bench_context *context)
+{
+    if (context->device_values != NULL)
+        (void)cudaFree(context->device_values);
+    if (context->device_scale != NULL)
+        (void)cudaFree(context->device_scale);
+    if (context->device_k1_scale != NULL)
+        (void)cudaFree(context->device_k1_scale);
+    if (context->device_max_partials != NULL)
+        (void)cudaFree(context->device_max_partials);
+    if (context->device_invalid_partials != NULL)
+        (void)cudaFree(context->device_invalid_partials);
+    if (context->device_sums_a != NULL)
+        (void)cudaFree(context->device_sums_a);
+    if (context->device_sums_b != NULL)
+        (void)cudaFree(context->device_sums_b);
+    if (context->device_words != NULL)
+        (void)cudaFree(context->device_words);
+    if (context->device_validation_flags != NULL)
+        (void)cudaFree(context->device_validation_flags);
+    if (context->device_codes != NULL)
+        (void)cudaFree(context->device_codes);
+    if (context->device_payload != NULL)
+        (void)cudaFree(context->device_payload);
+    if (context->device_status != NULL)
+        (void)cudaFree(context->device_status);
+    if (context->k1_start != NULL)
+        (void)cudaEventDestroy(context->k1_start);
+    if (context->k1_stop != NULL)
+        (void)cudaEventDestroy(context->k1_stop);
+    if (context->k2_start != NULL)
+        (void)cudaEventDestroy(context->k2_start);
+    if (context->k2_stop != NULL)
+        (void)cudaEventDestroy(context->k2_stop);
+    if (context->k3_start != NULL)
+        (void)cudaEventDestroy(context->k3_start);
+    if (context->k3_stop != NULL)
+        (void)cudaEventDestroy(context->k3_stop);
+    if (context->stream != NULL)
+        (void)cudaStreamDestroy(context->stream);
+    free(context->host_payload);
+}
+
+static mco2_q8_status run_bench_pipeline(
+    mco2_cuda_bench_context *context, uint8_t bit_width, const float *values,
+    size_t count,
+    uint64_t seed, uint64_t tensor_id, uint64_t invocation_id,
+    int prescribed_scale_seen, int prescribed_words_seen, int block_size,
+    int grid_size, mco2_cuda_bench_boundary boundary, int copy_outputs,
+    int inspect_result, mco2_bench_sample *sample)
+{
+    const size_t payload_bytes = bit_width == MCO2_Q4_BITS
+                                     ? count / 2 + (count & 1)
+                                     : count;
+    const uint64_t block_count = count / MCO2_CUDA_REDUCTION_THREADS +
+                                 (count % MCO2_CUDA_REDUCTION_THREADS != 0);
+    uint64_t padded_count = 1;
+    uint32_t host_validation_flags = 0;
+    int host_status = MCO2_Q8_OK;
+    mco2_rng_stream stream_state;
+    const auto wall_start = std::chrono::steady_clock::now();
+    cudaError_t error;
+
+    if (mco2_rng_stream_init(&stream_state, seed, tensor_id, invocation_id) !=
+        MCO2_Q8_OK)
+        return MCO2_Q8_ERR_ID_OVERFLOW;
+    while (padded_count < block_count)
+        padded_count <<= 1;
+
+    if (boundary == MCO2_CUDA_BENCH_HOST_ORIGIN) {
+        error = cudaMemcpyAsync(context->device_values, values,
+                                count * sizeof(float), cudaMemcpyHostToDevice,
+                                context->stream);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+    }
+
+    error = cudaMemsetAsync(context->device_validation_flags, 0,
+                            sizeof(uint32_t), context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+
+    error = cudaEventRecord(context->k1_start, context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+    error = (cudaError_t)mco2_cuda_launch_k1(
+        context->device_values, count, context->device_max_partials,
+        context->device_invalid_partials, context->device_sums_a,
+        context->device_sums_b, block_count, padded_count,
+        prescribed_scale_seen ? context->device_k1_scale : context->device_scale,
+        context->device_status, grid_size, context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+    error = cudaEventRecord(context->k1_stop, context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+
+    error = cudaEventRecord(context->k2_start, context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+    error = (cudaError_t)mco2_cuda_launch_k2(
+        bit_width, context->device_values, count, context->device_scale,
+        context->device_words, prescribed_words_seen, stream_state,
+        context->device_codes, context->device_validation_flags,
+        block_size, grid_size, context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+    error = cudaEventRecord(context->k2_stop, context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+
+    error = cudaEventRecord(context->k3_start, context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+    error = (cudaError_t)mco2_cuda_launch_k3(
+        bit_width, context->device_codes, count, context->device_payload,
+        block_size, grid_size, context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+    error = cudaEventRecord(context->k3_stop, context->stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+
+    if (copy_outputs) {
+        if (payload_bytes != 0) {
+            error = cudaMemcpyAsync(context->host_payload,
+                                    context->device_payload, payload_bytes,
+                                    cudaMemcpyDeviceToHost, context->stream);
+            if (error != cudaSuccess)
+                return MCO2_Q8_ERR_CUDA;
+        }
+        error = cudaMemcpyAsync(&context->host_scale, context->device_scale,
+                                sizeof(float), cudaMemcpyDeviceToHost,
+                                context->stream);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+    }
+    if (inspect_result) {
+        error = cudaMemcpyAsync(&host_status, context->device_status,
+                                sizeof(int), cudaMemcpyDeviceToHost,
+                                context->stream);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+        error = cudaMemcpyAsync(&host_validation_flags,
+                                context->device_validation_flags,
+                                sizeof(uint32_t), cudaMemcpyDeviceToHost,
+                                context->stream);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+    }
+
+    error = cudaDeviceSynchronize();
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+    if (sample != NULL) {
+        const auto wall_stop = std::chrono::steady_clock::now();
+        float elapsed = 0.0f;
+        sample->wall_ms = std::chrono::duration<double, std::milli>(
+                              wall_stop - wall_start)
+                              .count();
+        error = cudaEventElapsedTime(&elapsed, context->k1_start,
+                                     context->k1_stop);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+        sample->k1_ms = elapsed;
+        error = cudaEventElapsedTime(&elapsed, context->k2_start,
+                                     context->k2_stop);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+        sample->k2_ms = elapsed;
+        error = cudaEventElapsedTime(&elapsed, context->k3_start,
+                                     context->k3_stop);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+        sample->k3_ms = elapsed;
+    }
+
+    if (inspect_result) {
+        if (host_status != MCO2_Q8_OK &&
+            !(prescribed_scale_seen &&
+              host_status == MCO2_Q8_ERR_SCALE_OVERFLOW))
+            return (mco2_q8_status)host_status;
+        if ((host_validation_flags & MCO2_CUDA_INPUT_NONFINITE) != 0)
+            return MCO2_Q8_ERR_NONFINITE;
+        if (((context->host_scale == 0.0f) &&
+             (host_validation_flags & MCO2_CUDA_INPUT_ANY_NONZERO) != 0) ||
+            ((context->host_scale != 0.0f) &&
+             (host_validation_flags & MCO2_CUDA_INPUT_ANY_NONZERO) == 0) ||
+            (host_validation_flags & MCO2_CUDA_INPUT_BAD_ZERO_SCALE) != 0)
+            return MCO2_Q8_ERR_SCALE;
+    }
+    return MCO2_Q8_OK;
+}
+
+mco2_q8_status mco2_cuda_bench(
+    uint8_t bit_width, const float *values, size_t count, uint64_t seed,
+    uint64_t tensor_id, uint64_t base_invocation_id,
+    int prescribed_scale_seen, float prescribed_scale,
+    const uint32_t *prescribed_words, int block_size, int grid_size,
+    mco2_cuda_bench_boundary boundary, uint64_t warmups, uint64_t reps,
+    uint8_t *base_payload, float *base_scale, mco2_bench_sample *samples)
+{
+    mco2_cuda_bench_context context = {};
+    mco2_q8_status result = MCO2_Q8_ERR_CUDA;
+    cudaError_t error;
+    int device_count = 0;
+    uint64_t total_runs, block_count, padded_count = 1, index;
+    size_t payload_bytes;
+
+    if (bit_width != MCO2_Q4_BITS && bit_width != MCO2_Q8_BITS)
+        return MCO2_Q8_ERR_BIT_WIDTH;
+    if ((count != 0 && (values == NULL || base_payload == NULL)) ||
+        base_scale == NULL || samples == NULL || reps == 0 ||
+        count > SIZE_MAX / sizeof(float) || count > SIZE_MAX / sizeof(uint32_t))
+        return MCO2_Q8_ERR_ARGUMENT;
+    if (block_size <= 0 || block_size > MCO2_CUDA_MAX_BLOCK_SIZE ||
+        grid_size < 0 || grid_size > MCO2_CUDA_MAX_GRID_SIZE ||
+        (boundary != MCO2_CUDA_BENCH_RESIDENT &&
+         boundary != MCO2_CUDA_BENCH_HOST_ORIGIN))
+        return MCO2_Q8_ERR_ARGUMENT;
+    if (prescribed_scale_seen &&
+        (!std::isfinite(prescribed_scale) || prescribed_scale < 0.0f))
+        return MCO2_Q8_ERR_SCALE;
+    if (tensor_id > UINT32_MAX || base_invocation_id > UINT32_MAX ||
+        warmups > UINT64_MAX - reps ||
+        (total_runs = warmups + reps) == 0 ||
+        total_runs - 1 > (uint64_t)UINT32_MAX - base_invocation_id)
+        return MCO2_Q8_ERR_ID_OVERFLOW;
+    if (prescribed_scale_seen && count == 0 && prescribed_scale != 0.0f)
+        return MCO2_Q8_ERR_SCALE;
+
+    error = cudaGetDeviceCount(&device_count);
+    if (error != cudaSuccess || device_count == 0) {
+        (void)cudaGetLastError();
+        return MCO2_Q8_ERR_CUDA;
+    }
+    error = cudaStreamCreateWithFlags(&context.stream, cudaStreamNonBlocking);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.k1_start);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.k1_stop);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.k2_start);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.k2_stop);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.k3_start);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.k3_stop);
+    if (error != cudaSuccess)
+        goto done;
+
+    payload_bytes = bit_width == MCO2_Q4_BITS ? count / 2 + (count & 1) : count;
+    context.host_payload = (uint8_t *)malloc(payload_bytes == 0 ? 1 : payload_bytes);
+    if (context.host_payload == NULL) {
+        result = MCO2_Q8_ERR_MEMORY;
+        goto done;
+    }
+    if (count != 0) {
+#define BENCH_ALLOCATE(pointer, bytes)                                                    \
+        do {                                                                               \
+            error = cudaMalloc(reinterpret_cast<void **>(&(pointer)), (bytes));             \
+            if (error != cudaSuccess)                                                      \
+                goto done;                                                                 \
+        } while (0)
+        BENCH_ALLOCATE(context.device_values, count * sizeof(float));
+        BENCH_ALLOCATE(context.device_scale, sizeof(float));
+        BENCH_ALLOCATE(context.device_status, sizeof(int));
+        BENCH_ALLOCATE(context.device_validation_flags, sizeof(uint32_t));
+        BENCH_ALLOCATE(context.device_codes, count * sizeof(uint8_t));
+        BENCH_ALLOCATE(context.device_payload,
+                       (payload_bytes == 0 ? 1 : payload_bytes) * sizeof(uint8_t));
+        if (prescribed_scale_seen)
+            BENCH_ALLOCATE(context.device_k1_scale, sizeof(float));
+        if (prescribed_words != NULL)
+            BENCH_ALLOCATE(context.device_words, count * sizeof(uint32_t));
+        block_count = count / MCO2_CUDA_REDUCTION_THREADS +
+                      (count % MCO2_CUDA_REDUCTION_THREADS != 0);
+        while (padded_count < block_count) {
+            if (padded_count > UINT64_MAX / 2) {
+                result = MCO2_Q8_ERR_COUNT;
+                goto done;
+            }
+            padded_count <<= 1;
+        }
+        BENCH_ALLOCATE(context.device_max_partials,
+                       block_count * sizeof(float));
+        BENCH_ALLOCATE(context.device_invalid_partials,
+                       block_count * sizeof(uint32_t));
+        BENCH_ALLOCATE(context.device_sums_a, padded_count * sizeof(float));
+        BENCH_ALLOCATE(context.device_sums_b, padded_count * sizeof(float));
+#undef BENCH_ALLOCATE
+        if (prescribed_scale_seen) {
+            error = cudaMemcpyAsync(context.device_scale, &prescribed_scale,
+                                    sizeof(float), cudaMemcpyHostToDevice,
+                                    context.stream);
+            if (error != cudaSuccess)
+                goto done;
+        }
+        if (prescribed_words != NULL) {
+            error = cudaMemcpyAsync(context.device_words, prescribed_words,
+                                    count * sizeof(uint32_t),
+                                    cudaMemcpyHostToDevice, context.stream);
+            if (error != cudaSuccess)
+                goto done;
+        }
+        if (boundary == MCO2_CUDA_BENCH_RESIDENT) {
+            error = cudaMemcpyAsync(context.device_values, values,
+                                    count * sizeof(float),
+                                    cudaMemcpyHostToDevice, context.stream);
+            if (error != cudaSuccess)
+                goto done;
+        }
+        error = cudaStreamSynchronize(context.stream);
+        if (error != cudaSuccess)
+            goto done;
+    }
+
+    if (count == 0) {
+        *base_scale = 0.0f;
+        for (index = 0; index < warmups + reps; index++) {
+            mco2_bench_sample *sample = index < warmups ? NULL : &samples[index - warmups];
+            const auto start = std::chrono::steady_clock::now();
+            error = cudaDeviceSynchronize();
+            if (error != cudaSuccess) {
+                result = MCO2_Q8_ERR_CUDA;
+                goto done;
+            }
+            if (sample != NULL) {
+                const auto stop = std::chrono::steady_clock::now();
+                sample->wall_ms = std::chrono::duration<double, std::milli>(stop - start).count();
+                sample->k1_ms = 0.0;
+                sample->k2_ms = 0.0;
+                sample->k3_ms = 0.0;
+            }
+        }
+        result = MCO2_Q8_OK;
+        goto done;
+    }
+
+    result = run_bench_pipeline(
+        &context, bit_width, values, count, seed, tensor_id, base_invocation_id,
+        prescribed_scale_seen, prescribed_words != NULL, block_size, grid_size,
+        boundary, 1, 1, NULL);
+    if (result != MCO2_Q8_OK)
+        goto done;
+    if (payload_bytes != 0)
+        memcpy(base_payload, context.host_payload, payload_bytes);
+    *base_scale = context.host_scale;
+
+    for (index = 0; index < total_runs; index++) {
+        mco2_bench_sample *sample = index < warmups ? NULL : &samples[index - warmups];
+        const uint64_t invocation_id = base_invocation_id + index;
+        result = run_bench_pipeline(
+            &context, bit_width, values, count, seed, tensor_id, invocation_id,
+            prescribed_scale_seen, prescribed_words != NULL, block_size,
+            grid_size, boundary,
+            boundary == MCO2_CUDA_BENCH_HOST_ORIGIN, 0, sample);
+        if (result != MCO2_Q8_OK)
+            goto done;
+    }
+    result = MCO2_Q8_OK;
+
+done:
+    destroy_bench_context(&context);
+    return result;
+}

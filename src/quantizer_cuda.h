@@ -18,6 +18,18 @@ typedef struct {
     float d2h_ms;
 } mco2_cuda_timings;
 
+typedef struct {
+    double wall_ms;
+    double k1_ms;
+    double k2_ms;
+    double k3_ms;
+} mco2_bench_sample;
+
+typedef enum {
+    MCO2_CUDA_BENCH_RESIDENT = 0,
+    MCO2_CUDA_BENCH_HOST_ORIGIN = 1
+} mco2_cuda_bench_boundary;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -88,6 +100,17 @@ mco2_q8_status mco2_cuda_q8_compress(const float *values, size_t count,
                                      uint8_t *payload, float *scale,
                                      int collect_timings,
                                      mco2_cuda_timings *timings);
+
+/* Runs the base record preflight, warmups, and measured repetitions with one
+   reusable CUDA allocation/event context. The payload and scale outputs are
+   from the untimed base-configuration run. */
+mco2_q8_status mco2_cuda_bench(
+    uint8_t bit_width, const float *values, size_t count, uint64_t seed,
+    uint64_t tensor_id, uint64_t base_invocation_id,
+    int prescribed_scale_seen, float prescribed_scale,
+    const uint32_t *prescribed_words, int block_size, int grid_size,
+    mco2_cuda_bench_boundary boundary, uint64_t warmups, uint64_t reps,
+    uint8_t *base_payload, float *base_scale, mco2_bench_sample *samples);
 
 #ifdef __cplusplus
 }

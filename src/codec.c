@@ -69,6 +69,8 @@ const char *mco2_q8_status_message(mco2_q8_status status)
         return "CUDA backend currently supports 8-bit records only";
     case MCO2_Q8_ERR_TIMINGS_BACKEND:
         return "--timings requires --backend cuda";
+    case MCO2_Q8_ERR_CLOCK:
+        return "high-resolution monotonic clock failed";
     }
     return "unknown error";
 }
