@@ -1,0 +1,186 @@
+{
+  "manifest_version": "2.0",
+  "date": "2026-09-25",
+  "created_at_utc": "2026-09-25T17:05:34.232086+00:00",
+  "git_provenance": {
+    "code_revision": "59c8967f870ad88b42bbd2b86abd9aa187f19dc8",
+    "code_revision_short": "59c8967",
+    "git_dirty": false,
+    "dirty_files": []
+  },
+  "hardware": {
+    "gpu_name": "NVIDIA GeForce RTX 5060",
+    "compute_capability": "12.0",
+    "host_cpu": "AMD64 Family 25 Model 33 Stepping 2, AuthenticAMD"
+  },
+  "toolkit_and_driver": {
+    "cuda_toolkit": "Cuda compilation tools, release 13.4, V13.4.59",
+    "driver_version": "610.88",
+    "c_compiler": "Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36260 for x64"
+  },
+  "build_flags": {
+    "source": "just --dry-run build-cuda",
+    "commands": [
+      "New-Item -ItemType Directory -Force build | Out-Null",
+      "./scripts/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include /c src\\main.c /Fo:build\\main_cuda.obj",
+      "./scripts/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include /c src\\codec.c /Fo:build\\codec_cuda.obj",
+      "./scripts/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include /c src\\quantizer.c /Fo:build\\quantizer_cuda_host.obj",
+      "./scripts/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include /c src\\rng_cpu.c /Fo:build\\rng_cpu_cuda.obj",
+      "./scripts/with-msvc.ps1 nvcc -O2 -arch=native -Isrc -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true -Xcompiler /wd4068 -c src\\quantizer_cuda.cu -o build\\quantizer_cuda.obj",
+      "./scripts/with-msvc.ps1 nvcc -O2 -arch=native -Isrc -Ithird_party/random123/include build\\main_cuda.obj build\\codec_cuda.obj build\\quantizer_cuda_host.obj build\\rng_cpu_cuda.obj build\\quantizer_cuda.obj -o build\\mco2.exe"
+    ],
+    "comparator_c": "/nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include",
+    "cuda_nvcc": "-O2 -arch=native -Isrc -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true -Xcompiler /wd4068"
+  },
+  "transfer_policy": "pageable",
+  "gpu_state": {
+    "note": "Instantaneous nvidia-smi readings before the first and after the last timed process; they describe the GPU around the run, not clock stability during it.",
+    "start": {
+      "pstate": "P8",
+      "clocks.sm": "600 MHz",
+      "clocks.mem": "405 MHz",
+      "clocks.max.sm": "3090 MHz",
+      "temperature.gpu": "49",
+      "power.draw": "16.52 W",
+      "clocks_event_reasons.active": "0x0000000000000000",
+      "captured_at_utc": "2026-09-25T17:04:16.099495+00:00"
+    },
+    "end": {
+      "pstate": "P1",
+      "clocks.sm": "2550 MHz",
+      "clocks.mem": "14001 MHz",
+      "clocks.max.sm": "3090 MHz",
+      "temperature.gpu": "53",
+      "power.draw": "28.25 W",
+      "clocks_event_reasons.active": "0x0000000000000000",
+      "captured_at_utc": "2026-09-25T17:05:34.218197+00:00"
+    }
+  },
+  "matrix_parameters": {
+    "counts": [
+      1024,
+      16384,
+      262144,
+      4194304
+    ],
+    "bit_widths": [
+      4,
+      8
+    ],
+    "backends": [
+      "cpu",
+      "cuda"
+    ],
+    "warmup": 10,
+    "reps": 30,
+    "trials": 6,
+    "trial_orders": [
+      [
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-host-origin"
+      ],
+      [
+        "cpu-comparator",
+        "cuda-host-origin",
+        "cuda-resident"
+      ],
+      [
+        "cuda-resident",
+        "cpu-comparator",
+        "cuda-host-origin"
+      ],
+      [
+        "cuda-resident",
+        "cuda-host-origin",
+        "cpu-comparator"
+      ],
+      [
+        "cuda-host-origin",
+        "cpu-comparator",
+        "cuda-resident"
+      ],
+      [
+        "cuda-host-origin",
+        "cuda-resident",
+        "cpu-comparator"
+      ]
+    ],
+    "invocation_scheme": "every trial reuses base invocation 0; identifiers per repetition are copied from each mco2 bench configuration",
+    "input_seed": 2026,
+    "compression_seed": 42
+  },
+  "statistics_method": {
+    "pooled": "median and IQR over all measured repetitions of all trials",
+    "quantile_method": "numpy.percentile(method='linear')",
+    "numpy_version": "2.4.6",
+    "speedup_point": "CPU pooled median / CUDA pooled median",
+    "speedup_range": "[CPU min trial median / CUDA max trial median, CPU max trial median / CUDA min trial median]",
+    "spread_ratio": "max trial median / min trial median",
+    "spread_threshold": 1.25,
+    "claim_rule": "A CUDA case supports a speedup or slowdown claim only when (1) its verdict is 'faster' (CPU trial-median minimum / CUDA trial-median maximum > 1) or 'slower' (CPU trial-median maximum / CUDA trial-median minimum < 1), (2) boundary_inversion is false (host-origin pooled median is not below resident pooled median), and (3) both the CUDA case and the CPU comparator have spread_ratio <= 1.25 (maximum over minimum trial median)."
+  },
+  "inputs": {
+    "1024": {
+      "count": 1024,
+      "filename": "input_n1024.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "5d427e8b2cff71f492e1e2454df157cbbca26cee73cb470bd16894780d5b9595"
+    },
+    "16384": {
+      "count": 16384,
+      "filename": "input_n16384.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "6edf38927988280a39297f988e4ecf05134d2c221d51f0158709acc0356b357d"
+    },
+    "262144": {
+      "count": 262144,
+      "filename": "input_n262144.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "071301500ba1d6d11860c70a49d9287c84b5e9db816aabcb153fc47f15a629be"
+    },
+    "4194304": {
+      "count": 4194304,
+      "filename": "input_n4194304.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "feca1ab160957c73467bfd36ae98e4198f1677d8bb227c7a334cd327fba8c4e4"
+    }
+  },
+  "summary_csv": "summary.csv",
+  "msvc_vectorization_report": "msvc_vectorization_report.txt",
+  "cases": [
+    "case_cpu_comparator_bits4_n1024",
+    "case_cuda_resident_bits4_n1024",
+    "case_cuda_host-origin_bits4_n1024",
+    "case_cpu_comparator_bits8_n1024",
+    "case_cuda_resident_bits8_n1024",
+    "case_cuda_host-origin_bits8_n1024",
+    "case_cpu_comparator_bits4_n16384",
+    "case_cuda_resident_bits4_n16384",
+    "case_cuda_host-origin_bits4_n16384",
+    "case_cpu_comparator_bits8_n16384",
+    "case_cuda_resident_bits8_n16384",
+    "case_cuda_host-origin_bits8_n16384",
+    "case_cpu_comparator_bits4_n262144",
+    "case_cuda_resident_bits4_n262144",
+    "case_cuda_host-origin_bits4_n262144",
+    "case_cpu_comparator_bits8_n262144",
+    "case_cuda_resident_bits8_n262144",
+    "case_cuda_host-origin_bits8_n262144",
+    "case_cpu_comparator_bits4_n4194304",
+    "case_cuda_resident_bits4_n4194304",
+    "case_cuda_host-origin_bits4_n4194304",
+    "case_cpu_comparator_bits8_n4194304",
+    "case_cuda_resident_bits8_n4194304",
+    "case_cuda_host-origin_bits8_n4194304"
+  ],
+  "all_cases_passed": true
+}

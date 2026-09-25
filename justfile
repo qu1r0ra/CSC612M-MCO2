@@ -123,8 +123,17 @@ test-cpu: build-cpu build-codec-test build-quantizer-test
 # Run the CUDA quantizer acceptance suite on the local GPU
 [windows]
 test-cuda: build-cuda
-    $env:MCO2_TEST_CUDA = '1'; uv run --group dev pytest tests\test_cuda.py
+    $env:MCO2_TEST_CUDA = '1'; uv run --group dev pytest tests\test_cuda.py tests\test_bench_driver.py
 
 [unix]
 test-cuda: build-cuda
-    MCO2_TEST_CUDA=1 uv run --group dev pytest tests/test_cuda.py
+    MCO2_TEST_CUDA=1 uv run --group dev pytest tests/test_cuda.py tests/test_bench_driver.py
+
+# Build the CUDA-enabled tool and run the full course benchmark matrix
+[windows]
+bench-matrix *args: build-cuda
+    $env:MCO2_TEST_CUDA = '1'; uv run python benchmark_driver.py {{args}}
+
+[unix]
+bench-matrix *args: build-cuda
+    MCO2_TEST_CUDA=1 uv run python benchmark_driver.py {{args}}

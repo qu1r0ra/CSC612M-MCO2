@@ -1,9 +1,9 @@
 # Technical contract
 
-Status: The 8-bit and 4-bit CPU pipelines, the 8-bit and 4-bit CUDA pipelines, launch-geometry independence, full decoder validation, and Layer 3 unbiasedness checks are implemented.
+Status: The 8-bit and 4-bit CPU pipelines, the 8-bit and 4-bit CUDA pipelines, launch-geometry independence, full decoder validation, Layer 3 unbiasedness checks, and the in-process benchmark timing paths and driver snapshot are implemented.
 
 This document carries the technical requirements needed to understand and reproduce the course implementation.
-The code and tests define current behavior. This contract freezes the 8-bit and 4-bit record formats, numerical rules, overflow policy, and Layer 3 acceptance criteria.
+The code and tests define current behavior. This contract freezes the 8-bit and 4-bit record formats, numerical rules, overflow policy, Layer 3 acceptance criteria, and benchmark timing boundaries.
 
 ## Course scope
 
@@ -36,6 +36,21 @@ The CUDA backend is selected with `--backend cuda` (default `cpu`) and accepts b
 - **K3 (Payload packing)**: Runs in a grid-stride loop with one thread per output byte. For 8-bit records, each thread copies one code byte to the payload. For 4-bit records, each thread packs two codes into one byte: the lower-index element `2*i` is stored in the low nibble (bits 0-3), the higher-index element `2*i + 1` is stored in the high nibble (bits 4-7), and the unused high nibble of an odd-length payload is strictly zeroed.
 - **Launch geometry**: `--block-size` and `--grid-size` configure K2 and K3 launch geometry (and `--grid-size` configures K1 grid); K1's block size is fixed at 256 by the reduction order. The grid-stride loop structure guarantees byte-identical output across all valid block and grid configurations, including grids smaller than the element count. Specifying launch geometry options with `--backend cpu` is rejected as an invalid argument.
 - **Timing boundary**: `--timings` writes one JSON object to stderr with `k1_ms`, `k2_ms`, `k3_ms`, `h2d_ms`, and `d2h_ms`. CUDA events measure resident kernel execution across K1, K2, and K3; host elapsed time measures the input, words, scale, status, and payload copies. The timing line describes one invocation and does not substitute for the benchmark protocol.
+
+### In-process benchmark timing paths and boundaries
+
+The `mco2 bench` subcommand measures in-process compression throughput without process startup, dynamic memory allocation, or file I/O inside the measured intervals. It loads the input file and preallocates all host and device buffers once, runs `--warmup N` (default 10) warmups and `--reps N` (default 30) measured repetitions, and writes one JSON object to stdout containing configuration echo, raw per-repetition wall-clock samples in milliseconds, per-repetition K1/K2/K3 event times for CUDA runs, and header and payload byte counts.
+
+- **Timing boundaries**:
+  - `resident` (CUDA-only): measures device input to device packed bytes across K1, K2, and K3, synchronizing the CUDA device before stopping the monotonic clock.
+  - `host-origin` (CUDA-only): measures the complete host-to-host execution path: Host-to-Device input transfer, K1, K2, K3 execution, and Device-to-Host packed payload and scale transfers, all issued with `cudaMemcpyAsync` on the benchmark stream and followed by `cudaDeviceSynchronize`, synchronizing the CUDA device before stopping the monotonic clock.
+  - C comparator (`--backend cpu`): measures single-thread C execution on preallocated host buffers from host input to host packed bytes. It implements one path because CPU resident and host-origin are identical; specifying `--boundary`, `--block-size`, or `--grid-size` with `--backend cpu` is rejected as an invalid argument.
+- **Pageable transfer policy**: Transfers between host and device use standard pageable host allocations (`malloc`), reflecting standard host tensor integration rather than pinned/page-locked memory.
+- **Invocation identifiers**: Repetition `r` (0-indexed) uses invocation identifier `base + r`; warmup `w` uses `base + reps + w`. Identifiers that would exceed $2^{32}-1$ fail before timing begins.
+- **Driver trials**: The benchmark driver (`benchmark_driver.py`) runs every path of a matrix cell as a separate `mco2 bench` process in each of `--trials N` trials (default 6). With three paths, the six trials run every path ordering once, so each path occupies each position and follows each other path equally often. Every trial reuses base invocation identifier 0, making trials replicates of one workload; the driver copies each process's identifiers from its JSON output. Each case reports the pooled median and IQR over all trials (`numpy.percentile`, `method="linear"`), the per-trial medians, and their spread ratio (maximum over minimum).
+- **Speedup and claim rule**: A CUDA case's point speedup is the comparator's pooled median over the CUDA pooled median. Its range divides the comparator's minimum trial median by the CUDA maximum and the comparator's maximum by the CUDA minimum. The verdict is `faster` when the whole range exceeds 1, `slower` when it lies below 1, and `inconclusive` otherwise. `boundary_inversion` marks a cell whose host-origin median is below its resident median, which is physically implausible because host-origin does strictly more work; `unstable` marks a case whose spread ratio exceeds 1.25. A case supports a speedup or slowdown claim (`claim_supported`) only when the verdict is conclusive, the cell is not inverted, and neither the CUDA case nor the comparator is unstable. These thresholds were fixed before the frozen snapshot was generated.
+- **Snapshot provenance**: The driver refuses a dirty working tree unless `--allow-dirty` is passed, and then records the dirty files; evidence snapshots come from a clean committed revision. Build flags are the commands `just --dry-run build-cuda` prints, and the MSVC vectorization report recompiles the comparator sources with exactly those host flags plus `/Qvec-report:2`. `nvidia-smi` clock, power, thermal, and clock-event readings before and after the run are recorded as context, not as proof of in-run clock stability.
+- **Record validation**: The optional `--record-output` writes the base-configuration record once outside timing. The benchmark driver verifies that the benchmark record is byte-identical to `mco2 compress` across both backends, and verifies Layer 2 decoding against the FP64 reference oracle before timing begins.
 
 ### FP32 scale and reconstruction bound
 

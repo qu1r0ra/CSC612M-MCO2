@@ -1,6 +1,6 @@
 # Reproduction path
 
-Status: The CPU 8-bit and 4-bit pipelines, the CUDA 8-bit and 4-bit pipelines, launch-geometry independence, full decoder validation, and Layer 3 unbiasedness checks are implemented. The benchmark matrix remains.
+Status: The CPU 8-bit and 4-bit pipelines, the CUDA 8-bit and 4-bit pipelines, launch-geometry independence, full decoder validation, Layer 3 unbiasedness checks, and the full course benchmark matrix snapshot are implemented.
 
 This document is the public entry point for reproducing the course implementation.
 
@@ -154,16 +154,32 @@ The Linux CUDA path has not been run; record the Colab GPU model and host compil
 After changing Python reference, analysis, or tooling code, run `just format` and then `just lint`.
 Before declaring a code change ready, run `just verify`, which includes Ruff linting and a formatting check.
 
-## Documentation still required
+## Benchmark matrix and frozen snapshot
 
-Before claiming reproducibility of the full pipeline, add the following verified commands and outputs:
+The benchmark driver measures in-process throughput across the course matrix ($2^{10}, 2^{14}, 2^{18}, 2^{22}$ element counts $\times$ 4 and 8 bits $\times$ C comparator, CUDA resident, CUDA host-origin) using `mco2 bench`. Each matrix cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing, then every path runs as a separate process in each of six trials with balanced path order. The driver refuses a dirty working tree; commit first, or pass `--allow-dirty` for a non-evidence run.
 
-1. Google Colab build and RNG check, with the Colab GPU model.
-2. Benchmark command with matrix, warmup, repetition, and timing-boundary configuration.
-3. Result-inspection command that verifies manifests, raw samples, byte counts, and correctness status.
+### Running the benchmark matrix
 
-The implementation must record the exact compiler, CUDA toolkit, dependency revision, build flags, hardware, and transfer policy.
-Preserve verified results and provenance in a frozen snapshot for downstream analysis.
+```powershell
+# Build CUDA executable and run the full 24-case course benchmark matrix
+just bench-matrix
+
+# Alternatively, run with custom repetition or output directory
+uv run python benchmark_driver.py --counts 1024 16384 262144 4194304 --bits 4 8 --warmup 10 --reps 30 --trials 6
+```
+
+### Inspecting results and provenance
+
+Snapshots are stored in `results/<date>-<short_rev>/`:
+- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policy (`pageable`), GPU state before and after the run, trial orders, the statistics method and claim rule, and input hashes.
+- `summary.csv`: Per-case pooled median and IQR, trial-median range and spread ratio, speedup vs the C comparator with its range and verdict, and the `boundary_inversion`, `unstable`, and `claim_supported` flags.
+- `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`) with each trial's path order and invocation identifiers, pooled samples, statistics, configuration, and correctness validation results.
+- `msvc_vectorization_report.txt`: MSVC `/Qvec-report:2` diagnostics from recompiling the comparator sources with the exact benchmarked host flags; the command is at the top of the file.
+
+```powershell
+# View summary table of latest snapshot
+Get-Content (Get-ChildItem results -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName\summary.csv
+```
 
 ## Scope boundary
 
