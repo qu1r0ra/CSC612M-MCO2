@@ -795,6 +795,10 @@ struct mco2_cuda_bench_context {
     cudaEvent_t k2_stop;
     cudaEvent_t k3_start;
     cudaEvent_t k3_stop;
+    cudaEvent_t h2d_start;
+    cudaEvent_t h2d_stop;
+    cudaEvent_t d2h_start;
+    cudaEvent_t d2h_stop;
     float *device_values;
     float *device_scale;
     float *device_k1_scale;
@@ -849,6 +853,14 @@ static void destroy_bench_context(mco2_cuda_bench_context *context)
         (void)cudaEventDestroy(context->k3_start);
     if (context->k3_stop != NULL)
         (void)cudaEventDestroy(context->k3_stop);
+    if (context->h2d_start != NULL)
+        (void)cudaEventDestroy(context->h2d_start);
+    if (context->h2d_stop != NULL)
+        (void)cudaEventDestroy(context->h2d_stop);
+    if (context->d2h_start != NULL)
+        (void)cudaEventDestroy(context->d2h_start);
+    if (context->d2h_stop != NULL)
+        (void)cudaEventDestroy(context->d2h_stop);
     if (context->stream != NULL)
         (void)cudaStreamDestroy(context->stream);
     free(context->host_payload);
@@ -881,9 +893,15 @@ static mco2_q8_status run_bench_pipeline(
         padded_count <<= 1;
 
     if (boundary == MCO2_CUDA_BENCH_HOST_ORIGIN) {
+        error = cudaEventRecord(context->h2d_start, context->stream);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
         error = cudaMemcpyAsync(context->device_values, values,
                                 count * sizeof(float), cudaMemcpyHostToDevice,
                                 context->stream);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+        error = cudaEventRecord(context->h2d_stop, context->stream);
         if (error != cudaSuccess)
             return MCO2_Q8_ERR_CUDA;
     }
@@ -935,6 +953,9 @@ static mco2_q8_status run_bench_pipeline(
         return MCO2_Q8_ERR_CUDA;
 
     if (copy_outputs) {
+        error = cudaEventRecord(context->d2h_start, context->stream);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
         if (payload_bytes != 0) {
             error = cudaMemcpyAsync(context->host_payload,
                                     context->device_payload, payload_bytes,
@@ -945,6 +966,9 @@ static mco2_q8_status run_bench_pipeline(
         error = cudaMemcpyAsync(&context->host_scale, context->device_scale,
                                 sizeof(float), cudaMemcpyDeviceToHost,
                                 context->stream);
+        if (error != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+        error = cudaEventRecord(context->d2h_stop, context->stream);
         if (error != cudaSuccess)
             return MCO2_Q8_ERR_CUDA;
     }
@@ -986,6 +1010,22 @@ static mco2_q8_status run_bench_pipeline(
         if (error != cudaSuccess)
             return MCO2_Q8_ERR_CUDA;
         sample->k3_ms = elapsed;
+        sample->h2d_ms = 0.0;
+        sample->d2h_ms = 0.0;
+        if (boundary == MCO2_CUDA_BENCH_HOST_ORIGIN) {
+            error = cudaEventElapsedTime(&elapsed, context->h2d_start,
+                                         context->h2d_stop);
+            if (error != cudaSuccess)
+                return MCO2_Q8_ERR_CUDA;
+            sample->h2d_ms = elapsed;
+        }
+        if (copy_outputs) {
+            error = cudaEventElapsedTime(&elapsed, context->d2h_start,
+                                         context->d2h_stop);
+            if (error != cudaSuccess)
+                return MCO2_Q8_ERR_CUDA;
+            sample->d2h_ms = elapsed;
+        }
     }
 
     if (inspect_result) {
@@ -1066,6 +1106,18 @@ mco2_q8_status mco2_cuda_bench(
     if (error != cudaSuccess)
         goto done;
     error = cudaEventCreate(&context.k3_stop);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.h2d_start);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.h2d_stop);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.d2h_start);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaEventCreate(&context.d2h_stop);
     if (error != cudaSuccess)
         goto done;
 
@@ -1151,6 +1203,8 @@ mco2_q8_status mco2_cuda_bench(
                 sample->k1_ms = 0.0;
                 sample->k2_ms = 0.0;
                 sample->k3_ms = 0.0;
+                sample->h2d_ms = 0.0;
+                sample->d2h_ms = 0.0;
             }
         }
         result = MCO2_Q8_OK;

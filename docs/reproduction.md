@@ -156,24 +156,27 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 
 ## Benchmark matrix and frozen snapshot
 
-The benchmark driver measures in-process throughput across the course matrix ($2^{10}, 2^{14}, 2^{18}, 2^{22}$ element counts $\times$ 4 and 8 bits $\times$ C comparator, CUDA resident, CUDA host-origin) using `mco2 bench`. Each matrix cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing, then every path runs as a separate process in each of six trials with balanced path order. The driver refuses a dirty working tree; commit first, or pass `--allow-dirty` for a non-evidence run.
+The benchmark driver measures in-process throughput with `mco2 bench` for the C comparator, CUDA resident, and CUDA host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (102 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of six trials with balanced path order. The driver refuses a dirty working tree; commit first, or pass `--allow-dirty` for a non-evidence run. The course snapshot `results/2026-09-25-59c8967` was produced by revision `59c8967`, whose driver ran the four course sizes in ascending order without a warm-up; reproduce it from that revision.
 
 ### Running the benchmark matrix
 
 ```powershell
-# Build CUDA executable and run the full 24-case course benchmark matrix
+# Build the CUDA executable and run the 102-case size sweep (about an hour)
 just bench-matrix
 
-# Alternatively, run with custom repetition or output directory
-uv run python benchmark_driver.py --counts 1024 16384 262144 4194304 --bits 4 8 --warmup 10 --reps 30 --trials 6
+# Course sizes only, with the sweep's warm-up and random case order
+just bench-matrix --counts 1024 16384 262144 4194304
+
+# Render F1-F3 and report.md (crossover, T1) into a snapshot folder
+just figures results/<date>-<short_rev>
 ```
 
 ### Inspecting results and provenance
 
 Snapshots are stored in `results/<date>-<short_rev>/`:
-- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policy (`pageable`), GPU state before and after the run, trial orders, the statistics method and claim rule, and input hashes.
+- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policy (`pageable`), GPU state before and after the warm-up and after the run, the case order and its seed, trial orders, the statistics method and claim rule, and input hashes.
 - `summary.csv`: Per-case pooled median and IQR, trial-median range and spread ratio, speedup vs the C comparator with its range and verdict, and the `boundary_inversion`, `unstable`, and `claim_supported` flags.
-- `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`) with each trial's path order and invocation identifiers, pooled samples, statistics, configuration, and correctness validation results.
+- `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`, and for host-origin `h2d_ms`, `d2h_ms`) with each trial's path order and invocation identifiers, the case's `execution_index`, pooled samples, statistics, `stage_medians_ms`, configuration, and correctness validation results.
 - `msvc_vectorization_report.txt`: MSVC `/Qvec-report:2` diagnostics from recompiling the comparator sources with the exact benchmarked host flags; the command is at the top of the file.
 
 ```powershell

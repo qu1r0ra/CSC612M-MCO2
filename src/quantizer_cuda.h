@@ -23,6 +23,8 @@ typedef struct {
     double k1_ms;
     double k2_ms;
     double k3_ms;
+    double h2d_ms;
+    double d2h_ms;
 } mco2_bench_sample;
 
 typedef enum {

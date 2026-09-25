@@ -129,6 +129,10 @@ test-cuda: build-cuda
 test-cuda: build-cuda
     MCO2_TEST_CUDA=1 uv run --group dev pytest tests/test_cuda.py tests/test_bench_driver.py
 
+# Render F1-F3, T1 and the crossover report into a snapshot folder
+figures snapshot *args:
+    uv run python bench_report.py "{{snapshot}}" {{args}}
+
 # Build the CUDA-enabled tool and run the full course benchmark matrix
 [windows]
 bench-matrix *args: build-cuda
