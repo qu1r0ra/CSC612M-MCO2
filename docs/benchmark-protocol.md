@@ -13,13 +13,21 @@ The week-13 course submission requires the protocol below except these later ext
 - The sparse input family and the synthetic collection shaped like reference-model tensors.
 - Crossover analysis (locating the element count where CUDA overtakes the comparator). The course driver does include a between-process stability check, described below; it is not a crossover study.
 
-The in-process benchmark driver is implemented in `benchmark_driver.py` and can be reproduced with `just bench-matrix`. The course matrix evidence is the frozen snapshot `results/2026-09-25-59c8967`; its `summary.csv` is the source for every reported figure. In that snapshot, `claim_supported` holds for these cases only:
+The in-process benchmark driver is implemented in `benchmark_driver.py` and can be reproduced with `just bench-matrix`. The course matrix evidence is the frozen snapshot `results/2026-09-25-59c8967`; its `summary.csv` is the source for every reported figure. In that snapshot, `claim_supported` holds for these cases only (speedup vs the C comparator as pooled-median point estimate [trial-median range]):
 
-- `2^22`, both bit widths: CUDA resident about 211–221× and CUDA host-origin about 26–29× faster than the C comparator.
-- `2^18`, both bit widths: CUDA host-origin about 12× faster.
-- `2^10`, 8-bit: CUDA resident about 0.18× (a slowdown).
+| Elements | Bits | CUDA boundary | Speedup |
+| --- | --- | --- | --- |
+| `2^22` | 4 | resident | 221× [206, 266] |
+| `2^22` | 8 | resident | 211× [202, 226] |
+| `2^22` | 4 | host-origin | 28.9× [28.1, 31.2] |
+| `2^22` | 8 | host-origin | 26.1× [25.4, 26.8] |
+| `2^18` | 4 | host-origin | 12.1× [11.0, 13.9] |
+| `2^18` | 8 | host-origin | 11.6× [9.9, 12.9] |
+| `2^10` | 8 | resident | 0.18× [0.16, 0.19] (slowdown) |
 
-Every other case is inconclusive or unstable at `2^14` and below, or has an unstable resident path at `2^18`, and supports no claim. No boundary inversion occurred.
+Every other case supports no claim: its verdict is inconclusive, or the case or its comparator is unstable. No boundary inversion occurred, and the vectorization report shows no vectorized comparator loop.
+
+Known limitations: case order is fixed by element count, smallest first, and path order is balanced only within a case, so GPU clock ramp-up from idle (recorded as P8 at the start of this run) falls on the smallest cases. The claim rule flags such cases as unstable rather than reporting them. An earlier six-trial run at revision `8622430` was discarded because its vectorization report failed to compile. Under the same thresholds, its claim set differed at the margins: 2^22 4-bit was unsupported because its comparator was unstable, 2^18 8-bit host-origin was unsupported, and 2^10 8-bit resident was not a supported slowdown. Cases near the thresholds should therefore be read as marginal.
 
 ## Comparison backends
 
