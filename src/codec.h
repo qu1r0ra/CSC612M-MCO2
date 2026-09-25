@@ -27,7 +27,11 @@ typedef enum {
     MCO2_Q8_ERR_SCALE_OVERFLOW,
     MCO2_Q8_ERR_ID_OVERFLOW,
     MCO2_Q8_ERR_MEMORY,
-    MCO2_Q8_ERR_IO
+    MCO2_Q8_ERR_IO,
+    MCO2_Q8_ERR_CUDA_UNAVAILABLE,
+    MCO2_Q8_ERR_CUDA,
+    MCO2_Q8_ERR_CUDA_BIT_WIDTH,
+    MCO2_Q8_ERR_TIMINGS_BACKEND
 } mco2_q8_status;
 
 const char *mco2_q8_status_message(mco2_q8_status status);

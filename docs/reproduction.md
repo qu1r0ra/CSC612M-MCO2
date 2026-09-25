@@ -1,15 +1,15 @@
 # Reproduction path
 
-Status: The CPU 8-bit and 4-bit pipelines, full decoder validation, and Layer 3 unbiasedness checks are implemented. CUDA quantization and benchmark work remain.
+Status: The CPU 8-bit and 4-bit pipelines, the CUDA 8-bit pipeline, full decoder validation, and Layer 3 unbiasedness checks are implemented. CUDA 4-bit support and the benchmark matrix remain.
 
 This document is the public entry point for reproducing the course implementation.
 
 ## What exists
 
-The repository builds a CPU command-line tool, `build/mco2`, and a CUDA RNG check, `build/test_rng`.
+The repository builds the CPU command-line tool `build/mco2`, the CUDA-enabled 8-bit command-line tool `build/mco2`, and the CUDA RNG check `build/test_rng`.
 The CPU tool compresses raw little-endian FP32 vectors into version-1 8-bit or 4-bit records. It decodes each record to raw FP32.
 The NumPy oracle independently implements Philox4x32-10 and the CPU quantization path at both 8-bit and 4-bit widths.
-CUDA quantization and benchmark work need their own tests and measurements.
+The CUDA tool supports 8-bit compression and shares the CPU decoder. `just test-cuda` checks byte parity, prescribed-scale parity, the FP64 reconstruction bound, invalid inputs, and timing output on a local CUDA device.
 
 ## Verified toolchain
 
@@ -21,7 +21,8 @@ Verified on 2026-09-25:
 | CUDA toolkit | 13.4 (`nvcc` V13.4.59) |
 | C compiler | MSVC `cl` 19.51.36260 for x64 (Visual Studio Community 2026 18.10, toolset 14.51) |
 | RNG dependency | Random123 v1.14.0, commit `726a093`, vendored in `third_party/random123` |
-| CUDA build flags | `-O2 -arch=sm_120 -Isrc -Ithird_party/random123/include -Xcompiler /wd4068` |
+| CUDA RNG build flags | `-O2 -arch=sm_120 -Isrc -Ithird_party/random123/include -Xcompiler /wd4068` |
+| CUDA quantizer build flags | `-O2 -arch=native -Isrc -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true -Xcompiler /wd4068` |
 | CPU build flags | `/O2 /W4 /std:c11 /fp:strict` |
 
 `nvcc --list-gpu-arch` includes `compute_120`, and `nvcc` accepted MSVC 19.51 without `-allow-unsupported-compiler`.
@@ -36,6 +37,8 @@ On Windows, also install Visual Studio with the x64 C++ tools; `scripts/with-msv
 just toolchain
 $env:CUDA_ARCH = 'sm_120'
 just test-rng
+$env:CUDA_ARCH = 'native'
+just test-cuda
 ```
 
 `CUDA_ARCH` defaults to `native`, which targets the GPU in the build machine.
@@ -48,6 +51,8 @@ It checks:
 - Rejection of tensor and invocation identifiers above `2^32-1`.
 - Bitwise CPU/GPU agreement for 1,000,003 elements under six block and grid geometries, including the capped automatic grid.
 - The Bernoulli threshold at `p=0`, `p=1`, `p=1-2^-24`, and `p=0.5` on CPU and GPU.
+
+`just build-cuda` compiles the C host sources as C and the CUDA kernels with precise FP32 division and square root, flush-to-zero disabled, and fused multiply-add disabled. CUDA quantization currently accepts 8-bit records. Run `just test-cuda` to build that executable and exercise its acceptance suite.
 
 ## CPU pipeline
 
@@ -81,6 +86,14 @@ build\mco2.exe compress --input input.f32 --output tensor_q4.msq --bits 4 --seed
 ```
 
 The CLI requires `--seed` for every compression command. `--words` supplies the random decisions for prescribed-scale tests. `--bits` accepts `4` or `8` (defaulting to `8`). The exact header layout, 4-bit nibble packing, pairwise FP32 reduction, and layer-2 bounds are in [the technical contract](technical-contract.md).
+
+The CUDA backend is selected with `--backend cuda`; it supports 8-bit records. Add `--timings` to emit a single JSON line to stderr with K1, K2, K3 device event times and host measured H2D/D2H copy times. For the Issue #13 acceptance timing, use an input of `2^22` FP32 elements and record the output line with the GPU and toolkit from `just toolchain`:
+
+```powershell
+build\mco2.exe compress --input input-2m22.f32 --output tensor-q8.msq --seed 123 --backend cuda --timings
+```
+
+Recorded acceptance run on 2026-09-25: the input was generated with NumPy `default_rng(2026).normal(size=2^22).astype(float32)`. On the RTX 5060 with driver 610.88, compute capability 12.0, CUDA 13.4 V13.4.59, and MSVC 19.51.36260, the CUDA timing was `{"k1_ms":1.308544,"k2_ms":0.124288,"k3_ms":0.057600,"h2d_ms":3.072600,"d2h_ms":0.901900}`. The CUDA and CPU records were byte-identical at 4,194,324 bytes. This is one local acceptance run, not the benchmark matrix.
 
 ### Verified test commands
 
@@ -139,7 +152,7 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 Before claiming reproducibility of the full pipeline, add the following verified commands and outputs:
 
 1. Google Colab build and RNG check, with the Colab GPU model.
-2. CUDA-vs-CPU codec comparisons and decoder malformed-input cases beyond the CPU suite.
+2. CUDA 4-bit parity and broader launch-geometry comparisons.
 3. Benchmark command with matrix, warmup, repetition, and timing-boundary configuration.
 4. Result-inspection command that verifies manifests, raw samples, byte counts, and correctness status.
 

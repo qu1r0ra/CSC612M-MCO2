@@ -1,6 +1,6 @@
 # Technical contract
 
-Status: The 8-bit and 4-bit CPU pipelines, full decoder validation, and Layer 3 unbiasedness checks are implemented. CUDA quantization remains outside this slice.
+Status: The 8-bit and 4-bit CPU pipelines, full decoder validation, and Layer 3 unbiasedness checks are implemented. The CUDA pipeline currently supports 8-bit records; CUDA 4-bit support and broader launch-geometry comparisons remain follow-on work.
 
 This document carries the technical requirements needed to understand and reproduce the course implementation.
 The code and tests define current behavior. This contract freezes the 8-bit and 4-bit record formats, numerical rules, overflow policy, and Layer 3 acceptance criteria.
@@ -9,7 +9,7 @@ The code and tests define current behavior. This contract freezes the 8-bit and 
 
 The week-13 course submission requires every item in this contract except these later extensions:
 
-- CUDA quantization kernels and comparisons.
+- CUDA 4-bit quantization and broader launch-geometry comparisons.
 - The full empirical-expectation suite in correctness layer 3; the course requires only a small unbiasedness check across independent seeds.
 
 The benchmark protocol records its own course scope.
@@ -28,6 +28,16 @@ The benchmark protocol records its own course scope.
 - Decode with `scale*k/s`. Signed zero yields `k = 0` and decodes to `+0`.
 - This CPU pipeline implements `b=8` (`s=127`) and `b=4` (`s=7`).
 
+### CUDA 8-bit path
+
+The CUDA backend accepts 8-bit records. It writes the same header and payload bytes as the CPU backend for the same input, seed, identifiers, and prescribed words. A CPU-only executable rejects `--backend cuda` with an explicit unavailable-backend error.
+
+K1 computes the maximum absolute value, 256-element normalized square sums, and the fixed pairwise reduction of block sums. Its logical block boundaries and reduction tree match the CPU implementation. The CUDA translation unit is built with `--fmad=false`, `--ftz=false`, `--prec-div=true`, and `--prec-sqrt=true`; fast math is disabled.
+
+K2 assigns one CUDA thread to each four-word Philox group. Grid-stride processing preserves the group and lane mapping for any launch geometry and handles the final partial group. It applies the same FP32 scaling, clipping, Bernoulli threshold, and signed-code conversion as the CPU path. K3 copies the byte codes into the 8-bit record payload.
+
+`--timings` writes one JSON object to stderr with `k1_ms`, `k2_ms`, `k3_ms`, `h2d_ms`, and `d2h_ms`. CUDA events measure the three device stages; host elapsed time measures the input, words, scale, status, and payload copies. The timing line describes one invocation and does not substitute for the benchmark protocol.
+
 ### FP32 scale and reconstruction bound
 
 For a nonzero vector, let `N` be its element count and `M = ceil(N/256)` its number of blocks. Let `eta = 2^-149` be the smallest positive FP32 subnormal, `u = 2^-24`, and `gamma_K = K*u/(1-K*u)` where `K = 12 + ceil(log2(M))`.
@@ -36,7 +46,7 @@ When intermediate values are finite and round to nearest, the conservative relat
 
 `abs(S32-S64)/S64 <= epsilon`, where `epsilon = gamma_K + 4*N*eta + eta/(2*S64)`.
 
-The `gamma_K` term covers the FP32 operation depth through division, squaring, the two pairwise reductions, square root, and final multiply. The additive terms cover underflow during normalization and reduction and a subnormal final scale. CUDA must use its own tested scale bound.
+The `gamma_K` term covers the FP32 operation depth through division, squaring, the two pairwise reductions, square root, and final multiply. The additive terms cover underflow during normalization and reduction and a subnormal final scale. The 8-bit CUDA path preserves the same operation and reduction order with fused multiply-add and fast math disabled, so its computed FP32 scale matches the CPU result exactly.
 
 Each stochastic code is one of the two integers adjacent to its unrounded magnitude. For CPU and FP64 reconstructions that use the same Philox words, a conservative per-element bound for bit width `b` (with `s = 2^(b-1) - 1`) is:
 
