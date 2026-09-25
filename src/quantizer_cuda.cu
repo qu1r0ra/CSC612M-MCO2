@@ -448,7 +448,7 @@ extern "C" int mco2_cuda_launch_q4_k3(const uint8_t *device_codes,
     if (grid_size < 0 || grid_size > MCO2_CUDA_MAX_GRID_SIZE ||
         block_size <= 0 || block_size > MCO2_CUDA_MAX_BLOCK_SIZE)
         return (int)cudaErrorInvalidValue;
-    const uint64_t output_bytes = (count + 1) / 2;
+    const uint64_t output_bytes = count / 2 + (count & 1);
     const int grid = launch_grid(output_bytes, block_size, grid_size);
     if (device_codes == NULL || device_payload == NULL || grid <= 0)
         return (int)cudaErrorInvalidValue;
@@ -530,7 +530,7 @@ mco2_q8_status mco2_cuda_compress(uint8_t bit_width, const float *values,
     mco2_rng_stream stream_state;
     mco2_q8_status result = MCO2_Q8_ERR_CUDA;
     mco2_cuda_timings zero_timings = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    const size_t payload_bytes = (bit_width == MCO2_Q4_BITS) ? (count + 1) / 2 : count;
+    const size_t payload_bytes = (bit_width == MCO2_Q4_BITS) ? (count / 2 + (count & 1)) : count;
 
     if (timings != NULL)
         *timings = zero_timings;
