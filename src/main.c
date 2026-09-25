@@ -419,19 +419,54 @@ static mco2_q8_status bench_cpu_compress_one(
         record + MCO2_Q8_HEADER_SIZE);
 }
 
+typedef enum {
+    BENCH_SAMPLE_WALL_TIME,
+    BENCH_SAMPLE_K1_TIME,
+    BENCH_SAMPLE_K2_TIME,
+    BENCH_SAMPLE_K3_TIME
+} mco2_bench_timing_field;
+
 static void print_double_array(const mco2_bench_sample *samples,
-                               uint64_t reps, int field)
+                               uint64_t reps,
+                               mco2_bench_timing_field field)
 {
     uint64_t i;
     putchar('[');
     for (i = 0; i < reps; i++) {
-        double value = field == 0 ? samples[i].wall_ms
-                                 : field == 1 ? samples[i].k1_ms
-                                              : field == 2 ? samples[i].k2_ms
-                                                           : samples[i].k3_ms;
+        double value;
+        switch (field) {
+        case BENCH_SAMPLE_WALL_TIME:
+            value = samples[i].wall_ms;
+            break;
+        case BENCH_SAMPLE_K1_TIME:
+            value = samples[i].k1_ms;
+            break;
+        case BENCH_SAMPLE_K2_TIME:
+            value = samples[i].k2_ms;
+            break;
+        case BENCH_SAMPLE_K3_TIME:
+            value = samples[i].k3_ms;
+            break;
+        default:
+            value = 0.0;
+            break;
+        }
         if (i != 0)
             putchar(',');
         printf("%.9f", value);
+    }
+    putchar(']');
+}
+
+static void print_invocation_ids(uint64_t base_invocation_id,
+                                 uint64_t count, uint64_t offset)
+{
+    uint64_t i;
+    putchar('[');
+    for (i = 0; i < count; i++) {
+        if (i != 0)
+            putchar(',');
+        printf("%llu", (unsigned long long)(base_invocation_id + offset + i));
     }
     putchar(']');
 }
@@ -446,25 +481,29 @@ static void print_bench_json(
     printf("{\"configuration\":{\"backend\":\"%s\",\"bits\":%u,"
            "\"count\":%llu,\"seed\":%llu,\"tensor_id\":%llu,"
            "\"invocation_id\":%llu,\"warmup\":%llu,\"reps\":%llu,"
-           "\"boundary\":\"%s\",\"block_size\":%d,\"grid_size\":%d,"
-           "\"prescribed_scale\":",
+           "\"repetition_invocation_ids\":",
            backend, (unsigned int)bit_width, (unsigned long long)count,
            (unsigned long long)seed, (unsigned long long)tensor_id,
            (unsigned long long)invocation_id, (unsigned long long)warmups,
-           (unsigned long long)reps, boundary, block_size, grid_size);
+           (unsigned long long)reps);
+    print_invocation_ids(invocation_id, reps, 0);
+    printf(",\"warmup_invocation_ids\":");
+    print_invocation_ids(invocation_id, warmups, reps);
+    printf(",\"boundary\":\"%s\",\"block_size\":%d,\"grid_size\":%d,"
+           "\"prescribed_scale\":", boundary, block_size, grid_size);
     if (prescribed_scale_seen)
         printf("%.9g", (double)prescribed_scale);
     else
         printf("null");
     printf("},\"samples_ms\":");
-    print_double_array(samples, reps, 0);
+    print_double_array(samples, reps, BENCH_SAMPLE_WALL_TIME);
     if (strcmp(backend, "cuda") == 0) {
         printf(",\"k1_ms\":");
-        print_double_array(samples, reps, 1);
+        print_double_array(samples, reps, BENCH_SAMPLE_K1_TIME);
         printf(",\"k2_ms\":");
-        print_double_array(samples, reps, 2);
+        print_double_array(samples, reps, BENCH_SAMPLE_K2_TIME);
         printf(",\"k3_ms\":");
-        print_double_array(samples, reps, 3);
+        print_double_array(samples, reps, BENCH_SAMPLE_K3_TIME);
     }
     printf(",\"header_bytes\":%d,\"payload_bytes\":%llu}\n",
            MCO2_Q8_HEADER_SIZE, (unsigned long long)payload_bytes);
@@ -656,7 +695,8 @@ static mco2_q8_status bench_file(int argc, char **argv)
         }
         for (uint64_t run = 0; run < total_runs; run++) {
             double start_ms, stop_ms;
-            uint64_t current_invocation = invocation_id + run;
+            uint64_t run_offset = run < warmups ? reps + run : run - warmups;
+            uint64_t current_invocation = invocation_id + run_offset;
             if (!bench_clock_now_ms(&clock_frequency, &start_ms)) {
                 status = MCO2_Q8_ERR_CLOCK;
                 goto done;

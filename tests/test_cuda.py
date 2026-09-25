@@ -98,6 +98,8 @@ def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, bounda
     assert payload["configuration"]["bits"] == bits
     assert payload["configuration"]["warmup"] == 1
     assert payload["configuration"]["reps"] == 2
+    assert payload["configuration"]["repetition_invocation_ids"] == [41, 42]
+    assert payload["configuration"]["warmup_invocation_ids"] == [43]
     for key in ("samples_ms", "k1_ms", "k2_ms", "k3_ms"):
         assert len(payload[key]) == 2
         assert all(sample >= 0 for sample in payload[key])

@@ -557,6 +557,8 @@ def test_cpu_bench_reports_raw_samples_and_base_record(tmp_path, bits: int):
         "invocation_id": 23,
         "warmup": 2,
         "reps": 3,
+        "repetition_invocation_ids": [23, 24, 25],
+        "warmup_invocation_ids": [26, 27],
         "boundary": "host-host",
         "block_size": 256,
         "grid_size": 0,

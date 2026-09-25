@@ -1169,7 +1169,10 @@ mco2_q8_status mco2_cuda_bench(
 
     for (index = 0; index < total_runs; index++) {
         mco2_bench_sample *sample = index < warmups ? NULL : &samples[index - warmups];
-        const uint64_t invocation_id = base_invocation_id + index;
+        const uint64_t run_offset = index < warmups
+            ? reps + index
+            : index - warmups;
+        const uint64_t invocation_id = base_invocation_id + run_offset;
         result = run_bench_pipeline(
             &context, bit_width, values, count, seed, tensor_id, invocation_id,
             prescribed_scale_seen, prescribed_words != NULL, block_size,
