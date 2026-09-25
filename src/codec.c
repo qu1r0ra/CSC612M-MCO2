@@ -1,4 +1,5 @@
 #include "codec.h"
+#include "byteorder.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -13,12 +14,6 @@ static void write_u64_le(uint8_t *out, uint64_t value)
         out[i] = (uint8_t)(value >> (i * 8));
 }
 
-static uint32_t read_u32_le(const uint8_t *in)
-{
-    return (uint32_t)in[0] | ((uint32_t)in[1] << 8) |
-           ((uint32_t)in[2] << 16) | ((uint32_t)in[3] << 24);
-}
-
 static uint64_t read_u64_le(const uint8_t *in)
 {
     uint64_t value = 0;
@@ -26,14 +21,6 @@ static uint64_t read_u64_le(const uint8_t *in)
     for (i = 0; i < 8; i++)
         value |= (uint64_t)in[i] << (i * 8);
     return value;
-}
-
-static void write_u32_le(uint8_t *out, uint32_t value)
-{
-    out[0] = (uint8_t)value;
-    out[1] = (uint8_t)(value >> 8);
-    out[2] = (uint8_t)(value >> 16);
-    out[3] = (uint8_t)(value >> 24);
 }
 
 const char *mco2_q8_status_message(mco2_q8_status status)
@@ -98,7 +85,7 @@ mco2_q8_status mco2_q8_header_encode(uint8_t bit_width, uint64_t count,
     header[7] = 0;
     write_u64_le(header + 8, count);
     memcpy(&scale_bits, &scale, sizeof scale_bits);
-    write_u32_le(header + 16, scale_bits);
+    mco2_store_u32_le(header + 16, scale_bits);
     return MCO2_Q8_OK;
 }
 
@@ -135,7 +122,7 @@ mco2_q8_status mco2_q8_decode_record(const uint8_t *record,
     if (record_size != MCO2_Q8_HEADER_SIZE + n)
         return MCO2_Q8_ERR_PAYLOAD_LENGTH;
 
-    scale_bits = read_u32_le(record + 16);
+    scale_bits = mco2_load_u32_le(record + 16);
     memcpy(&scale, &scale_bits, sizeof scale);
     if (!isfinite(scale) || scale < 0.0f || (n == 0 && scale != 0.0f))
         return MCO2_Q8_ERR_SCALE;

@@ -1,4 +1,5 @@
 #include "codec.h"
+#include "byteorder.h"
 #include "quantizer.h"
 #include "rng_cpu.h"
 
@@ -20,20 +21,6 @@ static void usage(FILE *stream)
             "\n"
             "Input and output tensors use little-endian raw FP32. Prescribed\n"
             "random words use little-endian raw uint32, one per element.\n");
-}
-
-static uint32_t read_u32_le(const uint8_t *bytes)
-{
-    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
-           ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
-}
-
-static void write_u32_le(uint8_t *bytes, uint32_t value)
-{
-    bytes[0] = (uint8_t)value;
-    bytes[1] = (uint8_t)(value >> 8);
-    bytes[2] = (uint8_t)(value >> 16);
-    bytes[3] = (uint8_t)(value >> 24);
 }
 
 static int read_file(const char *path, uint8_t **bytes, size_t *size)
@@ -191,7 +178,7 @@ static mco2_q8_status compress_file(int argc, char **argv)
         goto done;
     }
     for (i_size = 0; i_size < count; i_size++) {
-        uint32_t bits32 = read_u32_le(input_bytes + 4 * i_size);
+        uint32_t bits32 = mco2_load_u32_le(input_bytes + 4 * i_size);
         memcpy(&values[i_size], &bits32, sizeof bits32);
     }
 
@@ -219,7 +206,7 @@ static mco2_q8_status compress_file(int argc, char **argv)
             goto done;
         }
         for (i_size = 0; i_size < count; i_size++)
-            words[i_size] = read_u32_le(word_bytes + 4 * i_size);
+            words[i_size] = mco2_load_u32_le(word_bytes + 4 * i_size);
     } else {
         words = count == 0 ? NULL : (uint32_t *)malloc(count * sizeof *words);
         if (count != 0 && words == NULL) {
@@ -297,7 +284,7 @@ static mco2_q8_status decompress_file(int argc, char **argv)
     for (i = 0; i < count; i++) {
         uint32_t bits32;
         memcpy(&bits32, &values[i], sizeof bits32);
-        write_u32_le(output + 4 * i, bits32);
+        mco2_store_u32_le(output + 4 * i, bits32);
     }
     if (!write_file(output_path, output, output_size))
         status = MCO2_Q8_ERR_IO;
