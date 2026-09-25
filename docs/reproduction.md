@@ -1,14 +1,14 @@
 # Reproduction path
 
-Status: The CPU 8-bit pipeline and Philox checks are implemented. CUDA quantization and benchmark work remain.
+Status: The CPU 8-bit and 4-bit pipelines, full decoder validation, and Layer 3 unbiasedness checks are implemented. CUDA quantization and benchmark work remain.
 
 This document is the public entry point for reproducing the course implementation.
 
 ## What exists
 
 The repository builds a CPU command-line tool, `build/mco2`, and a CUDA RNG check, `build/test_rng`.
-The CPU tool compresses raw little-endian FP32 vectors into version-1 8-bit records. It decodes each record to raw FP32.
-The NumPy oracle independently implements Philox4x32-10 and the CPU quantization path.
+The CPU tool compresses raw little-endian FP32 vectors into version-1 8-bit or 4-bit records. It decodes each record to raw FP32.
+The NumPy oracle independently implements Philox4x32-10 and the CPU quantization path at both 8-bit and 4-bit widths.
 CUDA quantization and benchmark work need their own tests and measurements.
 
 ## Verified toolchain
@@ -63,19 +63,68 @@ The CLI consumes and produces raw little-endian FP32 files. A seeded compression
 
 ```powershell
 just build-cpu
-build\mco2.exe compress --input input.f32 --output tensor.msq --seed 123 --tensor-id 7 --invocation-id 9
-build\mco2.exe decompress --input tensor.msq --output reconstructed.f32
+
+# 8-bit compression (default) and decompression
+build\mco2.exe compress --input input.f32 --output tensor_q8.msq --bits 8 --seed 123 --tensor-id 7 --invocation-id 9
+build\mco2.exe decompress --input tensor_q8.msq --output reconstructed_q8.f32
+
+# 4-bit compression and decompression
+build\mco2.exe compress --input input.f32 --output tensor_q4.msq --bits 4 --seed 123 --tensor-id 7 --invocation-id 9
+build\mco2.exe decompress --input tensor_q4.msq --output reconstructed_q4.f32
 ```
 
 For layer-1 checks, pass a prescribed FP32 scale and a raw little-endian uint32 word file containing one word per input element:
 
 ```powershell
-build\mco2.exe compress --input input.f32 --output tensor.msq --seed 123 --scale 2.0 --words prescribed-words.u32
+build\mco2.exe compress --input input.f32 --output tensor_q8.msq --bits 8 --seed 123 --scale 2.0 --words prescribed-words.u32
+build\mco2.exe compress --input input.f32 --output tensor_q4.msq --bits 4 --seed 123 --scale 2.0 --words prescribed-words.u32
 ```
 
-The CLI requires `--seed` for every compression command. `--words` supplies the random decisions for prescribed-scale tests. `--bits` accepts only `8` in this slice. The exact header, pairwise FP32 reduction, and layer-2 bounds are in [the technical contract](technical-contract.md).
+The CLI requires `--seed` for every compression command. `--words` supplies the random decisions for prescribed-scale tests. `--bits` accepts `4` or `8` (defaulting to `8`). The exact header layout, 4-bit nibble packing, pairwise FP32 reduction, and layer-2 bounds are in [the technical contract](technical-contract.md).
 
-The suite checks prescribed-word records, seeded CPU/oracle byte equality, edge inputs, malformed headers, and both FP32 bounds against the FP64 oracle.
+### Verified test commands
+
+Run the full CPU verification suite or run specific components directly:
+
+1. **Full CPU suite**:
+   ```powershell
+   just test-cpu
+   ```
+   Builds `build/mco2`, `build/test_codec`, and `build/test_quantizer`, executes the native C test binaries, and runs the pytest test suites.
+
+2. **C unit tests (codec and quantizer)**:
+   ```powershell
+   just build-cpu
+   .\build\test_codec.exe
+   .\build\test_quantizer.exe
+   ```
+   - `test_codec.exe` verifies 4-bit and 8-bit header encoding, 4-bit nibble decoding, odd-length records, and every decoder rejection branch (magic mismatch, unsupported version, unsupported bit width, nonzero reserved bytes, nonfinite/negative scale, payload length mismatch, nonzero padding nibble, out-of-range codes, and malformed zero-scale records).
+   - `test_quantizer.exe` verifies FP32 L2 norm reduction, 4-bit and 8-bit quantization against prescribed words, signed zero (+0 decode), large magnitudes without intermediate overflow via max-rescaling, saturation boundaries, odd lengths (1, 3, 5, 257), and the 4,096-seed C Layer 3 unbiasedness loop.
+
+3. **NumPy oracle tests**:
+   ```powershell
+   uv run pytest tests/test_oracle.py
+   ```
+   Verifies Python Philox4x32-10, 4-bit and 8-bit FP32 quantization against prescribed words, FP64 reference bounds, record serialization, and decoder error checking.
+
+4. **CLI, decoder rejection, edge case, and Layer 3 tests**:
+   ```powershell
+   uv run pytest tests/test_cli.py
+   ```
+   To run specific subsets:
+   ```powershell
+   # Decoder rejection suite (all malformed input checks)
+   uv run pytest tests/test_cli.py -k test_decompress_rejects
+
+   # FP32 L2 scale overflow test
+   uv run pytest tests/test_cli.py -k test_compress_fp32_norm_overflow_rejects
+
+   # Edge cases (signed zero, large magnitudes, saturation, non-multiple & odd lengths)
+   uv run pytest tests/test_cli.py -k "test_compress_edge_cases or test_compress_signed_zero"
+
+   # Layer 3 empirical unbiasedness across 4,096 seeds
+   uv run pytest tests/test_cli.py -k test_layer3_unbiasedness
+   ```
 
 On Linux, including Google Colab, `build-rng` and `test-rng` call `nvcc` with the system host compiler.
 The Linux CUDA path has not been run; record the Colab GPU model and host compiler with its first run.

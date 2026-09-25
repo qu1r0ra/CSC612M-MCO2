@@ -3,6 +3,7 @@ import pytest
 
 from mco2_oracle import (
     compress_record_fp32,
+    decode_record,
     philox4x32_10,
     philox_block,
     philox_words,
@@ -88,3 +89,18 @@ def test_fp32_oracle_serializes_prescribed_word_record():
     actual = compress_record_fp32(values, scale=2.0, words=words)
 
     assert actual == expected
+
+
+def test_fp32_oracle_serializes_and_decodes_4bit_prescribed_word_record():
+    values = np.asarray([-2, -1, 0, 1, 2], dtype=np.float32)
+    words = np.asarray([0, 0, 0, 0xFFFFFFFF, 0], dtype=np.uint32)
+    expected = bytes.fromhex("4d 53 51 31 01 04 00 00 05 00 00 00 00 00 00 00 00 00 00 40 30 a7 0e")
+
+    actual = compress_record_fp32(values, bits=4, scale=2.0, words=words)
+    assert actual == expected
+
+    decoded = decode_record(actual)
+    assert len(decoded) == 5
+    assert decoded[0] == -2.0
+    assert decoded[2] == 0.0
+    assert decoded[4] == 2.0

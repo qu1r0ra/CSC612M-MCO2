@@ -1,15 +1,15 @@
 # Technical contract
 
-Status: The 8-bit CPU pipeline and decoder are implemented. CUDA quantization and 4-bit packing remain outside this slice.
+Status: The 8-bit and 4-bit CPU pipelines, full decoder validation, and Layer 3 unbiasedness checks are implemented. CUDA quantization remains outside this slice.
 
 This document carries the technical requirements needed to understand and reproduce the course implementation.
-The code and tests define current behavior. This contract freezes the 8-bit record format and numerical rules.
+The code and tests define current behavior. This contract freezes the 8-bit and 4-bit record formats, numerical rules, overflow policy, and Layer 3 acceptance criteria.
 
 ## Course scope
 
 The week-13 course submission requires every item in this contract except these later extensions:
 
-- Malformed-record validation beyond header magic, version, reserved bytes, element count, and payload length.
+- CUDA quantization kernels and comparisons.
 - The full empirical-expectation suite in correctness layer 3; the course requires only a small unbiasedness check across independent seeds.
 
 The benchmark protocol records its own course scope.
@@ -17,15 +17,16 @@ The benchmark protocol records its own course scope.
 ## Input and quantizer
 
 - Inputs are finite FP32 vectors with one scale per tensor.
-- Empty and all-zero inputs use scale zero and encode every payload element as the center code `127`.
+- Empty and all-zero inputs use scale zero and encode every payload element as the center code `s` (`127` for 8-bit, `7` for 4-bit).
 - Nonfinite inputs are rejected explicitly.
 - The scale is the tensor L2 norm. Max-rescaling avoids overflow from direct squaring.
+- If the FP32 L2 norm overflows, the tool exits nonzero with a distinct explicit error (`FP32 L2 scale overflow`). The scale is never saturated.
 - Pass 1 finds the maximum absolute value. Pass 2 computes `(abs(x)/max_abs)^2` in FP32, pairwise-sums zero-padded blocks of 256, pairwise-sums the block results, then computes `max_abs*sqrt(sum)`. This fixes the reduction order.
 - The NumPy oracle independently implements Philox4x32-10, the same FP32 reduction and code path, and an FP64 reference used for numerical checks.
 - For bit width `b`, let `s = 2^(b-1)-1` and compute `a = min((abs(x)/scale)*s, s)` in that operation order.
 - Let `l = floor(a)` and choose `k = sign(x)*(l + Bernoulli(a-l))`.
-- Decode with `scale*k/s`.
-- This CPU slice implements `b=8`, so `s=127` and the unsigned payload byte is `k+127`.
+- Decode with `scale*k/s`. Signed zero yields `k = 0` and decodes to `+0`.
+- This CPU pipeline implements `b=8` (`s=127`) and `b=4` (`s=7`).
 
 ### FP32 scale and reconstruction bound
 
@@ -37,11 +38,17 @@ When intermediate values are finite and round to nearest, the conservative relat
 
 The `gamma_K` term covers the FP32 operation depth through division, squaring, the two pairwise reductions, square root, and final multiply. The additive terms cover underflow during normalization and reduction and a subnormal final scale. CUDA must use its own tested scale bound.
 
-Each stochastic code is one of the two integers adjacent to its unrounded magnitude. For CPU and FP64 reconstructions that use the same Philox words, a conservative per-element bound is:
+Each stochastic code is one of the two integers adjacent to its unrounded magnitude. For CPU and FP64 reconstructions that use the same Philox words, a conservative per-element bound for bit width `b` (with `s = 2^(b-1) - 1`) is:
 
-`abs(y32-y64) <= S64 * (2/127 + 2*epsilon/(1-epsilon) + 5*u)` for `epsilon < 1`.
+`abs(y32-y64) <= S64 * (2/s + 2*epsilon/(1-epsilon) + 5*u)` for `epsilon < 1`.
 
-The first term allows one code step for each path. The remaining terms cover scale drift and FP32 dequantization. Tests exercise both bounds on a multi-block vector. Prescribed-scale layer-1 cases require exact code and byte equality.
+For 8-bit records (`s = 127`):
+`abs(y32-y64) <= S64 * (2/127 + 2*epsilon/(1-epsilon) + 5*u)`
+
+For 4-bit records (`s = 7`):
+`abs(y32-y64) <= S64 * (2/7 + 2*epsilon/(1-epsilon) + 5*u)`
+
+The first term allows one code step for each path. The remaining terms cover scale drift and FP32 dequantization. Tests exercise both bounds on a multi-block vector at 8-bit and 4-bit widths. Prescribed-scale layer-1 cases require exact code and byte equality.
 
 ## Randomness
 
@@ -64,29 +71,46 @@ The stream constructor rejects any tensor or invocation identifier above `2^32-1
 
 ## Packed codec
 
-- The CPU slice implements 8-bit codes and reserves the same header format for later 4-bit payloads.
-- Store unsigned code `k+s`; for 8-bit output, valid codes are `0` through `254`.
+- The CPU pipeline implements both 8-bit (`b=8`, `s=127`) and 4-bit (`b=4`, `s=7`) records using the shared 20-byte header format.
+- Store unsigned code `k+s`. Valid stored codes are `0` through `2*s` (`0` through `254` for 8-bit; `0` through `14` for 4-bit).
+- Packing layout:
+  - For 8-bit records, each byte holds one element code. Payload size is `N` bytes.
+  - For 4-bit records, two elements are packed into each byte: the lower-index element `2*i` is stored in the low nibble (bits 0-3), and the higher-index element `2*i + 1` is stored in the high nibble (bits 4-7). For odd element count `N`, payload size is `ceil(N / 2) = floor((N + 1) / 2)` bytes, and the unused high nibble (bits 4-7) of the final byte must be zero.
 - The 20-byte header is serialized field-by-field in little-endian order, without compiler padding:
 
 | Offset | Size | Field | Frozen value or encoding |
 | ---: | ---: | --- | --- |
 | 0 | 4 | Magic | ASCII `MSQ1` |
 | 4 | 1 | Version | `1` |
-| 5 | 1 | Bit width | `8` for this CPU slice |
+| 5 | 1 | Bit width | `4` or `8` |
 | 6 | 2 | Reserved | Zero |
 | 8 | 8 | Element count | Unsigned uint64, little-endian |
 | 16 | 4 | Scale | IEEE-754 FP32 bits, little-endian |
 
-- The payload has exactly `N` bytes and header bytes count in compression ratios.
-- The decoder validates magic, version, bit width, reserved bytes, count, payload length, valid codes, and zero-scale records.
-- Empty and all-zero records have zero scale; any nonempty zero-scale record contains only the center code `127`.
+- The decoder strictly validates records and rejects malformed inputs with distinct error messages:
+  1. Header magic mismatch: must match ASCII `MSQ1` (`0x3151534D`).
+  2. Unsupported version: must be `1`.
+  3. Unsupported bit width: must be `4` or `8`.
+  4. Nonzero reserved bytes: offsets 6-7 must be `0x0000`.
+  5. Nonfinite or negative scale: scale must be finite and `>= 0.0f`.
+  6. Unexpected payload length: truncated records or trailing bytes beyond expected payload size (`N` bytes for 8-bit, `(N+1)/2` bytes for 4-bit).
+  7. Nonzero padding nibble: for 4-bit records with odd `N`, the high nibble of the final byte must be zero.
+  8. Out-of-range code: any code byte (8-bit) or nibble (4-bit) exceeding `2*s` (`> 254` for 8-bit, `> 14` for 4-bit) is rejected.
+  9. Malformed zero-scale record: for `scale == 0.0f` with `N > 0`, every payload element must be the exact center code `s` (`127` for 8-bit, `7` for 4-bit). Any code other than `s` is rejected.
+- Empty (`N=0`) and all-zero records have scale zero. Empty records have a 0-byte payload.
 - The CPU CLI reads and writes raw little-endian FP32 vectors. Shape reconstruction uses a common external manifest.
 
 ## Correctness layers
 
-1. Exact codes and bytes for prescribed scales and prescribed RNG words.
-2. Numerical reconstruction against the FP64 oracle with documented FP32 error bounds.
-3. Empirical expectation checks across independent seeds with fixed sample counts and acceptance rules (see Course scope).
-
-Include signed zero, representable extremes, saturation boundaries, non-multiple block sizes, odd payload lengths, and malformed records.
-Evaluate empirical expectation across independent seeds. Compare codes byte for byte only when both paths use the same scale and RNG words.
+1. **Exact codes and bytes**: Prescribed scales and prescribed RNG words yield bit-for-bit identical codes and headers between CPU C implementation and NumPy oracle at both 4-bit and 8-bit widths.
+2. **Numerical reconstruction bounds**: Seeded CPU reconstruction against FP64 reference satisfies the documented conservative per-element bounds at both 4-bit and 8-bit widths:
+   `abs(y32 - y64) <= S64 * (2/s + 2*epsilon/(1-epsilon) + 5*u)` with `s=127` (8-bit) and `s=7` (4-bit).
+   Relative scale error satisfies `abs(S32 - S64) / S64 <= epsilon`.
+3. **Empirical unbiasedness (course subset)**:
+   - Evaluated on a fixed 1,024-element input vector across $T = 4,096$ fixed, independent Philox seeds (`seed = 1..4096`, `tensor_id = 0`, `invocation_id = 0`) at both 4-bit and 8-bit widths.
+   - For each element $i \in \{0, \dots, N-1\}$, let $a_i = \min((|x_i| / \text{scale}) \cdot s, s)$ and $p_i = a_i - \lfloor a_i \rfloor$.
+   - Acceptance rule: each element's sample mean decoded value $\bar{y}_i = \frac{1}{T} \sum_{t=1}^T \hat{x}_{i,t}$ must satisfy:
+     $$|\bar{y}_i - x_i| \le 5 \cdot \frac{\text{scale}}{s} \cdot \sqrt{\frac{p_i(1-p_i)}{T}}$$
+   - Exact equality $|\bar{y}_i - x_i| = 0$ must hold whenever $p_i \in \{0, 1\}$.
+   - Edge case coverage: signed zero (preserving $+0$ decode), large magnitudes without intermediate overflow via max-rescaling, saturation boundaries ($|x| \ge \text{scale}$), lengths not multiples of 4 or 256, and odd payload lengths.
+   - Scale overflow policy: if the FP32 L2 norm overflows, the tool exits nonzero with distinct error message `FP32 L2 scale overflow`. The scale is never saturated.

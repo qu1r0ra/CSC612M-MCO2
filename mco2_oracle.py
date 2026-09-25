@@ -200,50 +200,73 @@ def _resolve_scale_fp32(array: np.ndarray, scale: float | None) -> np.float32:
     return scale32
 
 
-def _round_codes_fp32(array: np.ndarray, scale: np.float32, words: np.ndarray) -> np.ndarray:
+def _round_codes_fp32(
+    array: np.ndarray, scale: np.float32, words: np.ndarray, signed_limit: int = _SIGNED_LIMIT
+) -> np.ndarray:
     if scale == 0:
-        return np.full(len(array), _SIGNED_LIMIT, dtype=np.uint8)
+        return np.full(len(array), signed_limit, dtype=np.uint8)
     ratios = np.divide(np.abs(array), scale)
-    scaled = np.multiply(ratios, np.float32(_SIGNED_LIMIT))
-    scaled = np.minimum(scaled, np.float32(_SIGNED_LIMIT))
+    scaled = np.multiply(ratios, np.float32(signed_limit))
+    scaled = np.minimum(scaled, np.float32(signed_limit))
     lower = np.floor(scaled).astype(np.int32)
     fractions = np.subtract(scaled, lower.astype(np.float32))
     thresholds = np.floor(fractions.astype(np.float64) * (1 << 32)).astype(np.uint64)
     rounded = words.astype(np.uint64) < thresholds
     magnitude = lower + rounded.astype(np.int32)
     signed = np.where(np.signbit(array) & (magnitude != 0), -magnitude, magnitude)
-    return (signed + _SIGNED_LIMIT).astype(np.uint8)
+    return (signed + signed_limit).astype(np.uint8)
 
 
 def compress_record_fp32(
     values: np.ndarray,
     *,
+    bits: int = 8,
     seed: int = 0,
     tensor_id: int = 0,
     invocation_id: int = 0,
     scale: float | None = None,
     words: np.ndarray | None = None,
 ) -> bytes:
-    """Return an 8-bit record, using either the mapped stream or prescribed words."""
+    """Return an 8-bit or 4-bit record, using either the mapped stream or prescribed words."""
+    bits = _unsigned(bits, 8, "bits")
+    if bits not in (4, 8):
+        raise ValueError("unsupported bit width; supported widths are 4 and 8")
+    signed_limit = 7 if bits == 4 else 127
     array = _values_fp32(values)
     scale32 = _resolve_scale_fp32(array, scale)
     random_words = _resolve_words(
         len(array), seed=seed, tensor_id=tensor_id, invocation_id=invocation_id, words=words
     )
-    codes = _round_codes_fp32(array, scale32, random_words)
-    header = _HEADER.pack(_MAGIC, _VERSION, _BITS, 0, len(array), float(scale32))
-    return header + codes.tobytes()
+    codes = _round_codes_fp32(array, scale32, random_words, signed_limit=signed_limit)
+    if bits == 8:
+        payload = codes.tobytes()
+    else:
+        pairs = len(codes) // 2
+        payload_len = (len(codes) + 1) // 2
+        packed = bytearray(payload_len)
+        for j in range(pairs):
+            packed[j] = (int(codes[2 * j]) & 0x0F) | ((int(codes[2 * j + 1]) & 0x0F) << 4)
+        if len(codes) % 2 == 1:
+            packed[pairs] = int(codes[-1]) & 0x0F
+        payload = bytes(packed)
+    header = _HEADER.pack(_MAGIC, _VERSION, bits, 0, len(array), float(scale32))
+    return header + payload
 
 
 def reference_fp64(
     values: np.ndarray,
     *,
+    bits: int = 8,
     seed: int = 0,
     tensor_id: int = 0,
     invocation_id: int = 0,
     words: np.ndarray | None = None,
 ) -> tuple[float, np.ndarray]:
     """Return the FP64 scale and reconstruction for the same logical RNG stream."""
+    bits = _unsigned(bits, 8, "bits")
+    if bits not in (4, 8):
+        raise ValueError("unsupported bit width; supported widths are 4 and 8")
+    signed_limit = 7 if bits == 4 else 127
     array = _values_fp32(values).astype(np.float64)
     scale = scale_fp64(array.astype(np.float32))
     random_words = _resolve_words(
@@ -252,19 +275,19 @@ def reference_fp64(
     if scale == 0:
         return scale, np.zeros(len(array), dtype=np.float64)
 
-    scaled = np.minimum(np.abs(array) / scale * _SIGNED_LIMIT, _SIGNED_LIMIT)
+    scaled = np.minimum(np.abs(array) / scale * signed_limit, float(signed_limit))
     lower = np.floor(scaled)
     fractions = scaled - lower
     thresholds = np.floor(fractions * (1 << 32)).astype(np.uint64)
     rounded = random_words.astype(np.uint64) < thresholds
     magnitude = lower.astype(np.int64) + rounded.astype(np.int64)
     signed = np.where(np.signbit(array) & (magnitude != 0), -magnitude, magnitude)
-    decoded = (signed.astype(np.float64) / _SIGNED_LIMIT) * scale
+    decoded = (signed.astype(np.float64) / signed_limit) * scale
     return scale, decoded
 
 
 def decode_record(record: bytes | bytearray | memoryview) -> np.ndarray:
-    """Validate and decode a course-minimum 8-bit record."""
+    """Validate and decode an 8-bit or 4-bit record."""
     data = bytes(record)
     if len(data) < _HEADER.size:
         raise ValueError("record is shorter than the 20-byte header")
@@ -273,23 +296,39 @@ def decode_record(record: bytes | bytearray | memoryview) -> np.ndarray:
         raise ValueError("bad record magic")
     if version != _VERSION:
         raise ValueError("unsupported record version")
-    if bits != _BITS:
-        raise ValueError("unsupported bit width; this tool accepts 8-bit records")
+    if bits not in (4, 8):
+        raise ValueError("unsupported bit width; supported widths are 4 and 8")
     if reserved != 0:
         raise ValueError("reserved header bytes must be zero")
-    if count != len(data) - _HEADER.size:
+    expected_payload_length = (count + 1) // 2 if bits == 4 else count
+    if len(data) - _HEADER.size != expected_payload_length:
         raise ValueError("payload length does not match element count")
     if not math.isfinite(scale) or scale < 0:
         raise ValueError("scale must be finite and non-negative")
 
-    codes = np.frombuffer(data, dtype=np.uint8, count=count, offset=_HEADER.size)
-    if np.any(codes > 2 * _SIGNED_LIMIT):
-        raise ValueError("record contains an invalid 8-bit code")
+    signed_limit = 7 if bits == 4 else 127
+    if bits == 8:
+        codes = np.frombuffer(data, dtype=np.uint8, count=count, offset=_HEADER.size)
+    else:
+        payload_bytes = np.frombuffer(
+            data, dtype=np.uint8, count=expected_payload_length, offset=_HEADER.size
+        )
+        if count % 2 == 1 and (int(payload_bytes[-1]) >> 4) != 0:
+            raise ValueError("unused padding nibble must be zero")
+        low = payload_bytes & 0x0F
+        high = (payload_bytes >> 4) & 0x0F
+        unpacked = np.empty(len(payload_bytes) * 2, dtype=np.uint8)
+        unpacked[0::2] = low
+        unpacked[1::2] = high
+        codes = unpacked[:count]
+
+    if np.any(codes > 2 * signed_limit):
+        raise ValueError("record contains an invalid code")
     if scale == 0:
-        if np.any(codes != _SIGNED_LIMIT):
+        if np.any(codes != signed_limit):
             raise ValueError("zero-scale records must contain only the center code")
         return np.zeros(count, dtype=np.float32)
 
-    signed = codes.astype(np.int16) - _SIGNED_LIMIT
-    fractions = np.divide(signed.astype(np.float32), np.float32(_SIGNED_LIMIT))
+    signed = codes.astype(np.int16) - signed_limit
+    fractions = np.divide(signed.astype(np.float32), np.float32(signed_limit))
     return np.multiply(fractions, np.float32(scale))

@@ -98,15 +98,20 @@ mco2_q8_status mco2_q8_compute_scale(const float *values, size_t count,
     return MCO2_Q8_OK;
 }
 
-mco2_q8_status mco2_q8_make_codes(const float *values, size_t count,
-                                   float scale, const uint32_t *words,
-                                   uint8_t *codes)
+mco2_q8_status mco2_encode_payload(uint8_t bit_width, const float *values,
+                                   size_t count, float scale,
+                                   const uint32_t *words, uint8_t *payload)
 {
     size_t i;
     int has_nonzero = 0;
+    int s;
     mco2_q8_status status;
 
-    if (count != 0 && (values == NULL || words == NULL || codes == NULL))
+    if (bit_width != MCO2_Q4_BITS && bit_width != MCO2_Q8_BITS)
+        return MCO2_Q8_ERR_BIT_WIDTH;
+    s = (bit_width == MCO2_Q4_BITS) ? MCO2_Q4_SIGNED_LIMIT : MCO2_Q8_SIGNED_LIMIT;
+
+    if (count != 0 && (values == NULL || words == NULL || payload == NULL))
         return MCO2_Q8_ERR_ARGUMENT;
     if (!isfinite(scale) || scale < 0.0f)
         return MCO2_Q8_ERR_SCALE;
@@ -128,25 +133,88 @@ mco2_q8_status mco2_q8_make_codes(const float *values, size_t count,
         for (i = 0; i < count; i++) {
             if (values[i] != 0.0f)
                 return MCO2_Q8_ERR_SCALE;
-            codes[i] = MCO2_Q8_SIGNED_LIMIT;
+        }
+        if (bit_width == MCO2_Q8_BITS) {
+            for (i = 0; i < count; i++)
+                payload[i] = (uint8_t)s;
+        } else {
+            size_t pairs = count / 2;
+            for (i = 0; i < pairs; i++)
+                payload[i] = (uint8_t)((s & 0x0F) | ((s & 0x0F) << 4));
+            if (count % 2 == 1)
+                payload[pairs] = (uint8_t)(s & 0x0F);
         }
         return MCO2_Q8_OK;
     }
 
-    for (i = 0; i < count; i++) {
-        float absolute_value = fabsf(values[i]);
-        float scaled = (absolute_value / scale) * (float)MCO2_Q8_SIGNED_LIMIT;
-        float lower_float;
-        float probability;
-        int magnitude, signed_code;
+    if (bit_width == MCO2_Q8_BITS) {
+        for (i = 0; i < count; i++) {
+            float absolute_value = fabsf(values[i]);
+            float scaled = (absolute_value / scale) * (float)s;
+            float lower_float;
+            float probability;
+            int magnitude, signed_code;
 
-        if (scaled > (float)MCO2_Q8_SIGNED_LIMIT)
-            scaled = (float)MCO2_Q8_SIGNED_LIMIT;
-        lower_float = floorf(scaled);
-        probability = scaled - lower_float;
-        magnitude = (int)lower_float + mco2_bernoulli(words[i], probability);
-        signed_code = signbit(values[i]) && magnitude != 0 ? -magnitude : magnitude;
-        codes[i] = (uint8_t)(signed_code + MCO2_Q8_SIGNED_LIMIT);
+            if (scaled > (float)s)
+                scaled = (float)s;
+            lower_float = floorf(scaled);
+            probability = scaled - lower_float;
+            magnitude = (int)lower_float + mco2_bernoulli(words[i], probability);
+            signed_code = signbit(values[i]) && magnitude != 0 ? -magnitude : magnitude;
+            payload[i] = (uint8_t)(signed_code + s);
+        }
+    } else {
+        size_t pairs = count / 2;
+        for (i = 0; i < pairs; i++) {
+            int sc0, sc1;
+            float av0 = fabsf(values[2 * i]);
+            float scaled0 = (av0 / scale) * (float)s;
+            float lf0, prob0;
+            int mag0;
+
+            float av1 = fabsf(values[2 * i + 1]);
+            float scaled1 = (av1 / scale) * (float)s;
+            float lf1, prob1;
+            int mag1;
+
+            if (scaled0 > (float)s)
+                scaled0 = (float)s;
+            lf0 = floorf(scaled0);
+            prob0 = scaled0 - lf0;
+            mag0 = (int)lf0 + mco2_bernoulli(words[2 * i], prob0);
+            sc0 = signbit(values[2 * i]) && mag0 != 0 ? -mag0 : mag0;
+
+            if (scaled1 > (float)s)
+                scaled1 = (float)s;
+            lf1 = floorf(scaled1);
+            prob1 = scaled1 - lf1;
+            mag1 = (int)lf1 + mco2_bernoulli(words[2 * i + 1], prob1);
+            sc1 = signbit(values[2 * i + 1]) && mag1 != 0 ? -mag1 : mag1;
+
+            payload[i] = (uint8_t)(((sc0 + s) & 0x0F) | (((sc1 + s) & 0x0F) << 4));
+        }
+        if (count % 2 == 1) {
+            float av = fabsf(values[count - 1]);
+            float scaled = (av / scale) * (float)s;
+            float lf, prob;
+            int mag, sc;
+
+            if (scaled > (float)s)
+                scaled = (float)s;
+            lf = floorf(scaled);
+            prob = scaled - lf;
+            mag = (int)lf + mco2_bernoulli(words[count - 1], prob);
+            sc = signbit(values[count - 1]) && mag != 0 ? -mag : mag;
+
+            payload[pairs] = (uint8_t)((sc + s) & 0x0F);
+        }
     }
     return MCO2_Q8_OK;
+}
+
+mco2_q8_status mco2_q8_make_codes(const float *values, size_t count,
+                                   float scale, const uint32_t *words,
+                                   uint8_t *codes)
+{
+    return mco2_encode_payload(MCO2_Q8_BITS, values, count, scale, words, codes);
 }
