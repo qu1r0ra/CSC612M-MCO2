@@ -61,6 +61,14 @@ const char *mco2_q8_status_message(mco2_q8_status status)
         return "unable to allocate memory";
     case MCO2_Q8_ERR_IO:
         return "file read or write failed";
+    case MCO2_Q8_ERR_CUDA_UNAVAILABLE:
+        return "CUDA backend is unavailable: this executable was built without CUDA support";
+    case MCO2_Q8_ERR_CUDA:
+        return "CUDA device unavailable or CUDA runtime operation failed";
+    case MCO2_Q8_ERR_CUDA_BIT_WIDTH:
+        return "CUDA backend currently supports 8-bit records only";
+    case MCO2_Q8_ERR_TIMINGS_BACKEND:
+        return "--timings requires --backend cuda";
     }
     return "unknown error";
 }

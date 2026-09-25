@@ -1,0 +1,657 @@
+#include "quantizer_cuda.h"
+
+#include <cuda_runtime.h>
+
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+
+#define MCO2_CUDA_REDUCTION_THREADS 256
+#define MCO2_CUDA_MAX_AUTO_GRID 65535
+
+enum {
+    MCO2_CUDA_INPUT_NONFINITE = 1U,
+    MCO2_CUDA_INPUT_ANY_NONZERO = 2U,
+    MCO2_CUDA_INPUT_BAD_ZERO_SCALE = 4U
+};
+
+__global__ static void max_blocks_kernel(const float *values, uint64_t count,
+                                         uint64_t block_count,
+                                         float *max_partials,
+                                         uint32_t *invalid_partials)
+{
+    __shared__ float block_max[MCO2_CUDA_REDUCTION_THREADS];
+    __shared__ uint32_t block_invalid[MCO2_CUDA_REDUCTION_THREADS];
+    const unsigned int lane = threadIdx.x;
+    uint64_t logical_block;
+
+    for (logical_block = blockIdx.x; logical_block < block_count;
+         logical_block += gridDim.x) {
+        const uint64_t index = logical_block * MCO2_CUDA_REDUCTION_THREADS + lane;
+        float value_max = 0.0f;
+        uint32_t invalid = 0;
+
+        if (index < count) {
+            const float value = values[index];
+            if (isfinite(value))
+                value_max = fabsf(value);
+            else
+                invalid = 1;
+        }
+        block_max[lane] = value_max;
+        block_invalid[lane] = invalid;
+        __syncthreads();
+
+        for (unsigned int stride = MCO2_CUDA_REDUCTION_THREADS / 2;
+             stride != 0; stride /= 2) {
+            if (lane < stride) {
+                const float other_max = block_max[lane + stride];
+                if (other_max > block_max[lane])
+                    block_max[lane] = other_max;
+                block_invalid[lane] |= block_invalid[lane + stride];
+            }
+            __syncthreads();
+        }
+
+        if (lane == 0) {
+            max_partials[logical_block] = block_max[0];
+            invalid_partials[logical_block] = block_invalid[0];
+        }
+        __syncthreads();
+    }
+}
+
+__global__ static void reduce_max_kernel(const float *max_partials,
+                                         const uint32_t *invalid_partials,
+                                         uint64_t block_count, float *scale,
+                                         int *status)
+{
+    __shared__ float maxima[MCO2_CUDA_REDUCTION_THREADS];
+    __shared__ uint32_t invalid[MCO2_CUDA_REDUCTION_THREADS];
+    const unsigned int lane = threadIdx.x;
+    float local_max = 0.0f;
+    uint32_t local_invalid = 0;
+
+    for (uint64_t i = lane; i < block_count; i += MCO2_CUDA_REDUCTION_THREADS) {
+        if (max_partials[i] > local_max)
+            local_max = max_partials[i];
+        local_invalid |= invalid_partials[i];
+    }
+    maxima[lane] = local_max;
+    invalid[lane] = local_invalid;
+    __syncthreads();
+
+    for (unsigned int stride = MCO2_CUDA_REDUCTION_THREADS / 2; stride != 0;
+         stride /= 2) {
+        if (lane < stride) {
+            if (maxima[lane + stride] > maxima[lane])
+                maxima[lane] = maxima[lane + stride];
+            invalid[lane] |= invalid[lane + stride];
+        }
+        __syncthreads();
+    }
+
+    if (lane == 0) {
+        *scale = maxima[0];
+        *status = invalid[0] ? MCO2_Q8_ERR_NONFINITE : MCO2_Q8_OK;
+    }
+}
+
+__global__ static void sum_blocks_kernel(const float *values, uint64_t count,
+                                         uint64_t block_count,
+                                         uint64_t padded_count,
+                                         const float *max_abs, const int *status,
+                                         float *partials)
+{
+    __shared__ float terms[2][MCO2_CUDA_REDUCTION_THREADS];
+    const unsigned int lane = threadIdx.x;
+    uint64_t logical_block;
+
+    for (logical_block = blockIdx.x; logical_block < padded_count;
+         logical_block += gridDim.x) {
+        if (logical_block >= block_count || *status != MCO2_Q8_OK || *max_abs == 0.0f) {
+            if (lane == 0)
+                partials[logical_block] = 0.0f;
+            __syncthreads();
+            continue;
+        }
+
+        const uint64_t index = logical_block * MCO2_CUDA_REDUCTION_THREADS + lane;
+        float term = 0.0f;
+        if (index < count) {
+            const float ratio = fabsf(values[index]) / *max_abs;
+            term = ratio * ratio;
+        }
+        float *input = terms[0];
+        float *output = terms[1];
+        input[lane] = term;
+        __syncthreads();
+
+        for (unsigned int stride = MCO2_CUDA_REDUCTION_THREADS / 2;
+             stride != 0; stride /= 2) {
+            if (lane < stride)
+                output[lane] = input[2 * lane] + input[2 * lane + 1];
+            __syncthreads();
+            float *temporary = input;
+            input = output;
+            output = temporary;
+        }
+        if (lane == 0)
+            partials[logical_block] = input[0];
+        __syncthreads();
+    }
+}
+
+__global__ static void reduce_pairs_kernel(const float *input, float *output,
+                                           uint64_t output_count)
+{
+    const uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         i < output_count; i += stride)
+        output[i] = input[2 * i] + input[2 * i + 1];
+}
+
+__global__ static void finish_scale_kernel(const float *sum, float *scale,
+                                           int *status)
+{
+    if (blockIdx.x != 0 || threadIdx.x != 0 || *status != MCO2_Q8_OK)
+        return;
+    if (*scale == 0.0f)
+        return;
+
+    const float root = sqrtf(*sum);
+    const float result = *scale * root;
+    if (!isfinite(result)) {
+        *status = MCO2_Q8_ERR_SCALE_OVERFLOW;
+        *scale = 0.0f;
+    } else {
+        *scale = result;
+    }
+}
+
+__global__ static void round_q8_kernel(const float *values, uint64_t count,
+                                       const float *scale,
+                                       const uint32_t *words,
+                                       int prescribed_words,
+                                       mco2_rng_stream stream_state,
+                                       uint8_t *codes,
+                                       uint32_t *validation_flags)
+{
+    const philox4x32_key_t key = mco2_philox_key(&stream_state);
+    const uint64_t group_count = count / 4 + (count % 4 != 0);
+    const uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    const float scale_value = *scale;
+
+    for (uint64_t group = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         group < group_count; group += stride) {
+        philox4x32_ctr_t random_words;
+        if (!prescribed_words) {
+            random_words = philox4x32_R(MCO2_PHILOX_ROUNDS,
+                                        mco2_philox_ctr(&stream_state, group), key);
+        }
+        for (unsigned int lane = 0; lane < 4; lane++) {
+            const uint64_t index = group * 4 + lane;
+            if (index >= count)
+                break;
+
+            const float value = values[index];
+            if (!isfinite(value)) {
+                atomicOr(validation_flags, MCO2_CUDA_INPUT_NONFINITE);
+                continue;
+            }
+            if (value != 0.0f)
+                atomicOr(validation_flags, MCO2_CUDA_INPUT_ANY_NONZERO);
+            if (scale_value == 0.0f) {
+                if (value != 0.0f)
+                    atomicOr(validation_flags, MCO2_CUDA_INPUT_BAD_ZERO_SCALE);
+                codes[index] = MCO2_Q8_SIGNED_LIMIT;
+                continue;
+            }
+
+            const float absolute_value = fabsf(value);
+            float scaled = (absolute_value / scale_value) * (float)MCO2_Q8_SIGNED_LIMIT;
+            if (scaled > (float)MCO2_Q8_SIGNED_LIMIT)
+                scaled = (float)MCO2_Q8_SIGNED_LIMIT;
+            const float lower_float = floorf(scaled);
+            const float probability = scaled - lower_float;
+            const uint32_t word = prescribed_words ? words[index] : random_words.v[lane];
+            const int magnitude = (int)lower_float + mco2_bernoulli(word, probability);
+            const int signed_code = signbit(value) && magnitude != 0 ? -magnitude : magnitude;
+            codes[index] = (uint8_t)(signed_code + MCO2_Q8_SIGNED_LIMIT);
+        }
+    }
+}
+
+__global__ static void pack_q8_kernel(const uint8_t *codes, uint64_t count,
+                                      uint8_t *payload)
+{
+    const uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    for (uint64_t index = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         index < count; index += stride)
+        payload[index] = codes[index];
+}
+
+static int automatic_grid(uint64_t work, int block_size)
+{
+    const uint64_t blocks = work / (uint64_t)block_size +
+                            (work % (uint64_t)block_size != 0);
+    return (int)(blocks < MCO2_CUDA_MAX_AUTO_GRID ? blocks : MCO2_CUDA_MAX_AUTO_GRID);
+}
+
+static int launch_grid(uint64_t work, int block_size, int grid_size)
+{
+    if (block_size <= 0)
+        return 0;
+    if (grid_size > 0)
+        return grid_size;
+    return automatic_grid(work, block_size);
+}
+
+extern "C" int mco2_cuda_launch_q8_k1(const float *device_values,
+                                      uint64_t count,
+                                      float *device_max_partials,
+                                      uint32_t *device_invalid_partials,
+                                      float *device_sums_a,
+                                      float *device_sums_b,
+                                      uint64_t block_count,
+                                      uint64_t padded_count,
+                                      float *device_scale,
+                                      int *device_status,
+                                      void *stream_handle)
+{
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_handle);
+    const uint64_t expected_block_count =
+        count / MCO2_CUDA_REDUCTION_THREADS +
+        (count % MCO2_CUDA_REDUCTION_THREADS != 0);
+    uint64_t expected_padded_count = 1;
+    while (expected_padded_count < expected_block_count)
+        expected_padded_count <<= 1;
+    const unsigned int max_grid = (unsigned int)(block_count < MCO2_CUDA_MAX_AUTO_GRID
+                                                      ? block_count
+                                                      : MCO2_CUDA_MAX_AUTO_GRID);
+    const unsigned int sum_grid = (unsigned int)(padded_count < MCO2_CUDA_MAX_AUTO_GRID
+                                                      ? padded_count
+                                                      : MCO2_CUDA_MAX_AUTO_GRID);
+
+    if (count == 0 || block_count != expected_block_count ||
+        padded_count != expected_padded_count || max_grid == 0 || sum_grid == 0 ||
+        device_values == NULL || device_max_partials == NULL ||
+        device_invalid_partials == NULL || device_sums_a == NULL ||
+        device_sums_b == NULL || device_scale == NULL || device_status == NULL)
+        return (int)cudaErrorInvalidValue;
+
+    max_blocks_kernel<<<max_grid, MCO2_CUDA_REDUCTION_THREADS, 0, stream>>>(
+        device_values, count, block_count, device_max_partials,
+        device_invalid_partials);
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess)
+        return (int)error;
+
+    reduce_max_kernel<<<1, MCO2_CUDA_REDUCTION_THREADS, 0, stream>>>(
+        device_max_partials, device_invalid_partials, block_count, device_scale,
+        device_status);
+    error = cudaGetLastError();
+    if (error != cudaSuccess)
+        return (int)error;
+
+    sum_blocks_kernel<<<sum_grid, MCO2_CUDA_REDUCTION_THREADS, 0, stream>>>(
+        device_values, count, block_count, padded_count, device_scale,
+        device_status, device_sums_a);
+    error = cudaGetLastError();
+    if (error != cudaSuccess)
+        return (int)error;
+
+    uint64_t active = padded_count;
+    float *input = device_sums_a;
+    float *output = device_sums_b;
+    while (active > 1) {
+        const uint64_t output_count = active / 2;
+        const unsigned int grid = (unsigned int)automatic_grid(output_count, 256);
+        reduce_pairs_kernel<<<grid, 256, 0, stream>>>(input, output, output_count);
+        error = cudaGetLastError();
+        if (error != cudaSuccess)
+            return (int)error;
+        active = output_count;
+        float *temporary = input;
+        input = output;
+        output = temporary;
+    }
+
+    finish_scale_kernel<<<1, 1, 0, stream>>>(input, device_scale, device_status);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int mco2_cuda_launch_q8_k2(const float *device_values,
+                                      uint64_t count,
+                                      const float *device_scale,
+                                      const uint32_t *device_words,
+                                      int prescribed_words,
+                                      mco2_rng_stream stream_state,
+                                      uint8_t *device_codes,
+                                      uint32_t *device_validation_flags,
+                                      int block_size,
+                                      int grid_size,
+                                      void *stream_handle)
+{
+    const uint64_t group_count = count / 4 + (count % 4 != 0);
+    const int grid = launch_grid(group_count, block_size, grid_size);
+    if (count == 0)
+        return 0;
+    if (device_values == NULL || device_scale == NULL || device_codes == NULL ||
+        device_validation_flags == NULL || block_size <= 0 || grid <= 0 ||
+        (prescribed_words && device_words == NULL))
+        return (int)cudaErrorInvalidValue;
+
+    round_q8_kernel<<<grid, block_size, 0,
+                      reinterpret_cast<cudaStream_t>(stream_handle)>>>(
+        device_values, count, device_scale, device_words, prescribed_words,
+        stream_state, device_codes, device_validation_flags);
+    return (int)cudaGetLastError();
+}
+
+extern "C" int mco2_cuda_launch_q8_k3(const uint8_t *device_codes,
+                                      uint64_t count,
+                                      uint8_t *device_payload,
+                                      int block_size,
+                                      int grid_size,
+                                      void *stream_handle)
+{
+    const int grid = launch_grid(count, block_size, grid_size);
+    if (count == 0)
+        return 0;
+    if (device_codes == NULL || device_payload == NULL || block_size <= 0 || grid <= 0)
+        return (int)cudaErrorInvalidValue;
+
+    pack_q8_kernel<<<grid, block_size, 0,
+                     reinterpret_cast<cudaStream_t>(stream_handle)>>>(
+        device_codes, count, device_payload);
+    return (int)cudaGetLastError();
+}
+
+static mco2_q8_status timed_copy(void *destination, const void *source, size_t size,
+                                 cudaMemcpyKind kind, cudaStream_t stream,
+                                 float *elapsed_ms, int collect_timing)
+{
+    const auto start = std::chrono::steady_clock::now();
+    cudaError_t error = cudaMemcpyAsync(destination, source, size, kind, stream);
+    if (error == cudaSuccess)
+        error = cudaStreamSynchronize(stream);
+    if (error != cudaSuccess)
+        return MCO2_Q8_ERR_CUDA;
+    if (collect_timing) {
+        const auto end = std::chrono::steady_clock::now();
+        *elapsed_ms += std::chrono::duration<float, std::milli>(end - start).count();
+    }
+    return MCO2_Q8_OK;
+}
+
+static mco2_q8_status finish_kernel_timing(cudaEvent_t start, cudaEvent_t stop,
+                                           cudaStream_t stream, float *elapsed_ms)
+{
+    cudaError_t error = cudaEventRecord(stop, stream);
+    if (error == cudaSuccess)
+        error = cudaEventSynchronize(stop);
+    if (error == cudaSuccess)
+        error = cudaEventElapsedTime(elapsed_ms, start, stop);
+    return error == cudaSuccess ? MCO2_Q8_OK : MCO2_Q8_ERR_CUDA;
+}
+
+mco2_q8_status mco2_cuda_q8_compress(const float *values, size_t count,
+                                     uint64_t seed, uint64_t tensor_id,
+                                     uint64_t invocation_id,
+                                     int prescribed_scale_seen,
+                                     float prescribed_scale,
+                                     const uint32_t *prescribed_words,
+                                     uint8_t *payload, float *scale,
+                                     int collect_timings,
+                                     mco2_cuda_timings *timings)
+{
+    cudaStream_t stream = NULL;
+    cudaEvent_t event_start = NULL, event_stop = NULL;
+    float *device_values = NULL, *device_scale = NULL;
+    float *device_max_partials = NULL, *device_sums_a = NULL, *device_sums_b = NULL;
+    uint32_t *device_invalid_partials = NULL, *device_words = NULL;
+    uint32_t *device_validation_flags = NULL;
+    uint8_t *device_codes = NULL, *device_payload = NULL;
+    int *device_status = NULL;
+    uint64_t block_count = 0, padded_count = 1;
+    uint32_t host_validation_flags = 0;
+    int host_status = MCO2_Q8_OK;
+    int device_count = 0;
+    mco2_rng_stream stream_state;
+    mco2_q8_status result = MCO2_Q8_ERR_CUDA;
+    mco2_cuda_timings zero_timings = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    if (timings != NULL)
+        *timings = zero_timings;
+    if (scale == NULL || (count != 0 && (values == NULL || payload == NULL)) ||
+        count > SIZE_MAX / sizeof(float) || count > SIZE_MAX / sizeof(uint32_t) ||
+        (collect_timings && timings == NULL))
+        return MCO2_Q8_ERR_ARGUMENT;
+    if (prescribed_scale_seen &&
+        (!isfinite(prescribed_scale) || prescribed_scale < 0.0f))
+        return MCO2_Q8_ERR_SCALE;
+    if (mco2_rng_stream_init(&stream_state, seed, tensor_id, invocation_id) != MCO2_OK)
+        return MCO2_Q8_ERR_ID_OVERFLOW;
+
+    cudaError_t error = cudaGetDeviceCount(&device_count);
+    if (error != cudaSuccess || device_count == 0) {
+        (void)cudaGetLastError();
+        return MCO2_Q8_ERR_CUDA;
+    }
+    if (count == 0 && prescribed_scale_seen && prescribed_scale != 0.0f)
+        return MCO2_Q8_ERR_SCALE;
+
+    if (count == 0) {
+        *scale = prescribed_scale_seen ? prescribed_scale : 0.0f;
+        return MCO2_Q8_OK;
+    }
+
+    block_count = count / MCO2_CUDA_REDUCTION_THREADS +
+                  (count % MCO2_CUDA_REDUCTION_THREADS != 0);
+    while (!prescribed_scale_seen && padded_count < block_count) {
+        if (padded_count > std::numeric_limits<uint64_t>::max() / 2)
+            return MCO2_Q8_ERR_COUNT;
+        padded_count *= 2;
+    }
+
+    error = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+    if (error != cudaSuccess)
+        goto done;
+    if (collect_timings) {
+        error = cudaEventCreate(&event_start);
+        if (error != cudaSuccess)
+            goto done;
+        error = cudaEventCreate(&event_stop);
+        if (error != cudaSuccess)
+            goto done;
+    }
+
+#define ALLOCATE_DEVICE(pointer, bytes)                                                        \
+    do {                                                                                       \
+        error = cudaMalloc(reinterpret_cast<void **>(&(pointer)), (bytes));                     \
+        if (error != cudaSuccess)                                                              \
+            goto done;                                                                         \
+    } while (0)
+
+    ALLOCATE_DEVICE(device_values, count * sizeof(float));
+    ALLOCATE_DEVICE(device_scale, sizeof(float));
+    ALLOCATE_DEVICE(device_status, sizeof(int));
+    ALLOCATE_DEVICE(device_validation_flags, sizeof(uint32_t));
+    ALLOCATE_DEVICE(device_codes, count * sizeof(uint8_t));
+    ALLOCATE_DEVICE(device_payload, count * sizeof(uint8_t));
+    if (prescribed_words != NULL)
+        ALLOCATE_DEVICE(device_words, count * sizeof(uint32_t));
+    if (!prescribed_scale_seen) {
+        ALLOCATE_DEVICE(device_max_partials, block_count * sizeof(float));
+        ALLOCATE_DEVICE(device_invalid_partials, block_count * sizeof(uint32_t));
+        ALLOCATE_DEVICE(device_sums_a, padded_count * sizeof(float));
+        ALLOCATE_DEVICE(device_sums_b, padded_count * sizeof(float));
+    }
+
+    error = cudaMemsetAsync(device_status, 0, sizeof(int), stream);
+    if (error != cudaSuccess)
+        goto done;
+    error = cudaMemsetAsync(device_validation_flags, 0, sizeof(uint32_t), stream);
+    if (error != cudaSuccess)
+        goto done;
+
+    result = timed_copy(device_values, values, count * sizeof(float),
+                        cudaMemcpyHostToDevice, stream,
+                        timings != NULL ? &timings->h2d_ms : NULL,
+                        collect_timings && timings != NULL);
+    if (result != MCO2_Q8_OK)
+        goto done;
+    if (prescribed_words != NULL) {
+        result = timed_copy(device_words, prescribed_words, count * sizeof(uint32_t),
+                            cudaMemcpyHostToDevice, stream,
+                            timings != NULL ? &timings->h2d_ms : NULL,
+                            collect_timings && timings != NULL);
+        if (result != MCO2_Q8_OK)
+            goto done;
+    }
+
+    if (prescribed_scale_seen) {
+        *scale = prescribed_scale;
+        result = timed_copy(device_scale, scale, sizeof(float),
+                            cudaMemcpyHostToDevice, stream,
+                            timings != NULL ? &timings->h2d_ms : NULL,
+                            collect_timings && timings != NULL);
+        if (result != MCO2_Q8_OK)
+            goto done;
+    } else {
+        if (collect_timings) {
+            error = cudaEventRecord(event_start, stream);
+            if (error != cudaSuccess)
+                goto done;
+        }
+        error = (cudaError_t)mco2_cuda_launch_q8_k1(
+            device_values, count, device_max_partials, device_invalid_partials,
+            device_sums_a, device_sums_b, block_count, padded_count,
+            device_scale, device_status, stream);
+        if (error != cudaSuccess)
+            goto done;
+        if (collect_timings) {
+            result = finish_kernel_timing(event_start, event_stop, stream,
+                                          &timings->k1_ms);
+            if (result != MCO2_Q8_OK)
+                goto done;
+        }
+        error = cudaStreamSynchronize(stream);
+        if (error != cudaSuccess)
+            goto done;
+        result = timed_copy(&host_status, device_status, sizeof(int),
+                            cudaMemcpyDeviceToHost, stream,
+                            timings != NULL ? &timings->d2h_ms : NULL,
+                            collect_timings && timings != NULL);
+        if (result != MCO2_Q8_OK)
+            goto done;
+        result = timed_copy(scale, device_scale, sizeof(float),
+                            cudaMemcpyDeviceToHost, stream,
+                            timings != NULL ? &timings->d2h_ms : NULL,
+                            collect_timings && timings != NULL);
+        if (result != MCO2_Q8_OK)
+            goto done;
+        if (host_status != MCO2_Q8_OK) {
+            result = (mco2_q8_status)host_status;
+            goto done;
+        }
+    }
+
+    if (collect_timings) {
+        error = cudaEventRecord(event_start, stream);
+        if (error != cudaSuccess)
+            goto done;
+    }
+    error = (cudaError_t)mco2_cuda_launch_q8_k2(
+        device_values, count, device_scale, device_words,
+        prescribed_words != NULL, stream_state, device_codes,
+        device_validation_flags, 256, 0, stream);
+    if (error != cudaSuccess)
+        goto done;
+    if (collect_timings) {
+        result = finish_kernel_timing(event_start, event_stop, stream,
+                                      &timings->k2_ms);
+        if (result != MCO2_Q8_OK)
+            goto done;
+    }
+    error = cudaStreamSynchronize(stream);
+    if (error != cudaSuccess)
+        goto done;
+    result = timed_copy(&host_validation_flags, device_validation_flags,
+                        sizeof(uint32_t), cudaMemcpyDeviceToHost, stream,
+                        timings != NULL ? &timings->d2h_ms : NULL,
+                        collect_timings && timings != NULL);
+    if (result != MCO2_Q8_OK)
+        goto done;
+    if ((host_validation_flags & MCO2_CUDA_INPUT_NONFINITE) != 0) {
+        result = MCO2_Q8_ERR_NONFINITE;
+        goto done;
+    }
+    if (((*scale == 0.0f) &&
+         (host_validation_flags & MCO2_CUDA_INPUT_ANY_NONZERO) != 0) ||
+        ((*scale != 0.0f) &&
+         (host_validation_flags & MCO2_CUDA_INPUT_ANY_NONZERO) == 0) ||
+        (host_validation_flags & MCO2_CUDA_INPUT_BAD_ZERO_SCALE) != 0) {
+        result = MCO2_Q8_ERR_SCALE;
+        goto done;
+    }
+
+    if (collect_timings) {
+        error = cudaEventRecord(event_start, stream);
+        if (error != cudaSuccess)
+            goto done;
+    }
+    error = (cudaError_t)mco2_cuda_launch_q8_k3(device_codes, count,
+                                                device_payload, 256, 0, stream);
+    if (error != cudaSuccess)
+        goto done;
+    if (collect_timings) {
+        result = finish_kernel_timing(event_start, event_stop, stream,
+                                      &timings->k3_ms);
+        if (result != MCO2_Q8_OK)
+            goto done;
+    }
+    error = cudaStreamSynchronize(stream);
+    if (error != cudaSuccess)
+        goto done;
+    result = timed_copy(payload, device_payload, count,
+                        cudaMemcpyDeviceToHost, stream,
+                        timings != NULL ? &timings->d2h_ms : NULL,
+                        collect_timings && timings != NULL);
+    if (result != MCO2_Q8_OK)
+        goto done;
+    result = MCO2_Q8_OK;
+
+done:
+    if (device_values != NULL)
+        (void)cudaFree(device_values);
+    if (device_scale != NULL)
+        (void)cudaFree(device_scale);
+    if (device_max_partials != NULL)
+        (void)cudaFree(device_max_partials);
+    if (device_invalid_partials != NULL)
+        (void)cudaFree(device_invalid_partials);
+    if (device_sums_a != NULL)
+        (void)cudaFree(device_sums_a);
+    if (device_sums_b != NULL)
+        (void)cudaFree(device_sums_b);
+    if (device_words != NULL)
+        (void)cudaFree(device_words);
+    if (device_validation_flags != NULL)
+        (void)cudaFree(device_validation_flags);
+    if (device_codes != NULL)
+        (void)cudaFree(device_codes);
+    if (device_payload != NULL)
+        (void)cudaFree(device_payload);
+    if (device_status != NULL)
+        (void)cudaFree(device_status);
+    if (event_start != NULL)
+        (void)cudaEventDestroy(event_start);
+    if (event_stop != NULL)
+        (void)cudaEventDestroy(event_stop);
+    if (stream != NULL)
+        (void)cudaStreamDestroy(stream);
+    return result;
+}
