@@ -1093,8 +1093,10 @@ static mco2_q8_status run_bench_graph(
     if (payload_bytes != 0) {
         for (index = 0; index < payload_bytes; index++)
             context->host_payload[index] = (uint8_t)~base_payload[index];
+        /* A pageable copy can return before its DMA lands; the graph stream does not wait for it. */
         if (cudaMemcpy(context->device_payload, context->host_payload,
-                       payload_bytes, cudaMemcpyHostToDevice) != cudaSuccess)
+                       payload_bytes, cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaDeviceSynchronize() != cudaSuccess)
             return MCO2_Q8_ERR_CUDA;
     }
 
