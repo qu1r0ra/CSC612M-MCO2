@@ -523,7 +523,8 @@ def render_report(
         (
             "Times are pooled medians. Speedup is C median over CUDA median. The trial "
             "range decides the verdict; the 95% CI is the bootstrap interval over trial "
-            "medians. Direction, magnitude and revision 2 are the claim rules recorded in "
+            "medians, so a speedup can lie outside its CI. Direction, magnitude and "
+            "revision 2 are the claim rules recorded in "
             "the manifest; — marks a field the snapshot predates."
         ),
         "",

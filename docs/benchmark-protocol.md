@@ -192,7 +192,7 @@ A pilot runs from the merged tree before the sweep. After the pilot, only outrig
 
 Fixes after the pilot at `3b578d2` (`results/pilots/2026-09-26T100830-3b578d2`, not committed):
 
-- `just figures` failed on F2 and F4 because it drew each 95% CI as error bars relative to the point speedup. The point is a ratio of pooled medians and the CI comes from trial medians, so the point can lie outside its CI (`2^14`, 8-bit, `resident-graph`: 17.47 against [17.455, 17.460]). Each CI is now drawn as a segment between its own bounds. Test: `test_render_report_draws_a_ci_that_excludes_the_point`.
+- `just figures` failed on F2 and F4 because it drew each 95% CI as error bars relative to the point speedup. The point is a ratio of pooled medians and the CI comes from trial medians, so the point can lie outside its CI (`2^14`, 8-bit, `resident-graph`: 17.471 against [17.456, 17.460]). Each CI is now drawn as a segment between its own bounds. Test: `test_render_report_draws_a_ci_that_excludes_the_point`.
 
 #### Pre-registered outcome
 
