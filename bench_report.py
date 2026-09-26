@@ -101,6 +101,16 @@ def speedup_interval(stats: dict[str, Any]) -> tuple[float, float]:
     return stats["speedup_low"], stats["speedup_high"]
 
 
+def plot_interval(ax, x, y, bounds, color, label) -> None:
+    """Draw the point line and each interval as a segment from its own bounds.
+
+    The bootstrap CI comes from trial medians and the point from pooled medians,
+    so the point may lie outside its CI; error bars relative to it would go negative.
+    """
+    ax.plot(x, y, color=color, linewidth=1, label=label)
+    ax.vlines(x, bounds[:, 0], bounds[:, 1], color=color, linewidth=1)
+
+
 def power_label(count: int) -> str:
     return f"2^{count.bit_length() - 1}" if count & (count - 1) == 0 else str(count)
 
@@ -203,10 +213,7 @@ def plot_speedup(indexed, counts, bit_widths, out: Path) -> None:
             stats = [r["statistics"] for r in rows]
             y = np.array([s["speedup_vs_cpu"] for s in stats])
             bounds = np.array([speedup_interval(s) for s in stats])
-            err = np.array([y - bounds[:, 0], bounds[:, 1] - y])
-            ax.errorbar(
-                x, y, yerr=err, color=COLORS[path], linewidth=1, capsize=2, label=LABELS[path]
-            )
+            plot_interval(ax, x, y, bounds, COLORS[path], LABELS[path])
             direction = np.array([direction_supported(s) for s in stats])
             magnitude = np.array([bool(magnitude_supported(s)) for s in stats])
             ax.scatter(
@@ -336,16 +343,7 @@ def plot_graph_vs_resident(indexed, counts, bit_widths, out: Path) -> None:
                 for v in vs_res_list
             ]
         )
-        err = np.array([y - bounds[:, 0], bounds[:, 1] - y])
-        ax.errorbar(
-            x,
-            y,
-            yerr=err,
-            color=COLORS["resident-graph"],
-            linewidth=1,
-            capsize=2,
-            label=LABELS["resident-graph"],
-        )
+        plot_interval(ax, x, y, bounds, COLORS["resident-graph"], LABELS["resident-graph"])
         direction = np.array([direction_supported(v) for v in vs_res_list])
         magnitude = np.array([bool(magnitude_supported(v)) for v in vs_res_list])
         ax.scatter(
@@ -525,7 +523,8 @@ def render_report(
         (
             "Times are pooled medians. Speedup is C median over CUDA median. The trial "
             "range decides the verdict; the 95% CI is the bootstrap interval over trial "
-            "medians. Direction, magnitude and revision 2 are the claim rules recorded in "
+            "medians, so a speedup can lie outside its CI. Direction, magnitude and "
+            "revision 2 are the claim rules recorded in "
             "the manifest; — marks a field the snapshot predates."
         ),
         "",

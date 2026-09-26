@@ -214,3 +214,23 @@ def test_rev2_snapshot_fields_still_render(tmp_path):
     report = result["report"].read_text(encoding="utf-8")
     assert "| — | faster | yes | — |" in report
     assert result["crossovers"][(4, "resident")]["status"] == "resolved"
+
+
+def test_render_report_draws_a_ci_that_excludes_the_point(tmp_path):
+    # The point speedup is a ratio of pooled medians and the CI is bootstrapped
+    # from trial medians, so the point can sit outside its CI (seen in the #34 pilot).
+    cases = sweep_cases()
+    for case in cases:
+        stats = case["statistics"]
+        if case["timing_boundary"] == "resident-graph":
+            stats["speedup_ci_low"] = stats["speedup_vs_cpu"] * 0.97
+            stats["speedup_ci_high"] = stats["speedup_vs_cpu"] * 0.99
+            stats["vs_resident"]["speedup_ci_low"] = 1.11
+            stats["vs_resident"]["speedup_ci_high"] = 1.12
+    snapshot = tmp_path / "snap"
+    write_snapshot(snapshot, cases)
+
+    render_report(snapshot, tmp_path / "out")
+
+    for key in ("f2", "f4"):
+        assert (tmp_path / "out" / FIGURES[key]).read_bytes().startswith(PNG_MAGIC)

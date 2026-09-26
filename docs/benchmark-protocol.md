@@ -190,6 +190,10 @@ Unchanged: the grid, 30 measured repetitions, the time-based in-process warm-up 
 
 A pilot runs from the merged tree before the sweep. After the pilot, only outright bugs may be fixed, each with a test and recorded here or in its pull request. No parameter or threshold changes after the pilot.
 
+Fixes after the pilot at `3b578d2` (`results/pilots/2026-09-26T100830-3b578d2`, not committed):
+
+- `just figures` failed on F2 and F4 because it drew each 95% CI as error bars relative to the point speedup. The point is a ratio of pooled medians and the CI comes from trial medians, so the point can lie outside its CI (`2^14`, 8-bit, `resident-graph`: 17.471 against [17.456, 17.460]). Each CI is now drawn as a segment between its own bounds. Test: `test_render_report_draws_a_ci_that_excludes_the_point`.
+
 #### Pre-registered outcome
 
 Revision 3's result is final for resident stability: whatever it supports is what the paper claims, and no revision 4 is made for stability. The paper reports, per path and bit width, which direction claims and which magnitude claims hold, the graph-vs-resident finding, both crossovers, and the graph capture cost. It reports the diagnosis and the core-0 finding either way, and discloses the unexplained 3–6× levels as a limitation.
