@@ -1,0 +1,97 @@
+{
+  "label": "core0-quiet",
+  "count": 16384,
+  "bits": 8,
+  "warmups": 6654,
+  "reps": 30,
+  "git": {
+    "code_revision": "51b495cf02da026854cf5d0539a6d8c31740c924",
+    "code_revision_short": "51b495c",
+    "git_dirty": true,
+    "dirty_files": [
+      "?? scripts/pin_resident.py"
+    ]
+  },
+  "gpu_state_start": {
+    "pstate": "P0",
+    "clocks.sm": "2955 MHz",
+    "clocks.mem": "14201 MHz",
+    "clocks.max.sm": "3090 MHz",
+    "temperature.gpu": "58",
+    "power.draw": "45.17 W",
+    "clocks_event_reasons.active": "0x0000000000000000",
+    "captured_at_utc": "2026-09-26T07:18:12.873339+00:00"
+  },
+  "gpu_state_end": {
+    "pstate": "P1",
+    "clocks.sm": "2955 MHz",
+    "clocks.mem": "14001 MHz",
+    "clocks.max.sm": "3090 MHz",
+    "temperature.gpu": "60",
+    "power.draw": "45.86 W",
+    "clocks_event_reasons.active": "0x0000000000000000",
+    "captured_at_utc": "2026-09-26T07:18:24.843286+00:00"
+  },
+  "runs": [
+    {
+      "index": 0,
+      "core": 0,
+      "start_unix": 1790407095.910321,
+      "wall_median_ms": 0.1885,
+      "kernel_median_ms": 0.14588800200000002,
+      "k1_median_ms": 0.11368000149999999,
+      "k2_median_ms": 0.013264,
+      "k3_median_ms": 0.012288
+    },
+    {
+      "index": 1,
+      "core": 0,
+      "start_unix": 1790407097.3102555,
+      "wall_median_ms": 0.1573,
+      "kernel_median_ms": 0.1332960015,
+      "k1_median_ms": 0.1039200015,
+      "k2_median_ms": 0.009104000000000001,
+      "k3_median_ms": 0.0041600000000000005
+    },
+    {
+      "index": 2,
+      "core": 0,
+      "start_unix": 1790407098.8527737,
+      "wall_median_ms": 0.16505,
+      "kernel_median_ms": 0.129776,
+      "k1_median_ms": 0.1060959995,
+      "k2_median_ms": 0.013776,
+      "k3_median_ms": 0.012351999999999998
+    },
+    {
+      "index": 3,
+      "core": 0,
+      "start_unix": 1790407100.3445828,
+      "wall_median_ms": 0.1887,
+      "kernel_median_ms": 0.140191999,
+      "k1_median_ms": 0.105296001,
+      "k2_median_ms": 0.013632,
+      "k3_median_ms": 0.004224
+    },
+    {
+      "index": 4,
+      "core": 0,
+      "start_unix": 1790407101.7198498,
+      "wall_median_ms": 0.1857,
+      "kernel_median_ms": 0.1451040005,
+      "k1_median_ms": 0.111664001,
+      "k2_median_ms": 0.012384,
+      "k3_median_ms": 0.011536000000000001
+    },
+    {
+      "index": 5,
+      "core": 0,
+      "start_unix": 1790407103.139062,
+      "wall_median_ms": 0.183,
+      "kernel_median_ms": 0.13857600050000002,
+      "k1_median_ms": 0.10604799949999999,
+      "k2_median_ms": 0.013392,
+      "k3_median_ms": 0.012351999999999998
+    }
+  ]
+}
