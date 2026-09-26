@@ -156,7 +156,7 @@ Known limitations, in addition to those of run 1:
 
 | Boundary | CPU path | CUDA path |
 | --- | --- | --- |
-| Resident computation | Host input to host packed bytes | Device input to device packed bytes |
+| Resident computation | Host input to host packed bytes | Device input to device packed bytes (`resident` / `resident-graph`) |
 | GPU-origin, host-ready output | Full input D2H, then CPU compression | CUDA compression, then packed output D2H |
 | Host-origin, host-ready output | CPU compression | Input H2D, CUDA compression, packed output D2H |
 
@@ -173,7 +173,7 @@ Verify decoding outside the measured compression interval.
 - Add one pinned synthetic collection shaped like reference-model tensors without requiring training data.
 - Use 10 warmups and at least 30 measured repetitions per case.
 - Report median and interquartile range.
-- Run each path as a separate process in several trials with balanced path order (default 6 trials, every ordering of the three paths once), and report each case's per-trial medians and spread ratio. Within-process IQR understates run-to-run variation, especially for sub-millisecond GPU paths dominated by launch and synchronization latency.
+- Run each path as a separate process in several trials with balanced path order (default 24 trials, every ordering of the four paths once), and report each case's per-trial medians and spread ratio. Within-process IQR understates run-to-run variation, especially for sub-millisecond GPU paths dominated by launch and synchronization latency.
 
 ## Required provenance
 
