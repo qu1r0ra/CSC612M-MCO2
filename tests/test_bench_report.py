@@ -1,6 +1,6 @@
 import json
 
-from bench_report import FIGURES, find_crossovers, index_cases, render_report
+from bench_report import FIGURES, STAGE_PATHS, find_crossovers, index_cases, render_report
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -138,6 +138,7 @@ def test_render_report_writes_figures_and_table(tmp_path):
     assert "abc1234" in report
     assert report.count("| 2^") == 18  # one row per size, bit width and CUDA path
     assert "CUDA resident-graph" in report
+    assert "resident-graph" not in STAGE_PATHS
     header = next(line for line in report.splitlines() if line.startswith("| Elements"))
     for column in ("95% CI", "Direction", "Magnitude", "Rev 2"):
         assert column in header

@@ -158,6 +158,17 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert params["in_process_warmup_seconds"] == 0.01
     assert len(params["trial_orders"]) == 2
     assert params["trial_orders"][0] != params["trial_orders"][1]
+    # Check that DEFAULT_TRIALS generates all 24 distinct orderings for the 4 paths
+    all_orders = trial_orders(
+        [
+            ("cpu", "comparator", []),
+            ("cuda", "resident", []),
+            ("cuda", "resident-graph", []),
+            ("cuda", "host-origin", []),
+        ],
+        DEFAULT_TRIALS,
+    )
+    assert len({tuple(o) for o in all_orders}) == 24
     method = manifest["statistics_method"]
     assert method["spread_threshold"] == 1.25
     assert "linear" in method["quantile_method"]

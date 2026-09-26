@@ -130,6 +130,23 @@ def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, bounda
     assert payload["header_bytes"] == HEADER.size
     assert payload["payload_bytes"] == (len(values) + (bits == 4)) // (2 if bits == 4 else 1)
 
+    cpu_result, cpu_record = _compress(
+        tmp_path,
+        values,
+        backend="cpu",
+        seed=615,
+        extra=(
+            "--bits",
+            str(bits),
+            "--tensor-id",
+            "31",
+            "--invocation-id",
+            "41",
+        ),
+    )
+    assert cpu_result.returncode == 0, cpu_result.stderr
+    assert record_path.read_bytes() == cpu_record
+
     cuda_result, cuda_record = _compress(
         tmp_path,
         values,
@@ -182,6 +199,16 @@ def test_cuda_bench_resident_graph_empty_input(tmp_path, bits):
     assert payload["capture_ms"] >= 0
     assert payload["payload_bytes"] == 0
     assert payload["header_bytes"] == HEADER.size
+
+    cpu_result, cpu_record = _compress(
+        tmp_path,
+        values,
+        backend="cpu",
+        seed=615,
+        extra=("--bits", str(bits)),
+    )
+    assert cpu_result.returncode == 0, cpu_result.stderr
+    assert record_path.read_bytes() == cpu_record
 
     cuda_result, cuda_record = _compress(
         tmp_path,

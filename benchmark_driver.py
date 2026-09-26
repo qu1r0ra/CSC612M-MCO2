@@ -473,6 +473,7 @@ def verify_correctness(
     cuda_comp_path = tmp_dir / f"cuda_comp_b{bits}_n{count}.msq"
     cpu_bench_path = tmp_dir / f"cpu_bench_b{bits}_n{count}.msq"
     cuda_bench_res_path = tmp_dir / f"cuda_bench_res_b{bits}_n{count}.msq"
+    cuda_bench_graph_path = tmp_dir / f"cuda_bench_graph_b{bits}_n{count}.msq"
     cuda_bench_ho_path = tmp_dir / f"cuda_bench_ho_b{bits}_n{count}.msq"
 
     # 1. CPU compress
@@ -617,6 +618,42 @@ def verify_correctness(
                 "error_message": f"CUDA resident bench record failed: {res_cuda_res.stderr.strip()}",
             }
 
+        # CUDA bench resident-graph --record-output
+        res_cuda_graph = subprocess.run(
+            [
+                str(binary),
+                "bench",
+                "--input",
+                str(input_path),
+                "--record-output",
+                str(cuda_bench_graph_path),
+                "--seed",
+                str(seed),
+                "--bits",
+                str(bits),
+                "--tensor-id",
+                str(tensor_id),
+                "--invocation-id",
+                str(invocation_id),
+                "--backend",
+                "cuda",
+                "--boundary",
+                "resident-graph",
+                "--warmup",
+                "0",
+                "--reps",
+                "1",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res_cuda_graph.returncode != 0:
+            return False, {
+                "status": "failed",
+                "error_message": f"CUDA resident-graph bench record failed: {res_cuda_graph.stderr.strip()}",
+            }
+
         # CUDA bench host-origin --record-output
         res_cuda_ho = subprocess.run(
             [
@@ -655,10 +692,13 @@ def verify_correctness(
 
         cuda_comp_bytes = cuda_comp_path.read_bytes()
         cuda_res_bytes = cuda_bench_res_path.read_bytes()
+        cuda_graph_bytes = cuda_bench_graph_path.read_bytes()
         cuda_ho_bytes = cuda_bench_ho_path.read_bytes()
 
         byte_identical_to_compress = (
-            cuda_res_bytes == cuda_comp_bytes and cuda_ho_bytes == cuda_comp_bytes
+            cuda_res_bytes == cuda_comp_bytes
+            and cuda_graph_bytes == cuda_comp_bytes
+            and cuda_ho_bytes == cuda_comp_bytes
         )
         cpu_cuda_byte_identical = cpu_comp_bytes == cuda_comp_bytes
 
