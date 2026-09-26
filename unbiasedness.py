@@ -353,39 +353,44 @@ def main() -> None:
         results, plot_data = run_suite(
             binary, work_dir, args.seeds, tuple(args.backends), args.input_seed
         )
-    except (RuntimeError, OSError) as exc:
-        shutil.rmtree(target if created else work_dir, ignore_errors=True)
-        sys.exit(f"Unbiasedness suite failed: {exc}")
-    shutil.rmtree(work_dir, ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
-    plot_unbiasedness(plot_data, args.seeds, target / FIGURE)
-    reasons = []
-    if git_prov["git_dirty"]:
-        reasons.append("dirty git tree")
-    if args.seeds != SUITE_SEEDS:
-        reasons.append(f"{args.seeds} seeds instead of {SUITE_SEEDS}")
-    if tuple(args.backends) != BACKENDS:
-        reasons.append("not every backend")
-    report = {
-        "created_at_utc": now.isoformat(),
-        "git_provenance": git_prov,
-        "evidence": not reasons,
-        "non_evidence_reasons": reasons,
-        "seeds": args.seeds,
-        "seed_start": SEED_START,
-        "sigma": SIGMA,
-        "gate_rule": GATE_RULE,
-        "variance": "reported as the pooled ratio of observed to expected variance; not gated",
-        "numpy_version": np.__version__,
-        "figure": FIGURE,
-        "all_passed": all(r["passed"] for r in results),
-        "cases": results,
-    }
-    (target / RESULTS).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        plot_unbiasedness(plot_data, args.seeds, target / FIGURE)
+        reasons = []
+        if git_prov["git_dirty"]:
+            reasons.append("dirty git tree")
+        if args.seeds != SUITE_SEEDS:
+            reasons.append(f"{args.seeds} seeds instead of {SUITE_SEEDS}")
+        if tuple(args.backends) != BACKENDS:
+            reasons.append("not every backend")
+        report = {
+            "created_at_utc": now.isoformat(),
+            "git_provenance": git_prov,
+            "evidence": not reasons,
+            "non_evidence_reasons": reasons,
+            "seeds": args.seeds,
+            "seed_start": SEED_START,
+            "sigma": SIGMA,
+            "gate_rule": GATE_RULE,
+            "variance": "reported as the pooled ratio of observed to expected variance; not gated",
+            "numpy_version": np.__version__,
+            "figure": FIGURE,
+            "all_passed": all(r["passed"] for r in results),
+            "cases": results,
+        }
+        (target / RESULTS).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    except BaseException as exc:
+        # Leave no partial snapshot behind, so a rerun is not refused.
+        shutil.rmtree(target if created else work_dir, ignore_errors=True)
+        if isinstance(exc, (RuntimeError, OSError)):
+            sys.exit(f"Unbiasedness suite failed: {exc}")
+        raise
     for r in results:
+        ratio = r["variance_ratio_pooled"]
+        ratio_text = "n/a" if ratio is None else f"{ratio:.4f}"
         print(
             f"{r['input']:>32} {r['bits']}-bit  max err/bound {r['max_error_over_bound']:.3f}  "
-            f"var ratio {r['variance_ratio_pooled'] or 0.0:.4f}  "
+            f"var ratio {ratio_text}  "
             f"identical {r['backends_identical']}  "
             f"{'pass' if r['passed'] else 'FAIL'}"
         )

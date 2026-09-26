@@ -2035,7 +2035,7 @@ def sweep_matrix(
         "matrix_parameters": {
             "input_family": input_family,
             "counts": list(counts) if input_family != "model" else list(input_counts.values()),
-            "model_tensors": model_tensors,
+            "model_tensors": (model_tensors or "distinct") if input_family == "model" else None,
             "model_limit": model_limit,
             "bit_widths": list(bit_widths),
             "backends": list(backends),
