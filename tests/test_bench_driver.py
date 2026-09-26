@@ -1,4 +1,5 @@
 import csv
+import itertools
 import json
 import os
 import subprocess
@@ -14,19 +15,24 @@ from benchmark_driver import (
     EXCLUDED_LOGICAL_CPUS,
     PILOT_COUNTS,
     SUMMARY_FIELDS,
+    BenchPath,
     affinity_mask_excluding,
     bootstrap_speedup_ci,
     boundary_inversion,
+    build_paths,
     case_order,
     check_readiness,
     claim_support,
     compact_invocation_ids,
+    compare_case_group,
     compare_to_comparator,
     compute_case_statistics,
     get_process_affinity,
     in_process_warmups,
     run_benchmark_matrix,
+    trial_design,
     trial_orders,
+    williams_rows,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,8 +65,10 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "3.0"
-    assert manifest["transfer_policy"] == "pageable"
+    assert manifest["manifest_version"] == "3.1"
+    assert manifest["transfer_policies"] == ["pageable"]
+    assert manifest["matrix_parameters"]["paths"] == ["cpu-comparator"]
+    assert manifest["matrix_parameters"]["trial_design"] == "all-permutations"
     assert len(manifest["cases"]) == 2  # 1 size * 2 bit widths * 1 CPU path
     assert manifest["all_cases_passed"] is True
     assert manifest["gpu_state"]["warmup"] is None
@@ -77,6 +85,7 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
         "direction_supported",
         "magnitude_supported",
         "claim_supported_rev2",
+        "baselines",
     }
     assert manifest["statistics_method"]["bootstrap"]["seed"] == BOOTSTRAP_SEED
 
@@ -118,7 +127,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "3.0"
+    assert manifest["manifest_version"] == "3.1"
     assert "date" in manifest
     assert "created_at_utc" in manifest
     assert "git_provenance" in manifest
@@ -135,7 +144,8 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         assert key in manifest["build_flags"]
     assert "/DMCO2_ENABLE_CUDA" in manifest["build_flags"]["comparator_c"]
     assert "--fmad=false" in manifest["build_flags"]["cuda_nvcc"]
-    assert manifest["transfer_policy"] == "pageable"
+    assert manifest["transfer_policies"] == ["pageable"]
+    assert "transfer_policy" not in manifest["toolkit_and_driver"]
     gpu_state = manifest["gpu_state"]
     assert set(gpu_state) == {"note", "start", "warmup", "after_warmup", "end"}
     assert gpu_state["warmup"]["processes"] >= 1
@@ -159,15 +169,14 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert len(params["trial_orders"]) == 2
     assert params["trial_orders"][0] != params["trial_orders"][1]
     # Check that DEFAULT_TRIALS generates all 24 distinct orderings for the 4 paths
-    all_orders = trial_orders(
-        [
-            ("cpu", "comparator", []),
-            ("cuda", "resident", []),
-            ("cuda", "resident-graph", []),
-            ("cuda", "host-origin", []),
-        ],
-        DEFAULT_TRIALS,
-    )
+    assert params["paths"] == [
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cuda-host-origin",
+    ]
+    assert params["trial_design"] == "all-permutations"
+    all_orders = trial_orders(build_paths(["cpu", "cuda"]), DEFAULT_TRIALS)
     assert len({tuple(o) for o in all_orders}) == 24
     method = manifest["statistics_method"]
     assert method["spread_threshold"] == 1.25
@@ -221,7 +230,9 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
             "resident-graph",
             "host-origin",
         )
-        assert case_data["transfer_policy"] == "pageable"
+        expected_policy = "pageable" if case_data["timing_boundary"] == "host-origin" else "none"
+        assert case_data["transfer_policy"] == expected_policy
+        assert case_data["path_label"] == f"{case_data['backend']}-{case_data['timing_boundary']}"
         probe = case_data["in_process_warmup"]
         assert probe["target_seconds"] == 0.01
         assert probe["probe_warmup"] == 1
@@ -349,6 +360,94 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
 
 
 @CUDA_SKIP
+def test_driver_extension_matrix_adds_gpu_origin_and_pinned_paths(tmp_path):
+    snapshot_dir = tmp_path / "extension"
+    run_benchmark_matrix(
+        root=ROOT,
+        output_dir=snapshot_dir,
+        counts=[1024],
+        bit_widths=[8],
+        backends=["cpu", "cuda"],
+        warmups=1,
+        reps=2,
+        trials=18,
+        gpu_warmup_seconds=0.2,
+        case_warmup_seconds=0.1,
+        in_process_warmup_seconds=0.01,
+        allow_existing=True,
+        allow_dirty=True,
+        readiness_facts=READY_FACTS,
+        boundaries=["gpu-origin"],
+        transfer_policies=["pageable", "pinned"],
+    )
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    params = manifest["matrix_parameters"]
+    labels = [
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cuda-host-origin",
+        "cuda-host-origin-pinned",
+        "cpu-gpu-origin",
+        "cuda-gpu-origin",
+        "cpu-gpu-origin-pinned",
+        "cuda-gpu-origin-pinned",
+    ]
+    assert manifest["transfer_policies"] == ["pageable", "pinned"]
+    assert params["paths"] == labels
+    assert params["trial_design"] == "williams"
+    assert len(params["trial_orders"]) == 18
+    assert manifest["all_cases_passed"] is True
+    assert len(manifest["cases"]) == 9
+
+    cases = {}
+    for case_id in manifest["cases"]:
+        case = json.loads((snapshot_dir / f"{case_id}.json").read_text(encoding="utf-8"))
+        cases[case["path_label"]] = case
+    assert sorted(cases) == sorted(labels)
+    assert cases["cuda-host-origin-pinned"]["transfer_policy"] == "pinned"
+    assert cases["cuda-host-origin-pinned"]["timing_boundary"] == "host-origin"
+    assert cases["cpu-gpu-origin"]["case_id"] == "case_cpu_gpu-origin_bits8_n1024"
+    for case in cases.values():
+        assert case["correctness"]["status"] == "passed"
+        assert case["correctness"]["byte_identical_to_compress"] is True
+        assert len(case["trial_runs"]) == 18
+    assert set(cases["cpu-gpu-origin"]["stage_medians_ms"]) == {"d2h_ms", "cpu_ms", "other_ms"}
+    assert set(cases["cuda-gpu-origin-pinned"]["stage_medians_ms"]) == {
+        "k1_ms",
+        "k2_ms",
+        "k3_ms",
+        "d2h_ms",
+        "other_ms",
+    }
+    stats = {label: case["statistics"] for label, case in cases.items()}
+    assert stats["cuda-gpu-origin"]["baseline"] == "cpu-gpu-origin"
+    assert stats["cuda-gpu-origin-pinned"]["baseline"] == "cpu-gpu-origin-pinned"
+    assert stats["cpu-gpu-origin-pinned"]["baseline"] == "cpu-comparator"
+    assert "vs_pageable" in stats["cuda-host-origin-pinned"]
+    assert "vs_pageable" in stats["cpu-gpu-origin-pinned"]
+    assert stats["cuda-gpu-origin"]["vs_comparator"]["descriptive"] is True
+
+    with (snapshot_dir / manifest["summary_csv"]).open(encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    assert reader.fieldnames == SUMMARY_FIELDS
+    assert [row["path_label"] for row in rows] == labels
+    assert [row["transfer_policy"] for row in rows] == [
+        "none",
+        "none",
+        "none",
+        "pageable",
+        "pinned",
+        "pageable",
+        "pageable",
+        "pinned",
+        "pinned",
+    ]
+    assert rows[6]["baseline"] == "cpu-gpu-origin"
+
+
+@CUDA_SKIP
 def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
     snapshot_dir = tmp_path / "failed-snapshot"
     result_dir = run_benchmark_matrix(
@@ -457,12 +556,7 @@ def test_driver_refuses_dirty_tree(tmp_path):
 
 
 def test_trial_orders_cover_every_permutation_once():
-    paths = [
-        ("cpu", "comparator", []),
-        ("cuda", "resident", []),
-        ("cuda", "resident-graph", []),
-        ("cuda", "host-origin", []),
-    ]
+    paths = build_paths(["cpu", "cuda"])
     orders = trial_orders(paths, DEFAULT_TRIALS)
     assert DEFAULT_TRIALS == 24
     assert len({tuple(order) for order in orders}) == 24
@@ -546,6 +640,186 @@ def test_boundary_inversion_covers_every_resident_path():
     assert boundary_inversion({"resident": 3.0, "host-origin": 2.0}) is True
     assert boundary_inversion({"resident": 1.0, "resident-graph": 2.5, "host-origin": 2.0}) is True
     assert boundary_inversion({"resident": 1.0}) is False
+
+
+def test_boundary_inversion_nests_gpu_origin_between_resident_and_host_origin():
+    assert boundary_inversion({"resident": 1.0, "gpu-origin": 1.5, "host-origin": 2.0}) is False
+    assert boundary_inversion({"resident": 2.0, "gpu-origin": 1.5, "host-origin": 3.0}) is True
+    assert boundary_inversion({"resident": 1.0, "gpu-origin": 2.5, "host-origin": 2.0}) is True
+    # Each transfer policy is checked on its own group.
+    medians = {
+        "resident": 1.0,
+        "host-origin": 3.0,
+        "gpu-origin": 2.0,
+        "host-origin-pinned": 1.8,
+        "gpu-origin-pinned": 1.5,
+    }
+    assert boundary_inversion(medians) is False
+    assert boundary_inversion(medians, "-pinned") is False
+    medians["gpu-origin-pinned"] = 0.5
+    assert boundary_inversion(medians) is False
+    assert boundary_inversion(medians, "-pinned") is True
+
+
+def test_default_paths_are_the_revision_3_paths():
+    assert [path.label for path in build_paths(["cpu", "cuda"])] == [
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cuda-host-origin",
+    ]
+    assert [path.label for path in build_paths(["cpu"])] == ["cpu-comparator"]
+    assert BenchPath("cuda", "host-origin", "pageable").extra_args == [
+        "--boundary",
+        "host-origin",
+    ]
+    assert BenchPath("cpu", "comparator", "none").extra_args == []
+
+
+def test_extension_paths_follow_a_fixed_order():
+    paths = build_paths(["cpu", "cuda"], ["gpu-origin"], ["pinned", "pageable"])
+    assert [path.label for path in paths] == [
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cuda-host-origin",
+        "cuda-host-origin-pinned",
+        "cpu-gpu-origin",
+        "cuda-gpu-origin",
+        "cpu-gpu-origin-pinned",
+        "cuda-gpu-origin-pinned",
+    ]
+    assert paths[-1].extra_args == ["--boundary", "gpu-origin", "--transfer-policy", "pinned"]
+    assert paths[5].extra_args == ["--boundary", "gpu-origin"]
+
+
+@pytest.mark.parametrize(
+    ("backends", "boundaries", "policies", "message"),
+    [
+        (["cpu", "cuda"], [], ["pinned"], "include 'pageable'"),
+        (["cpu"], ["gpu-origin"], ["pageable"], "needs the 'cuda' backend"),
+        (["cpu"], [], ["pageable", "pinned"], "needs the 'cuda' backend"),
+        (["cpu", "cuda"], ["device-origin"], ["pageable"], "unknown extension boundaries"),
+    ],
+)
+def test_bad_path_selections_are_rejected(backends, boundaries, policies, message):
+    with pytest.raises(ValueError, match=message):
+        build_paths(backends, boundaries, policies)
+
+
+@pytest.mark.parametrize("n", [5, 6, 7, 8, 9])
+def test_williams_rows_balance_position_and_predecessor(n):
+    rows = williams_rows(n)
+    assert len(rows) == (n if n % 2 == 0 else 2 * n)
+    repeats = len(rows) // n
+    for row in rows:
+        assert sorted(row) == list(range(n))
+    for position in range(n):
+        assert sorted(row[position] for row in rows) == sorted(list(range(n)) * repeats)
+    pairs: dict[tuple[int, int], int] = {}
+    for row in rows:
+        for before, after in itertools.pairwise(row):
+            pairs[(before, after)] = pairs.get((before, after), 0) + 1
+    assert len(pairs) == n * (n - 1)
+    assert set(pairs.values()) == {repeats}
+
+
+def test_trial_design_switches_to_williams_above_four_paths():
+    paths = build_paths(["cpu", "cuda"], ["gpu-origin"], ["pageable", "pinned"])
+    assert trial_design(4) == "all-permutations"
+    assert trial_design(len(paths)) == "williams"
+    orders = trial_orders(paths, 36)
+    assert orders[:18] == williams_rows(9)
+    assert orders[18:] == williams_rows(9)
+    with pytest.raises(ValueError, match="multiple of 18"):
+        trial_orders(paths, 24)
+
+
+def test_extension_rejects_bad_trials_before_touching_disk(tmp_path):
+    with pytest.raises(ValueError, match="multiple of 18"):
+        run_benchmark_matrix(
+            root=ROOT,
+            output_dir=tmp_path / "out",
+            counts=[1024],
+            bit_widths=[8],
+            backends=["cpu", "cuda"],
+            trials=24,
+            boundaries=["gpu-origin"],
+            transfer_policies=["pageable", "pinned"],
+            readiness_facts=READY_FACTS,
+        )
+    assert not (tmp_path / "out").exists()
+
+
+def fake_stats(median: float) -> dict:
+    return {
+        "median_ms": median,
+        "trial_median_min_ms": median * 0.99,
+        "trial_median_max_ms": median * 1.01,
+        "trial_medians_ms": [median * 0.99, median, median * 1.01],
+        "stable": True,
+        "unstable_rev2": False,
+    }
+
+
+def test_case_group_uses_policy_matched_baselines_and_groups():
+    paths = build_paths(["cpu", "cuda"], ["gpu-origin"], ["pageable", "pinned"])
+    medians = {
+        "cpu-comparator": 10.0,
+        "cuda-resident": 1.0,
+        "cuda-resident-graph": 0.8,
+        "cuda-host-origin": 4.0,
+        "cuda-host-origin-pinned": 3.0,
+        "cpu-gpu-origin": 12.0,
+        "cuda-gpu-origin": 2.0,
+        "cpu-gpu-origin-pinned": 11.0,
+        # Faster than resident: an inversion in the pinned group only.
+        "cuda-gpu-origin-pinned": 0.5,
+    }
+    cases = [{"statistics": fake_stats(medians[path.label])} for path in paths]
+    compare_case_group(cases, paths)
+    stats = {path.label: case["statistics"] for path, case in zip(paths, cases, strict=True)}
+
+    assert stats["cpu-comparator"]["verdict"] == "comparator"
+    assert stats["cuda-host-origin"]["baseline"] == "cpu-comparator"
+    assert stats["cpu-gpu-origin"]["baseline"] == "cpu-comparator"
+    assert stats["cuda-gpu-origin"]["baseline"] == "cpu-gpu-origin"
+    assert stats["cuda-gpu-origin-pinned"]["baseline"] == "cpu-gpu-origin-pinned"
+    assert stats["cuda-gpu-origin"]["speedup_vs_cpu"] == 6.0
+    # A CPU path that adds a download must not beat the comparator; it does not here.
+    assert stats["cpu-gpu-origin"]["verdict"] == "slower"
+    assert stats["cpu-gpu-origin"]["boundary_inversion"] is False
+
+    for label in ("cuda-resident", "cuda-host-origin", "cuda-gpu-origin"):
+        assert stats[label]["boundary_inversion"] is False
+        assert stats[label]["direction_supported"] is True
+    for label in ("cuda-host-origin-pinned", "cuda-gpu-origin-pinned"):
+        assert stats[label]["boundary_inversion"] is True
+        assert stats[label]["direction_supported"] is False
+
+    vs_pageable = stats["cuda-host-origin-pinned"]["vs_pageable"]
+    assert vs_pageable["speedup_vs_pageable"] == 4.0 / 3.0
+    assert vs_pageable["verdict"] == "faster"
+    assert vs_pageable["boundary_inversion"] is True
+    assert vs_pageable["direction_supported"] is False
+    assert "vs_pageable" not in stats["cuda-host-origin"]
+
+    vs_comparator = stats["cuda-gpu-origin"]["vs_comparator"]
+    assert vs_comparator["speedup_vs_comparator"] == 5.0
+    assert vs_comparator["descriptive"] is True
+    assert "direction_supported" not in vs_comparator
+    assert stats["cuda-resident-graph"]["vs_resident"]["boundary_inversion"] is False
+
+
+def test_cpu_gpu_origin_faster_than_the_comparator_is_an_inversion():
+    paths = build_paths(["cpu", "cuda"], ["gpu-origin"], ["pageable"])
+    medians = [10.0, 1.0, 0.8, 4.0, 9.0, 2.0]
+    cases = [{"statistics": fake_stats(m)} for m in medians]
+    compare_case_group(cases, paths)
+    stats = {path.label: case["statistics"] for path, case in zip(paths, cases, strict=True)}
+    assert stats["cpu-gpu-origin"]["boundary_inversion"] is True
+    assert stats["cuda-gpu-origin"]["boundary_inversion"] is True
+    assert stats["cuda-host-origin"]["boundary_inversion"] is False
 
 
 READY_FACTS = {

@@ -25,13 +25,25 @@ typedef struct {
     double k3_ms;
     double h2d_ms;
     double d2h_ms;
+    double cpu_ms;
 } mco2_bench_sample;
 
 typedef enum {
     MCO2_CUDA_BENCH_RESIDENT = 0,
     MCO2_CUDA_BENCH_HOST_ORIGIN = 1,
-    MCO2_CUDA_BENCH_RESIDENT_GRAPH = 2
+    MCO2_CUDA_BENCH_RESIDENT_GRAPH = 2,
+    MCO2_CUDA_BENCH_GPU_ORIGIN = 3
 } mco2_cuda_bench_boundary;
+
+/* Host buffers that a timed transfer touches: malloc or cudaHostAlloc. */
+typedef enum {
+    MCO2_CUDA_TRANSFER_PAGEABLE = 0,
+    MCO2_CUDA_TRANSFER_PINNED = 1
+} mco2_cuda_transfer_policy;
+
+/* Device-resident input for the CPU GPU-origin path, which downloads the input
+   to a host landing buffer before each CPU compression. */
+typedef struct mco2_cuda_staging mco2_cuda_staging;
 
 #ifdef __cplusplus
 extern "C" {
@@ -112,9 +124,24 @@ mco2_q8_status mco2_cuda_bench(
     uint64_t tensor_id, uint64_t base_invocation_id,
     int prescribed_scale_seen, float prescribed_scale,
     const uint32_t *prescribed_words, int block_size, int grid_size,
-    mco2_cuda_bench_boundary boundary, uint64_t warmups, uint64_t reps,
+    mco2_cuda_bench_boundary boundary,
+    mco2_cuda_transfer_policy transfer_policy, uint64_t warmups, uint64_t reps,
     uint8_t *base_payload, float *base_scale, mco2_bench_sample *samples,
     double *capture_ms);
+
+/* Uploads `values` to the device and allocates the landing buffer, outside
+   timing. The landing buffer holds no input until the first download. */
+mco2_q8_status mco2_cuda_staging_create(const float *values, size_t count,
+                                        mco2_cuda_transfer_policy transfer_policy,
+                                        mco2_cuda_staging **staging);
+
+/* Copies the device input into the landing buffer and waits for it. The copy
+   time comes from CUDA events around the copy. */
+mco2_q8_status mco2_cuda_staging_download(mco2_cuda_staging *staging,
+                                          const float **landing,
+                                          double *d2h_ms);
+
+void mco2_cuda_staging_destroy(mco2_cuda_staging *staging);
 
 #ifdef __cplusplus
 }

@@ -195,6 +195,17 @@ def test_crossover_needs_direction_support_on_both_sides():
     }
 
 
+def test_extension_cases_stay_out_of_the_revision_3_index():
+    pageable = make_case(1024, 8, "host-origin", 2.0, "faster", True)
+    pageable["transfer_policy"] = "pageable"
+    pinned = make_case(1024, 8, "host-origin", 1.0, "faster", True)
+    pinned["transfer_policy"] = "pinned"
+    gpu_origin = make_case(1024, 8, "gpu-origin", 1.5, "faster", True)
+    gpu_origin["transfer_policy"] = "pageable"
+    indexed = index_cases([pageable, pinned, gpu_origin])
+    assert indexed == {(1024, 8, "host-origin"): pageable}
+
+
 def test_rev2_snapshot_fields_still_render(tmp_path):
     # Frozen revision 2 snapshots carry claim_supported and no CI or direction fields.
     cases = sweep_cases()

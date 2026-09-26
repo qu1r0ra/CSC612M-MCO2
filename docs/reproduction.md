@@ -172,6 +172,9 @@ just bench-matrix
 # Course sizes only, with the sweep's warm-up and random case order
 just bench-matrix --counts 1024 16384 262144 4194304
 
+# Publication extension: GPU-origin paths and pinned transfers (nine paths, trials a multiple of 18)
+just bench-matrix --boundaries gpu-origin --transfer-policies pageable pinned --trials 18
+
 # Render F1-F4 and report.md (crossover, T1) into a snapshot or pilot folder
 just figures results/<date>-<short_rev>
 ```
@@ -179,9 +182,9 @@ just figures results/<date>-<short_rev>
 ### Inspecting results and provenance
 
 Snapshots are stored in `results/<date>-<short_rev>/`:
-- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policy (`pageable`), GPU state before and after the warm-up and after the run, the case order and its seed, trial orders, the statistics method and claim rule, input hashes, and from revision 3 the affinity mask, the readiness facts, the power plan and HAGS state, and `evidence` with its `non_evidence_reasons`.
-- `summary.csv`: Per-case pooled median and IQR, trial-median range, `spread_ratio` and `spread_p90_p10`, `speedup_vs_c` with its range, bootstrap CI and verdict, and the `stable`, `unstable_rev2`, `boundary_inversion`, `direction_supported`, `magnitude_supported`, and `claim_supported_rev2` flags. Snapshots before revision 3 carry `unstable` and `claim_supported` instead.
-- `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`, and for host-origin `h2d_ms`, `d2h_ms`) with each trial's path order and invocation identifiers, the case's `execution_index`, pooled samples, statistics, `stage_medians_ms`, configuration, and correctness validation results.
+- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policies (`transfer_policies`, `["pageable"]` by default), the measured `paths` and `trial_design` (from manifest 3.1), GPU state before and after the warm-up and after the run, the case order and its seed, trial orders, the statistics method and claim rule, input hashes, and from revision 3 the affinity mask, the readiness facts, the power plan and HAGS state, and `evidence` with its `non_evidence_reasons`.
+- `summary.csv`: Per-case `boundary`, `transfer_policy`, `path_label`, and `baseline`, pooled median and IQR, trial-median range, `spread_ratio` and `spread_p90_p10`, `speedup_vs_c` with its range, bootstrap CI and verdict, and the `stable`, `unstable_rev2`, `boundary_inversion`, `direction_supported`, `magnitude_supported`, and `claim_supported_rev2` flags. Snapshots before revision 3 carry `unstable` and `claim_supported` instead.
+- `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`, for host-origin `h2d_ms` and `d2h_ms`, for GPU-origin `d2h_ms`, and for CPU GPU-origin `cpu_ms`) with each trial's path order and invocation identifiers, the case's `execution_index`, pooled samples, statistics, `stage_medians_ms`, configuration, and correctness validation results.
 - `msvc_vectorization_report.txt`: MSVC `/Qvec-report:2` diagnostics from recompiling the comparator sources with the exact benchmarked host flags; the command is at the top of the file.
 
 ```powershell

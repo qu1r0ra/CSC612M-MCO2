@@ -239,6 +239,24 @@ Known limitations (the evidence behind them is in the revision 3 [diagnosis](#di
 - **Core 0 cause untested:** core 0 was excluded because it measured about 30% slower. Why it is slower was not tested.
 - **One machine, one sweep:** every result comes from one laptop, one reboot, and one sweep, and describes that machine under those conditions.
 
+### Publication matrix extension
+
+This section adds paths to revision 3; it is not a new revision. The revision 3 defaults, claim rules, thresholds, readiness check, and pilot rule are unchanged, and the revision 3 snapshots and their results stand as recorded. A run with the default options measures exactly the revision 3 paths and records the same case identifiers. Spec: [qu1r0ra/CSC612M-MCO2-Paper#20](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/20); decision record: [ADR 0003](adr/0003-gpu-origin-boundary-and-transfer-policy.md). The technical contract holds the exact timing windows and rules.
+
+- **Opt-in paths.** `--boundaries gpu-origin` adds the GPU-origin, host-ready boundary for both backends. `--transfer-policies pageable pinned` adds page-locked host buffers for every timed transfer. With both, a cell has nine paths:
+  - `cpu-comparator`, `cuda-resident`, `cuda-resident-graph`, `cuda-host-origin` (the revision 3 paths);
+  - `cuda-host-origin-pinned`;
+  - `cpu-gpu-origin` and `cuda-gpu-origin`, then their `-pinned` variants.
+
+  `resident-graph` has no GPU-origin variant: graph variants of other paths stay out of scope, as in the revision 3 spec.
+- **GPU-origin.** The input starts on the device, uploaded once outside timing. The CPU path times a full input D2H into a host landing buffer and then CPU compression; the CUDA path times K1–K3 and then the packed output D2H. `d2h_ms` and the CPU path's `cpu_ms` diagnose where time goes; no claim uses them.
+- **Transfer policy.** `pinned` allocates every host buffer that a timed copy touches with `cudaHostAlloc`. Resident paths and the comparator have no timed transfer and record `none`.
+- **Baselines.** Every path is compared with a CPU baseline of the same transfer policy: the comparator for resident, host-origin and CPU GPU-origin paths, and CPU GPU-origin for CUDA GPU-origin. Pinned paths also report the comparison with their pageable twin (`vs_pageable`). CUDA GPU-origin also reports its ratio to the comparator (`vs_comparator`), which is descriptive and supports no claim.
+- **Inversion.** CUDA boundaries nest by work: resident ⊂ GPU-origin ⊂ host-origin, checked within each policy. CPU GPU-origin must not beat the comparator. An inversion vetoes the direction and magnitude claims of every CUDA path in the inverted policy group (resident paths sit in the pageable group), as in revision 3; a CPU GPU-origin inversion vetoes that path and its CUDA twin.
+- **Trial order.** Above four paths the driver uses a Williams design instead of all orderings, since 9! orderings cannot run. With nine paths one design is 18 orders, so `--trials` must be a multiple of 18; the extension default for #25 is set with that sweep. The manifest (version 3.1) records `paths`, `trial_design`, and `transfer_policies`.
+- **Correctness.** Each path's benchmark record, under each boundary and policy, must be byte-identical to `mco2 compress` before timing.
+- **Evidence status.** Issue #20 adds tests and a tiny non-evidence matrix only. Extension sweeps feed the publication matrix of issue #25 and follow the pilot rule above.
+
 ## Comparison backends
 
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.
@@ -266,7 +284,7 @@ Verify decoding outside the measured compression interval.
 - Add one pinned synthetic collection shaped like reference-model tensors without requiring training data.
 - Use 10 warmups and at least 30 measured repetitions per case.
 - Report median and interquartile range.
-- Run each path as a separate process in several trials with balanced path order (default 24 trials, every ordering of the four paths once), and report each case's per-trial medians and spread ratio. Within-process IQR understates run-to-run variation, especially for sub-millisecond GPU paths dominated by launch and synchronization latency.
+- Run each path as a separate process in several trials with balanced path order (default 24 trials, every ordering of the four paths once; a Williams design for the extension's larger path sets), and report each case's per-trial medians and spread ratio. Within-process IQR understates run-to-run variation, especially for sub-millisecond GPU paths dominated by launch and synchronization latency.
 
 ## Required provenance
 

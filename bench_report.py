@@ -66,11 +66,18 @@ def load_snapshot(snapshot: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]
 
 
 def index_cases(cases: list[dict[str, Any]]) -> dict[tuple[int, int, str], dict[str, Any]]:
-    """Passing cases keyed by (count, bits, timing boundary)."""
+    """Passing revision 3 cases keyed by (count, bits, timing boundary).
+
+    Publication extension paths (gpu-origin, pinned) share a timing boundary with a
+    revision 3 path or have none here, so they stay out of F1-F4 and the crossovers.
+    """
     return {
         (c["count"], c["bits"], c["timing_boundary"]): c
         for c in cases
-        if c["correctness"]["status"] == "passed" and c["statistics"] is not None
+        if c["correctness"]["status"] == "passed"
+        and c["statistics"] is not None
+        and c["timing_boundary"] in PATHS
+        and c.get("transfer_policy") != "pinned"
     }
 
 

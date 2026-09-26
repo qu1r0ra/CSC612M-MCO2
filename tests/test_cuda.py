@@ -95,6 +95,9 @@ def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, bounda
     payload = json.loads(result.stdout)
     assert payload["configuration"]["backend"] == "cuda"
     assert payload["configuration"]["boundary"] == boundary
+    assert payload["configuration"]["transfer_policy"] == (
+        "pageable" if boundary == "host-origin" else "none"
+    )
     assert payload["configuration"]["bits"] == bits
     assert payload["configuration"]["warmup"] == 1
     assert payload["configuration"]["reps"] == 2
@@ -165,6 +168,138 @@ def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, bounda
     )
     assert cuda_result.returncode == 0, cuda_result.stderr
     assert record_path.read_bytes() == cuda_record
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+@pytest.mark.parametrize(
+    ("backend", "boundary", "policy"),
+    [
+        ("cuda", "host-origin", "pinned"),
+        ("cuda", "gpu-origin", "pageable"),
+        ("cuda", "gpu-origin", "pinned"),
+        ("cpu", "gpu-origin", "pageable"),
+        ("cpu", "gpu-origin", "pinned"),
+    ],
+)
+def test_publication_extension_paths_time_their_copies_and_match_compress(
+    tmp_path, bits, backend, boundary, policy
+):
+    values = np.random.default_rng(2020).normal(size=1025).astype(np.float32)
+    input_path = tmp_path / "input.f32"
+    record_path = tmp_path / "bench.msq"
+    _write_values(input_path, values)
+
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(record_path),
+        "--seed",
+        "620",
+        "--backend",
+        backend,
+        "--boundary",
+        boundary,
+        "--transfer-policy",
+        policy,
+        "--bits",
+        str(bits),
+        "--tensor-id",
+        "3",
+        "--invocation-id",
+        "5",
+        "--warmup",
+        "1",
+        "--reps",
+        "3",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    configuration = payload["configuration"]
+    assert configuration["backend"] == backend
+    assert configuration["boundary"] == boundary
+    assert configuration["transfer_policy"] == policy
+    assert configuration["repetition_invocation_ids"] == [5, 6, 7]
+
+    if backend == "cpu":
+        stage_keys = ("d2h_ms", "cpu_ms")
+        absent = ("k1_ms", "k2_ms", "k3_ms", "h2d_ms")
+    elif boundary == "gpu-origin":
+        stage_keys = ("k1_ms", "k2_ms", "k3_ms", "d2h_ms")
+        absent = ("h2d_ms", "cpu_ms")
+    else:
+        stage_keys = ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms")
+        absent = ("cpu_ms",)
+    for key in stage_keys:
+        assert len(payload[key]) == 3
+        assert all(sample >= 0 for sample in payload[key])
+    assert all(sample > 0 for sample in payload["d2h_ms"])
+    for key in absent:
+        assert key not in payload
+    for index, wall in enumerate(payload["samples_ms"]):
+        assert sum(payload[key][index] for key in stage_keys) <= wall
+
+    # Every path, on either backend, reproduces the compress record bit for bit.
+    extra = ("--bits", str(bits), "--tensor-id", "3", "--invocation-id", "5")
+    cpu_result, cpu_record = _compress(tmp_path, values, backend="cpu", seed=620, extra=extra)
+    assert cpu_result.returncode == 0, cpu_result.stderr
+    assert record_path.read_bytes() == cpu_record
+
+
+@pytest.mark.parametrize(
+    ("backend", "extra"),
+    [
+        ("cuda", ("--boundary", "resident", "--transfer-policy", "pinned")),
+        ("cuda", ("--boundary", "resident-graph", "--transfer-policy", "pageable")),
+        ("cuda", ("--boundary", "gpu-origin", "--transfer-policy", "mapped")),
+        ("cpu", ("--transfer-policy", "pinned")),
+        ("cpu", ("--boundary", "gpu-origin", "--block-size", "128")),
+    ],
+)
+def test_transfer_policy_needs_a_transfer_boundary(tmp_path, backend, extra):
+    input_path = tmp_path / "input.f32"
+    _write_values(input_path, np.ones(3, dtype=np.float32))
+    result = _run("bench", "--input", str(input_path), "--seed", "1", "--backend", backend, *extra)
+
+    assert result.returncode != 0
+    assert "invalid argument" in result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize("backend", ["cpu", "cuda"])
+@pytest.mark.parametrize("policy", ["pageable", "pinned"])
+def test_gpu_origin_handles_empty_input(tmp_path, backend, policy):
+    input_path = tmp_path / "input.f32"
+    record_path = tmp_path / "bench.msq"
+    input_path.write_bytes(b"")
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(record_path),
+        "--seed",
+        "1",
+        "--backend",
+        backend,
+        "--boundary",
+        "gpu-origin",
+        "--transfer-policy",
+        policy,
+        "--warmup",
+        "0",
+        "--reps",
+        "2",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["configuration"]["count"] == 0
+    cpu_result, cpu_record = _compress(tmp_path, np.zeros(0, dtype=np.float32), backend="cpu")
+    assert cpu_result.returncode == 0, cpu_result.stderr
+    assert record_path.read_bytes() == cpu_record
 
 
 @pytest.mark.parametrize("bits", [4, 8])

@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -49,10 +50,103 @@ GPU_WARMUP_REPS = 100
 # processes does not carry over to the timed one (issue #26 diagnosis).
 DEFAULT_IN_PROCESS_WARMUP_SECONDS = 1.0
 WARMUP_PROBE_REPS = 3
-STAGE_KEYS = ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms")
+STAGE_KEYS = ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms", "cpu_ms")
 # Twenty-four trials run every ordering of the four paths once, balancing both the
 # position of each path and the path that precedes it.
 DEFAULT_TRIALS = 24
+# Publication matrix extension (issue #20): opt-in boundaries and transfer policies.
+# The four revision 3 paths stay the default; the extension adds paths, never changes them.
+EXTENSION_BOUNDARIES = ("gpu-origin",)
+TRANSFER_POLICIES = ("pageable", "pinned")
+# All orderings stay affordable up to four paths; beyond that a Williams design
+# balances position and immediate predecessor in n (even) or 2n (odd) rows.
+MAX_PERMUTATION_PATHS = 4
+
+
+@dataclass(frozen=True)
+class BenchPath:
+    """One timed path: a backend, its timing boundary, and its host transfer policy.
+
+    The comparator is the CPU host-host path. Resident paths move no host data, so
+    their policy is "none"; transfer boundaries carry "pageable" or "pinned".
+    """
+
+    backend: str
+    boundary: str
+    policy: str
+
+    @property
+    def key(self) -> str:
+        return f"{self.boundary}-pinned" if self.policy == "pinned" else self.boundary
+
+    @property
+    def label(self) -> str:
+        return f"{self.backend}-{self.key}"
+
+    @property
+    def extra_args(self) -> list[str]:
+        args = [] if self.boundary == "comparator" else ["--boundary", self.boundary]
+        if self.policy == "pinned":
+            args += ["--transfer-policy", "pinned"]
+        return args
+
+
+def build_paths(
+    backends: Sequence[str],
+    boundaries: Sequence[str] = (),
+    transfer_policies: Sequence[str] = ("pageable",),
+) -> list[BenchPath]:
+    """The revision 3 paths, then the selected extension paths in a fixed order."""
+    unknown = sorted(set(boundaries) - set(EXTENSION_BOUNDARIES))
+    if unknown:
+        raise ValueError(f"unknown extension boundaries: {unknown}")
+    unknown = sorted(set(transfer_policies) - set(TRANSFER_POLICIES))
+    if unknown:
+        raise ValueError(f"unknown transfer policies: {unknown}")
+    if "pageable" not in transfer_policies:
+        raise ValueError("pinned paths are compared with their pageable twins; include 'pageable'")
+    extended = bool(boundaries) or "pinned" in transfer_policies
+    if extended and "cuda" not in backends:
+        raise ValueError("the publication extension needs the 'cuda' backend")
+    policies = [policy for policy in TRANSFER_POLICIES if policy in transfer_policies]
+
+    paths = [BenchPath("cpu", "comparator", "none")]
+    if "cuda" in backends:
+        paths += [
+            BenchPath("cuda", "resident", "none"),
+            BenchPath("cuda", "resident-graph", "none"),
+            BenchPath("cuda", "host-origin", "pageable"),
+        ]
+        if "pinned" in policies:
+            paths.append(BenchPath("cuda", "host-origin", "pinned"))
+    if "gpu-origin" in boundaries:
+        for policy in policies:
+            paths += [
+                BenchPath("cpu", "gpu-origin", policy),
+                BenchPath("cuda", "gpu-origin", policy),
+            ]
+    return paths
+
+
+def trial_design(path_count: int) -> str:
+    return "all-permutations" if path_count <= MAX_PERMUTATION_PATHS else "williams"
+
+
+def williams_rows(n: int) -> list[list[int]]:
+    """Williams balanced Latin square: each path once per position and after every other."""
+    first = [0]
+    low, high = 1, n - 1
+    while len(first) < n:
+        first.append(low)
+        low += 1
+        if len(first) < n:
+            first.append(high)
+            high -= 1
+    rows = [[(x + i) % n for x in first] for i in range(n)]
+    if n % 2 == 1:
+        rows += [list(reversed(row)) for row in rows]
+    return rows
+
 
 # Claim rules, fixed before any snapshot is generated (protocol revision 3).
 # A direction claim (faster or slower) needs a conservative verdict and no
@@ -67,6 +161,13 @@ QUANTILE_METHOD = "linear"
 BOOTSTRAP_RESAMPLES = 10_000
 BOOTSTRAP_SEED = 31
 BOOTSTRAP_LEVEL = 0.95
+BASELINE_RULE = (
+    "every path is measured against a policy-matched CPU baseline: resident, resident-graph, "
+    "host-origin, and CPU gpu-origin paths against the CPU comparator (host-host); CUDA "
+    "gpu-origin against CPU gpu-origin of the same transfer policy. Pinned paths add "
+    "vs_pageable against their pageable twin; CUDA gpu-origin adds a descriptive "
+    "vs_comparator with no claim flags"
+)
 VERDICT_RULE = (
     "verdict is 'faster' when baseline trial-median minimum / candidate trial-median maximum "
     "> 1, 'slower' when baseline trial-median maximum / candidate trial-median minimum < 1, "
@@ -351,7 +452,6 @@ def collect_hardware_and_toolchain(root: Path) -> dict[str, Any]:
             "driver_version": driver_version,
             "c_compiler": c_compiler,
         },
-        "transfer_policy": "pageable",
     }
 
 
@@ -444,6 +544,7 @@ def verify_correctness(
     bits: int,
     *,
     backends: Sequence[str] = ("cpu", "cuda"),
+    paths: Sequence[BenchPath] | None = None,
     seed: int = DEFAULT_COMPRESSION_SEED,
     tensor_id: int = 0,
     invocation_id: int = 0,
@@ -453,11 +554,13 @@ def verify_correctness(
     """Gating check before timing each case.
 
     Checks:
-    1. CPU bench record == CPU compress record.
-    2. If CUDA backend enabled: CUDA bench record == CUDA compress record
-       and CPU record == CUDA record bit-for-bit.
-    3. Decoded record satisfies Layer 2 mathematical bounds against FP64 oracle.
+    1. CPU comparator bench record == CPU compress record.
+    2. If CUDA backend enabled: CPU record == CUDA compress record bit-for-bit.
+    3. Every other selected path's bench record == its backend's compress record.
+    4. Decoded record satisfies Layer 2 mathematical bounds against FP64 oracle.
     """
+    if paths is None:
+        paths = build_paths(backends)
     if force_fail:
         return False, {
             "status": "failed",
@@ -472,9 +575,6 @@ def verify_correctness(
     cpu_comp_path = tmp_dir / f"cpu_comp_b{bits}_n{count}.msq"
     cuda_comp_path = tmp_dir / f"cuda_comp_b{bits}_n{count}.msq"
     cpu_bench_path = tmp_dir / f"cpu_bench_b{bits}_n{count}.msq"
-    cuda_bench_res_path = tmp_dir / f"cuda_bench_res_b{bits}_n{count}.msq"
-    cuda_bench_graph_path = tmp_dir / f"cuda_bench_graph_b{bits}_n{count}.msq"
-    cuda_bench_ho_path = tmp_dir / f"cuda_bench_ho_b{bits}_n{count}.msq"
 
     # 1. CPU compress
     res_cpu_comp = subprocess.run(
@@ -582,12 +682,12 @@ def verify_correctness(
                 "error_message": f"CUDA compress failed: {res_cuda_comp.stderr.strip()}",
             }
 
-        cuda_bench_paths = {
-            "resident": cuda_bench_res_path,
-            "resident-graph": cuda_bench_graph_path,
-            "host-origin": cuda_bench_ho_path,
+        cuda_bench_paths: dict[BenchPath, Path] = {
+            path: tmp_dir / f"bench_{path.label}_b{bits}_n{count}.msq"
+            for path in paths
+            if path.boundary != "comparator"
         }
-        for boundary, record_path in cuda_bench_paths.items():
+        for path, record_path in cuda_bench_paths.items():
             res_cuda_bench = subprocess.run(
                 [
                     str(binary),
@@ -605,9 +705,8 @@ def verify_correctness(
                     "--invocation-id",
                     str(invocation_id),
                     "--backend",
-                    "cuda",
-                    "--boundary",
-                    boundary,
+                    path.backend,
+                    *path.extra_args,
                     "--warmup",
                     "0",
                     "--reps",
@@ -618,16 +717,20 @@ def verify_correctness(
                 check=False,
             )
             if res_cuda_bench.returncode != 0:
+                name = "CUDA " + path.key if path.backend == "cuda" else path.label
                 return False, {
                     "status": "failed",
                     "error_message": (
-                        f"CUDA {boundary} bench record failed: {res_cuda_bench.stderr.strip()}"
+                        f"{name} bench record failed: {res_cuda_bench.stderr.strip()}"
                     ),
                 }
 
         cuda_comp_bytes = cuda_comp_path.read_bytes()
+        # Each path must reproduce its own backend's compress record.
         byte_identical_to_compress = all(
-            path.read_bytes() == cuda_comp_bytes for path in cuda_bench_paths.values()
+            record_path.read_bytes()
+            == (cuda_comp_bytes if path.backend == "cuda" else cpu_comp_bytes)
+            for path, record_path in cuda_bench_paths.items()
         )
         cpu_cuda_byte_identical = cpu_comp_bytes == cuda_comp_bytes
 
@@ -834,16 +937,121 @@ def claim_support(
     }
 
 
-def boundary_inversion(medians: dict[str, float]) -> bool:
-    """Host-origin adds copies to a resident path, so it must not be faster than one."""
-    host_origin = medians.get("host-origin")
-    if host_origin is None:
-        return False
-    return any(
-        host_origin < median
-        for boundary, median in medians.items()
-        if boundary.startswith("resident")
-    )
+def baseline_label(path: BenchPath) -> str | None:
+    """The policy-matched CPU path each path is measured against."""
+    if path.boundary == "comparator":
+        return None
+    if path.backend == "cuda" and path.boundary == "gpu-origin":
+        return BenchPath("cpu", "gpu-origin", path.policy).label
+    return "cpu-comparator"
+
+
+def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPath]) -> None:
+    """Attach verdicts, inversion flags, and claims to one (count, bits) group of cases."""
+    by_label = {path.label: case for path, case in zip(paths, cases, strict=True)}
+    stats_by_label = {label: case["statistics"] for label, case in by_label.items()}
+    cuda_medians = {
+        path.key: stats_by_label[path.label]["median_ms"]
+        for path in paths
+        if path.backend == "cuda" and stats_by_label[path.label] is not None
+    }
+    comparator = stats_by_label["cpu-comparator"]
+    # CPU gpu-origin adds a full input download to the comparator, so it must not beat it.
+    cpu_inversion = {
+        policy: (
+            stats_by_label.get(f"cpu-gpu-origin{suffix}") is not None
+            and comparator is not None
+            and stats_by_label[f"cpu-gpu-origin{suffix}"]["median_ms"] < comparator["median_ms"]
+        )
+        for policy, suffix in (("pageable", ""), ("pinned", "-pinned"))
+    }
+    cuda_inversion = {
+        "pageable": boundary_inversion(cuda_medians),
+        "pinned": boundary_inversion(cuda_medians, "-pinned"),
+    }
+
+    for path in paths:
+        stats = stats_by_label[path.label]
+        if stats is None:
+            continue
+        if path.boundary == "comparator":
+            stats.update(
+                {
+                    "baseline": "",
+                    "speedup_vs_cpu": 1.0,
+                    "speedup_low": 1.0,
+                    "speedup_high": 1.0,
+                    "speedup_ci_low": 1.0,
+                    "speedup_ci_high": 1.0,
+                    "verdict": "comparator",
+                    "boundary_inversion": False,
+                    "direction_supported": None,
+                    "magnitude_supported": None,
+                    "claim_supported_rev2": None,
+                }
+            )
+            continue
+        group = "pinned" if path.policy == "pinned" else "pageable"
+        if path.backend == "cpu":
+            inversion = cpu_inversion[group]
+        elif path.boundary == "gpu-origin":
+            inversion = cuda_inversion[group] or cpu_inversion[group]
+        else:
+            inversion = cuda_inversion[group]
+        base_label = baseline_label(path)
+        base_stats = stats_by_label.get(base_label)
+        if base_stats is None:
+            continue
+        stats["baseline"] = base_label
+        stats.update(compare_to_comparator(base_stats, stats))
+        stats["boundary_inversion"] = inversion
+        stats.update(claim_support(stats["verdict"], inversion, base_stats, stats))
+
+        if path.policy == "pinned":
+            twin = stats_by_label.get(BenchPath(path.backend, path.boundary, "pageable").label)
+            if twin is not None:
+                vs_pageable = compare_speedup(twin, stats, "speedup_vs_pageable")
+                stats["vs_pageable"] = {
+                    **vs_pageable,
+                    "boundary_inversion": inversion,
+                    **claim_support(vs_pageable["verdict"], inversion, twin, stats),
+                }
+        if path.backend == "cuda" and path.boundary == "gpu-origin" and comparator is not None:
+            # Descriptive only: the two sides start from different data locations.
+            stats["vs_comparator"] = {
+                **compare_speedup(comparator, stats, "speedup_vs_comparator"),
+                "descriptive": True,
+            }
+
+    resident = stats_by_label.get("cuda-resident")
+    graph = stats_by_label.get("cuda-resident-graph")
+    if resident is not None and graph is not None:
+        inversion = cuda_inversion["pageable"]
+        vs_res = compare_to_resident(resident, graph)
+        graph["vs_resident"] = {
+            **vs_res,
+            "boundary_inversion": inversion,
+            **claim_support(vs_res["verdict"], inversion, resident, graph),
+        }
+
+
+def boundary_inversion(medians: dict[str, float], suffix: str = "") -> bool:
+    """CUDA boundaries nest by the work they add; a path must not beat one it contains.
+
+    Keys are CUDA path keys; `suffix` ("" or "-pinned") picks one transfer policy.
+    Host-origin adds copies to a resident path, gpu-origin adds the output copy to
+    resident, and host-origin adds the input copy to gpu-origin.
+    """
+    host_origin = medians.get(f"host-origin{suffix}")
+    gpu_origin = medians.get(f"gpu-origin{suffix}")
+    resident = medians.get("resident")
+    if host_origin is not None and any(
+        host_origin < median for key, median in medians.items() if key.startswith("resident")
+    ):
+        return True
+    if gpu_origin is not None and resident is not None and gpu_origin < resident:
+        return True
+    return host_origin is not None and gpu_origin is not None and host_origin < gpu_origin
 
 
 def uptime_seconds() -> float:
@@ -1095,10 +1303,22 @@ def warm_up_gpu(binary: Path, input_path: Path, seconds: float) -> dict[str, Any
     }
 
 
-def trial_orders(paths: Sequence[tuple[str, str, list[str]]], trials: int) -> list[list[int]]:
-    """Cycle through every ordering of the paths in a fixed lexicographic sequence."""
-    perms = [list(p) for p in itertools.permutations(range(len(paths)))]
-    return [perms[t % len(perms)] for t in range(trials)]
+def trial_orders(paths: Sequence[Any], trials: int) -> list[list[int]]:
+    """Trial path orders for the design that fits the number of paths.
+
+    Up to four paths, cycle through every ordering in a fixed lexicographic sequence.
+    Beyond that, repeat the Williams rows; trials must be a whole number of designs.
+    """
+    if trial_design(len(paths)) == "all-permutations":
+        perms = [list(p) for p in itertools.permutations(range(len(paths)))]
+        return [perms[t % len(perms)] for t in range(trials)]
+    rows = williams_rows(len(paths))
+    if trials % len(rows) != 0:
+        raise ValueError(
+            f"{len(paths)} paths use a Williams design of {len(rows)} orders; "
+            f"trials must be a multiple of {len(rows)}, not {trials}"
+        )
+    return [rows[t % len(rows)] for t in range(trials)]
 
 
 def run_bench_process(
@@ -1161,7 +1381,16 @@ def compact_invocation_ids(ids: Sequence[int] | None) -> dict[str, int] | list[i
 
 
 def failed_row(
-    count: int, bits: int, backend: str, boundary: str, warmups: int, reps: int, trials: int
+    count: int,
+    bits: int,
+    backend: str,
+    boundary: str,
+    warmups: int,
+    reps: int,
+    trials: int,
+    *,
+    transfer_policy: str,
+    path_label: str,
 ) -> dict[str, Any]:
     row = dict.fromkeys(SUMMARY_FIELDS, "")
     row.update(
@@ -1170,6 +1399,8 @@ def failed_row(
             "bits": bits,
             "backend": backend,
             "boundary": boundary,
+            "transfer_policy": transfer_policy,
+            "path_label": path_label,
             "correctness": "failed",
             "warmup": warmups,
             "reps": reps,
@@ -1188,6 +1419,8 @@ SUMMARY_FIELDS = [
     "bits",
     "backend",
     "boundary",
+    "transfer_policy",
+    "path_label",
     "correctness",
     "warmup",
     "reps",
@@ -1200,6 +1433,7 @@ SUMMARY_FIELDS = [
     "spread_p90_p10",
     "stable",
     "unstable_rev2",
+    "baseline",
     "speedup_vs_c",
     "speedup_low",
     "speedup_high",
@@ -1235,11 +1469,16 @@ def run_benchmark_matrix(
     pilot: bool = False,
     readiness_facts: dict[str, Any] | None = None,
     ignore_readiness: bool = False,
+    boundaries: Sequence[str] = (),
+    transfer_policies: Sequence[str] = ("pageable",),
 ) -> Path:
     if trials < 1:
         raise ValueError("trials must be at least 1")
     if "cpu" not in backends:
         raise ValueError("the CPU comparator is required; include 'cpu' in backends")
+    # Reject a bad path selection or trial count before touching the machine or disk.
+    paths = build_paths(backends, boundaries, transfer_policies)
+    trial_orders(paths, trials)
 
     # Revision 3: every probe and benchmark process runs off physical core 0.
     previous_mask = get_process_affinity()
@@ -1322,6 +1561,8 @@ def run_benchmark_matrix(
             counts=counts,
             bit_widths=bit_widths,
             backends=backends,
+            paths=paths,
+            transfer_policies=[p for p in TRANSFER_POLICIES if p in transfer_policies],
             warmups=warmups,
             reps=reps,
             trials=trials,
@@ -1345,6 +1586,8 @@ def sweep_matrix(
     counts: Sequence[int],
     bit_widths: Sequence[int],
     backends: Sequence[str],
+    paths: Sequence[BenchPath],
+    transfer_policies: Sequence[str],
     warmups: int,
     reps: int,
     trials: int,
@@ -1378,13 +1621,8 @@ def sweep_matrix(
     vec_report_path = target_dir / "msvc_vectorization_report.txt"
     generate_msvc_vectorization_report(root, vec_report_path, host_tokens, temp_dir / "vec_obj")
 
-    paths: list[tuple[str, str, list[str]]] = [("cpu", "comparator", [])]
-    if "cuda" in backends:
-        paths.append(("cuda", "resident", ["--boundary", "resident"]))
-        paths.append(("cuda", "resident-graph", ["--boundary", "resident-graph"]))
-        paths.append(("cuda", "host-origin", ["--boundary", "host-origin"]))
     orders = trial_orders(paths, trials)
-    order_labels = [[f"{paths[i][0]}-{paths[i][1]}" for i in order] for order in orders]
+    order_labels = [[paths[i].label for i in order] for order in orders]
     ordered_cases = case_order(counts, bit_widths, case_order_seed)
 
     # Bring the GPU to steady clocks on the largest input before any timed process.
@@ -1409,6 +1647,7 @@ def sweep_matrix(
             count=count,
             bits=bits,
             backends=backends,
+            paths=paths,
             seed=compression_seed,
             tensor_id=0,
             invocation_id=0,
@@ -1417,15 +1656,16 @@ def sweep_matrix(
         )
 
         cases: list[dict[str, Any]] = []
-        for backend, boundary, _ in paths:
+        for path in paths:
             cases.append(
                 {
-                    "case_id": f"case_{backend}_{boundary}_bits{bits}_n{count}",
+                    "case_id": f"case_{path.backend}_{path.key}_bits{bits}_n{count}",
                     "count": count,
                     "bits": bits,
-                    "backend": backend,
-                    "timing_boundary": boundary,
-                    "transfer_policy": toolchain_prov["transfer_policy"],
+                    "backend": path.backend,
+                    "timing_boundary": path.boundary,
+                    "transfer_policy": path.policy,
+                    "path_label": path.label,
                     "seed": compression_seed,
                     "tensor_id": 0,
                     "invocation_id": 0,
@@ -1466,13 +1706,13 @@ def sweep_matrix(
         if passed and in_process_warmup_seconds > 0:
             # Revision 2: size each path's in-process warm-up from an untimed probe
             # so every timed process first runs about the same wall time untimed.
-            for case, (backend, _, extra_args) in zip(cases, paths, strict=True):
+            for case, path in zip(cases, paths, strict=True):
                 payload, error = run_bench_process(
                     binary,
                     input_path,
                     bits=bits,
-                    backend=backend,
-                    extra_args=extra_args,
+                    backend=path.backend,
+                    extra_args=path.extra_args,
                     seed=compression_seed,
                     warmups=warmups,
                     reps=reps,
@@ -1499,13 +1739,13 @@ def sweep_matrix(
                     case = cases[path_index]
                     if case["correctness"]["status"] != "passed":
                         continue
-                    backend, _, extra_args = paths[path_index]
+                    path = paths[path_index]
                     payload, error = run_bench_process(
                         binary,
                         input_path,
                         bits=bits,
-                        backend=backend,
-                        extra_args=extra_args,
+                        backend=path.backend,
+                        extra_args=path.extra_args,
                         seed=compression_seed,
                         warmups=case["warmup"],
                         reps=reps,
@@ -1514,6 +1754,11 @@ def sweep_matrix(
                         case["correctness"] = {"status": "failed", "error_message": error}
                         continue
                     configuration = payload.get("configuration", {})
+                    if configuration.get("transfer_policy") != path.policy:
+                        raise RuntimeError(
+                            f"{case['case_id']}: mco2 bench ran transfer policy "
+                            f"{configuration.get('transfer_policy')!r}, expected {path.policy!r}"
+                        )
                     run: dict[str, Any] = {
                         "trial": trial_index,
                         "position": position,
@@ -1552,54 +1797,7 @@ def sweep_matrix(
             case["stage_medians_ms"] = compute_stage_medians(runs)
 
         # Comparisons and flags, only between cases that all passed.
-        cpu_case = cases[0]
-        inversion = boundary_inversion(
-            {
-                c["timing_boundary"]: c["statistics"]["median_ms"]
-                for c in cases
-                if c is not cpu_case and c["statistics"] is not None
-            }
-        )
-
-        for case in cases:
-            stats = case["statistics"]
-            if stats is None:
-                continue
-            if case is cpu_case:
-                stats.update(
-                    {
-                        "speedup_vs_cpu": 1.0,
-                        "speedup_low": 1.0,
-                        "speedup_high": 1.0,
-                        "speedup_ci_low": 1.0,
-                        "speedup_ci_high": 1.0,
-                        "verdict": "comparator",
-                        "boundary_inversion": False,
-                        "direction_supported": None,
-                        "magnitude_supported": None,
-                        "claim_supported_rev2": None,
-                    }
-                )
-                continue
-            cpu_stats = cpu_case["statistics"]
-            if cpu_stats is None:
-                continue
-            stats.update(compare_to_comparator(cpu_stats, stats))
-            stats["boundary_inversion"] = inversion
-            stats.update(claim_support(stats["verdict"], inversion, cpu_stats, stats))
-
-        resident_case = next((c for c in cases if c["timing_boundary"] == "resident"), None)
-        graph_case = next((c for c in cases if c["timing_boundary"] == "resident-graph"), None)
-        if resident_case is not None and graph_case is not None:
-            res_stats = resident_case.get("statistics")
-            graph_stats = graph_case.get("statistics")
-            if res_stats is not None and graph_stats is not None:
-                vs_res = compare_to_resident(res_stats, graph_stats)
-                graph_stats["vs_resident"] = {
-                    **vs_res,
-                    "boundary_inversion": inversion,
-                    **claim_support(vs_res["verdict"], inversion, res_stats, graph_stats),
-                }
+        compare_case_group(cases, paths)
 
         for case in cases:
             (target_dir / f"{case['case_id']}.json").write_text(
@@ -1617,6 +1815,8 @@ def sweep_matrix(
                         case["warmup"],
                         reps,
                         trials,
+                        transfer_policy=case["transfer_policy"],
+                        path_label=case["path_label"],
                     )
                 )
                 continue
@@ -1626,6 +1826,8 @@ def sweep_matrix(
                     "bits": bits,
                     "backend": case["backend"],
                     "boundary": case["timing_boundary"],
+                    "transfer_policy": case["transfer_policy"],
+                    "path_label": case["path_label"],
                     "correctness": "passed",
                     "warmup": case["warmup"],
                     "reps": reps,
@@ -1638,6 +1840,7 @@ def sweep_matrix(
                     "spread_p90_p10": f"{stats['spread_p90_p10']:.4f}",
                     "stable": csv_flag(stats["stable"]),
                     "unstable_rev2": csv_flag(stats["unstable_rev2"]),
+                    "baseline": stats["baseline"],
                     "speedup_vs_c": f"{stats['speedup_vs_cpu']:.4f}",
                     "speedup_low": f"{stats['speedup_low']:.4f}",
                     "speedup_high": f"{stats['speedup_high']:.4f}",
@@ -1653,17 +1856,9 @@ def sweep_matrix(
 
     gpu_state_end = query_gpu_state() if "cuda" in backends else None
 
-    path_rank = {f"{backend}-{boundary}": i for i, (backend, boundary, _) in enumerate(paths)}
-    summary_rows.sort(
-        key=lambda r: (r["count"], r["bits"], path_rank[f"{r['backend']}-{r['boundary']}"])
-    )
-    case_results.sort(
-        key=lambda c: (
-            c["count"],
-            c["bits"],
-            path_rank[f"{c['backend']}-{c['timing_boundary']}"],
-        )
-    )
+    path_rank = {path.label: i for i, path in enumerate(paths)}
+    summary_rows.sort(key=lambda r: (r["count"], r["bits"], path_rank[r["path_label"]]))
+    case_results.sort(key=lambda c: (c["count"], c["bits"], path_rank[c["path_label"]]))
 
     shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -1676,14 +1871,14 @@ def sweep_matrix(
 
     # 5. Run manifest
     manifest_data = {
-        "manifest_version": "3.0",
+        "manifest_version": "3.1",
         "date": date_str,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,
         "hardware": toolchain_prov["hardware"],
         "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
         "build_flags": build_prov,
-        "transfer_policy": toolchain_prov["transfer_policy"],
+        "transfer_policies": list(transfer_policies),
         "gpu_state": {
             "note": (
                 "Instantaneous nvidia-smi readings before the warm-up, after it, and after "
@@ -1709,6 +1904,8 @@ def sweep_matrix(
             ),
             "reps": reps,
             "trials": trials,
+            "paths": [path.label for path in paths],
+            "trial_design": trial_design(len(paths)),
             "trial_orders": order_labels,
             "case_order_seed": case_order_seed,
             "case_order": [{"count": c, "bits": b} for c, b in ordered_cases],
@@ -1723,10 +1920,10 @@ def sweep_matrix(
             "pooled": "median and IQR over all measured repetitions of all trials",
             "quantile_method": f"numpy.percentile(method='{QUANTILE_METHOD}')",
             "numpy_version": np.__version__,
-            "speedup_point": "CPU pooled median / CUDA pooled median",
+            "speedup_point": "baseline pooled median / candidate pooled median",
             "speedup_range": (
-                "[CPU min trial median / CUDA max trial median, "
-                "CPU max trial median / CUDA min trial median]"
+                "[baseline min trial median / candidate max trial median, "
+                "baseline max trial median / candidate min trial median]"
             ),
             "spread_ratio": "max trial median / min trial median",
             "spread_threshold": SPREAD_THRESHOLD,
@@ -1739,6 +1936,7 @@ def sweep_matrix(
                 "direction_supported": DIRECTION_RULE,
                 "magnitude_supported": MAGNITUDE_RULE,
                 "claim_supported_rev2": CLAIM_RULE_REV2,
+                "baselines": BASELINE_RULE,
             },
             "bootstrap": {
                 "resamples": BOOTSTRAP_RESAMPLES,
@@ -1822,6 +2020,22 @@ def main() -> None:
         help="Backends to benchmark (cpu, cuda)",
     )
     parser.add_argument(
+        "--boundaries",
+        type=str,
+        nargs="*",
+        choices=EXTENSION_BOUNDARIES,
+        default=[],
+        help="Publication extension boundaries to add to the revision 3 paths",
+    )
+    parser.add_argument(
+        "--transfer-policies",
+        type=str,
+        nargs="+",
+        choices=TRANSFER_POLICIES,
+        default=["pageable"],
+        help="Host transfer policies for transfer boundaries; pinned needs pageable",
+    )
+    parser.add_argument(
         "--force-fail", action="store_true", help="Force correctness failure for tests"
     )
     parser.add_argument(
@@ -1870,6 +2084,8 @@ def main() -> None:
             allow_dirty=args.allow_dirty,
             pilot=args.pilot,
             ignore_readiness=args.ignore_readiness,
+            boundaries=args.boundaries,
+            transfer_policies=args.transfer_policies,
         )
         print(f"Benchmark completed successfully. Snapshot written to: {snapshot_dir}")
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
