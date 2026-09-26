@@ -208,7 +208,7 @@ Snapshot `results/2026-09-26-a1d2439` comes from clean revision `a1d2439`, the m
 
 No clock lock or other system setting was in effect.
 
-- **Claims:** every comparison has both a direction claim and a magnitude claim: 34 of 34 cells for each path against the comparator, and 34 of 34 for the graph against resident. No cell is inverted.
+- **Claims:** every comparison has both a direction claim and a magnitude claim: 34 of 34 cells for each path against the comparator, and 34 of 34 for the graph against resident. No cell is inverted, and the supported ranges below are the same at 4-bit and 8-bit.
 
   | Path | Supported slower | Supported faster | Speedup range |
   | --- | --- | --- | --- |
@@ -225,11 +225,11 @@ No clock lock or other system setting was in effect.
   | Resident-graph | none; faster from `2^10`, the smallest size |
 
   Under the revision 2 claim the crossovers are the same, except that host-origin 8-bit is unresolved (supported slower up to `2^12`, supported faster from `2^18`). The revision 2 claim fails in 2 resident and 8 host-origin cells, all on the max/min spread of the CUDA side.
-- **Stability:** every case is stable. The largest `spread_p90_p10` is 1.160 for resident (`2^10`, 8-bit), 1.105 for resident-graph, 1.245 for host-origin (`2^17`, 4-bit), and 1.018 for the comparator. Host-origin's largest spread is 0.005 under the threshold.
+- **Stability:** every case is stable. The largest `spread_p90_p10` is 1.160 for resident (`2^10`, 8-bit), 1.105 for resident-graph (`2^10`, 4-bit), 1.245 for host-origin (`2^17`, 4-bit), and 1.018 for the comparator (`2^10`, 8-bit). Host-origin's largest spread is 0.005 under the threshold.
 - **Graph vs resident:** the graph is faster than resident in all 34 cells, with both claims. The speedup is 5.2–6.5× from `2^10` to `2^15`, falls to 2.0–2.1× at `2^20`, and is 1.03× at `2^26`. Up to `2^15` the graph takes 0.020–0.023 ms per repetition, against 0.105–0.141 ms for resident.
-- **Graph capture cost:** the one-time capture and instantiation took a per-case median of 0.171–0.229 ms (0.158–0.369 ms over the 24 processes of each case), rising slightly with size. At `2^14` the median, 0.180 ms, equals the saving from about 1.6 repetitions (0.114 ms each). A single call with capture included would therefore be slower than resident; the timed repetitions exclude capture by design.
+- **Graph capture cost:** the one-time capture and instantiation took a per-case median of 0.171–0.229 ms (0.158–0.369 ms over the 24 processes of each case), higher at the largest sizes. At `2^14`, 4-bit, the median, 0.180 ms, equals the saving from about 1.6 repetitions (0.114 ms each). A single call with capture included would therefore be slower than resident; the timed repetitions exclude capture by design.
 
-Known limitations:
+Known limitations (the evidence behind them is in the revision 3 [diagnosis](#diagnosis-1)):
 
 - **Unexplained launch levels:** the slow launch levels seen before the revision 3 diagnosis (spans 3–6× the fastest, after a long session) were not reproduced, and their cause is unknown. This sweep ran right after a reboot; a desktop that has run for a long time may be slower and less stable than these results show.
 - **Core 0 cause untested:** core 0 was excluded because it measured about 30% slower. Why it is slower was not tested.
