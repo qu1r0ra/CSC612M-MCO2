@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import itertools
 import json
 import os
 import random
@@ -27,7 +28,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmark_driver import (  # noqa: E402
+from benchmark_driver import (
     DEFAULT_COMPRESSION_SEED,
     collect_git_provenance,
     find_binary,
@@ -111,7 +112,7 @@ def reduce_report(sqlite_path: Path, reps: int) -> dict[str, Any]:
 
     per_rep = []
     for group in timed:
-        gaps = [b[0] - a[1] for a, b in zip(group, group[1:])]
+        gaps = [b[0] - a[1] for a, b in itertools.pairwise(group)]
         kernels = [op for op in group if op[2] == "kernel"]
         launch_api = [api[op[3]][1] - api[op[3]][0] for op in kernels if op[3] in api]
         queue = [op[0] - api[op[3]][0] for op in kernels if op[3] in api]
@@ -124,16 +125,14 @@ def reduce_report(sqlite_path: Path, reps: int) -> dict[str, Any]:
                 "launch_api_median_us": statistics.median(launch_api) / 1000.0,
                 "launch_to_start_median_us": statistics.median(queue) / 1000.0,
                 "api_interval_median_us": statistics.median(
-                    b - a for a, b in zip(api_starts, api_starts[1:])
+                    b - a for a, b in itertools.pairwise(api_starts)
                 )
                 / 1000.0,
                 "ops": len(group),
             }
         )
     summary = {
-        key: statistics.median(r[key] for r in per_rep)
-        for key in per_rep[0]
-        if key != "ops"
+        key: statistics.median(r[key] for r in per_rep) for key in per_rep[0] if key != "ops"
     }
     summary["ops_per_rep"] = statistics.median(r["ops"] for r in per_rep)
     summary["reps_found"] = len(groups)
