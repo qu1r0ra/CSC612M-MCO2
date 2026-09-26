@@ -1089,6 +1089,15 @@ static mco2_q8_status run_bench_graph(
     while (padded_count < block_count)
         padded_count <<= 1;
 
+    /* Poison the payload left by the preflight so parity proves K3 ran in the graph. */
+    if (payload_bytes != 0) {
+        for (index = 0; index < payload_bytes; index++)
+            context->host_payload[index] = (uint8_t)~base_payload[index];
+        if (cudaMemcpy(context->device_payload, context->host_payload,
+                       payload_bytes, cudaMemcpyHostToDevice) != cudaSuccess)
+            return MCO2_Q8_ERR_CUDA;
+    }
+
     const auto capture_start = std::chrono::steady_clock::now();
     error = cudaStreamBeginCapture(context->stream, cudaStreamCaptureModeGlobal);
     if (error != cudaSuccess)

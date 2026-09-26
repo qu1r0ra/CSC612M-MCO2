@@ -264,7 +264,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
             assert len(run["samples_ms"]) == 2
             assert run["repetition_invocation_ids"] == case_data["repetition_invocation_ids"]
             if case_data["timing_boundary"] == "resident-graph":
-                assert run["capture_and_instantiate_ms"] >= 0
+                assert run["capture_and_instantiate_ms"] > 0
                 for k in ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms"):
                     assert k not in run
             elif case_data["backend"] == "cuda":

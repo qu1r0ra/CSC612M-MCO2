@@ -111,7 +111,7 @@ def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, bounda
 
     if boundary == "resident-graph":
         assert "capture_ms" not in payload
-        assert payload["capture_and_instantiate_ms"] >= 0
+        assert payload["capture_and_instantiate_ms"] > 0
         for stage_key in ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms"):
             assert stage_key not in payload
     else:
@@ -198,7 +198,7 @@ def test_cuda_bench_resident_graph_empty_input(tmp_path, bits):
     payload = json.loads(result.stdout)
     assert payload["configuration"]["boundary"] == "resident-graph"
     assert len(payload["samples_ms"]) == 2
-    assert payload["capture_and_instantiate_ms"] >= 0
+    assert payload["capture_and_instantiate_ms"] > 0
     assert payload["payload_bytes"] == 0
     assert payload["header_bytes"] == HEADER.size
 
