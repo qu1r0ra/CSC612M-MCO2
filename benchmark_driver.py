@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
 import hashlib
 import itertools
 import json
@@ -52,20 +53,77 @@ STAGE_KEYS = ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms")
 # position of each path and the path that precedes it.
 DEFAULT_TRIALS = 6
 
-# Claim rule, fixed before any snapshot is generated. A CUDA speedup or
-# slowdown is claimable only when its trial-median range excludes 1.0, its
-# boundaries are not inverted, and neither it nor the comparator has a
-# between-trial median spread above SPREAD_THRESHOLD.
+# Claim rules, fixed before any snapshot is generated (protocol revision 3).
+# A direction claim (faster or slower) needs a conservative verdict and no
+# boundary inversion. A magnitude claim also needs both sides stable, with the
+# stability spread taken between the 10th and 90th percentiles of trial medians
+# so one outlier process does not veto a case. The revision 2 rule, which gated
+# every claim on the max/min spread, is still computed for comparison.
 SPREAD_THRESHOLD = 1.25
+STABILITY_THRESHOLD = 1.25
+STABILITY_PERCENTILES = (10, 90)
 QUANTILE_METHOD = "linear"
-CLAIM_RULE = (
-    "A CUDA case supports a speedup or slowdown claim only when (1) its verdict is "
-    "'faster' (CPU trial-median minimum / CUDA trial-median maximum > 1) or 'slower' "
-    "(CPU trial-median maximum / CUDA trial-median minimum < 1), (2) boundary_inversion "
-    "is false (host-origin pooled median is not below resident pooled median), and "
-    f"(3) both the CUDA case and the CPU comparator have spread_ratio <= {SPREAD_THRESHOLD} "
-    "(maximum over minimum trial median)."
+BOOTSTRAP_RESAMPLES = 10_000
+BOOTSTRAP_SEED = 31
+BOOTSTRAP_LEVEL = 0.95
+VERDICT_RULE = (
+    "verdict is 'faster' when baseline trial-median minimum / candidate trial-median maximum "
+    "> 1, 'slower' when baseline trial-median maximum / candidate trial-median minimum < 1, "
+    "and 'inconclusive' otherwise"
 )
+DIRECTION_RULE = (
+    "direction_supported: verdict is not 'inconclusive' and boundary_inversion is false "
+    "(host-origin pooled median is not below the pooled median of any resident path)"
+)
+MAGNITUDE_RULE = (
+    "magnitude_supported: direction_supported and both the candidate and the baseline have "
+    f"spread_p90_p10 <= {STABILITY_THRESHOLD} (90th over 10th percentile of trial medians, "
+    f"numpy method '{QUANTILE_METHOD}')"
+)
+CLAIM_RULE_REV2 = (
+    "claim_supported_rev2: verdict is not 'inconclusive', boundary_inversion is false, and "
+    f"both the candidate and the baseline have spread_ratio <= {SPREAD_THRESHOLD} "
+    "(maximum over minimum trial median)"
+)
+BOOTSTRAP_RULE = (
+    f"{BOOTSTRAP_LEVEL:.0%} percentile bootstrap: resample each path's trial medians with "
+    f"replacement, independently, {BOOTSTRAP_RESAMPLES} times from "
+    f"numpy.random.default_rng({BOOTSTRAP_SEED}); the statistic is the baseline median of "
+    "resampled trial medians over the candidate median of resampled trial medians"
+)
+
+# Every benchmark and probe process runs off physical core 0 (logical CPUs 0
+# and 1), which ran about 30% slower in the issue #30 diagnosis.
+EXCLUDED_LOGICAL_CPUS = (0, 1)
+
+# Readiness: a sweep starts on a freshly rebooted, quiet machine.
+MAX_UPTIME_SECONDS = 30 * 60
+WINDOW_ALLOWLIST = (
+    "claude",
+    "explorer",
+    "TextInputHost",
+    "ShellExperienceHost",
+    "StartMenuExperienceHost",
+    "SearchHost",
+    "LockApp",
+)
+# nvidia-smi clocks_event_reasons bits. GpuIdle is the only benign one.
+CLOCK_EVENT_REASONS = {
+    0x1: "GpuIdle",
+    0x2: "ApplicationsClocksSetting",
+    0x4: "SwPowerCap",
+    0x8: "HwSlowdown",
+    0x10: "SyncBoost",
+    0x20: "SwThermalSlowdown",
+    0x40: "HwThermalSlowdown",
+    0x80: "HwPowerBrakeSlowdown",
+    0x100: "DisplayClockSetting",
+}
+BENIGN_CLOCK_EVENTS = 0x1
+
+# The pilot runs the sweep's code path on four sizes: the smallest, the
+# launch-bound 2^14, a mid size, and the largest.
+PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 26)
 
 GPU_STATE_FIELDS = (
     "pstate",
@@ -723,16 +781,41 @@ def compute_case_statistics(trial_samples: Sequence[Sequence[float]]) -> dict[st
     trial_medians = [float(np.median(np.asarray(s, dtype=np.float64))) for s in trial_samples]
     low = min(trial_medians)
     high = max(trial_medians)
+    p_low, p_high = np.percentile(
+        np.asarray(trial_medians, dtype=np.float64), STABILITY_PERCENTILES, method=QUANTILE_METHOD
+    )
     stats["trial_medians_ms"] = trial_medians
     stats["trial_median_min_ms"] = low
     stats["trial_median_max_ms"] = high
     stats["spread_ratio"] = high / low if low > 0 else float("inf")
-    stats["unstable"] = stats["spread_ratio"] > SPREAD_THRESHOLD
+    stats["unstable_rev2"] = stats["spread_ratio"] > SPREAD_THRESHOLD
+    stats["spread_p90_p10"] = float(p_high / p_low) if p_low > 0 else float("inf")
+    stats["stable"] = stats["spread_p90_p10"] <= STABILITY_THRESHOLD
     return stats
 
 
+def bootstrap_speedup_ci(
+    baseline_medians: Sequence[float],
+    candidate_medians: Sequence[float],
+    *,
+    resamples: int = BOOTSTRAP_RESAMPLES,
+    seed: int = BOOTSTRAP_SEED,
+    level: float = BOOTSTRAP_LEVEL,
+) -> tuple[float, float]:
+    """Percentile bootstrap interval of baseline median / candidate median over trials."""
+    rng = np.random.default_rng(seed)
+    base = np.asarray(baseline_medians, dtype=np.float64)
+    cand = np.asarray(candidate_medians, dtype=np.float64)
+    base_draws = base[rng.integers(0, len(base), size=(resamples, len(base)))]
+    cand_draws = cand[rng.integers(0, len(cand), size=(resamples, len(cand)))]
+    ratios = np.median(base_draws, axis=1) / np.median(cand_draws, axis=1)
+    tail = 100.0 * (1.0 - level) / 2.0
+    low, high = np.percentile(ratios, (tail, 100.0 - tail), method=QUANTILE_METHOD)
+    return float(low), float(high)
+
+
 def compare_to_comparator(cpu_stats: dict[str, Any], cuda_stats: dict[str, Any]) -> dict[str, Any]:
-    """Point speedup from pooled medians and a conservative range from trial medians."""
+    """Point speedup from pooled medians, a conservative range, and a bootstrap CI."""
     point = cpu_stats["median_ms"] / cuda_stats["median_ms"]
     low = cpu_stats["trial_median_min_ms"] / cuda_stats["trial_median_max_ms"]
     high = cpu_stats["trial_median_max_ms"] / cuda_stats["trial_median_min_ms"]
@@ -742,12 +825,195 @@ def compare_to_comparator(cpu_stats: dict[str, Any], cuda_stats: dict[str, Any])
         verdict = "slower"
     else:
         verdict = "inconclusive"
+    ci_low, ci_high = bootstrap_speedup_ci(
+        cpu_stats["trial_medians_ms"], cuda_stats["trial_medians_ms"]
+    )
     return {
         "speedup_vs_cpu": point,
         "speedup_low": low,
         "speedup_high": high,
+        "speedup_ci_low": ci_low,
+        "speedup_ci_high": ci_high,
         "verdict": verdict,
     }
+
+
+def claim_support(
+    verdict: str, inversion: bool, baseline: dict[str, Any], candidate: dict[str, Any]
+) -> dict[str, bool]:
+    """The revision 3 direction and magnitude claims, plus the revision 2 claim."""
+    direction = verdict != "inconclusive" and not inversion
+    return {
+        "direction_supported": direction,
+        "magnitude_supported": direction and baseline["stable"] and candidate["stable"],
+        "claim_supported_rev2": (
+            direction and not baseline["unstable_rev2"] and not candidate["unstable_rev2"]
+        ),
+    }
+
+
+def boundary_inversion(medians: dict[str, float]) -> bool:
+    """Host-origin adds copies to a resident path, so it must not be faster than one."""
+    host_origin = medians.get("host-origin")
+    if host_origin is None:
+        return False
+    return any(
+        host_origin < median
+        for boundary, median in medians.items()
+        if boundary.startswith("resident")
+    )
+
+
+def uptime_seconds() -> float:
+    if os.name == "nt":
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetTickCount64.restype = ctypes.c_uint64
+        return kernel32.GetTickCount64() / 1000.0
+    return float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+
+
+def list_app_windows() -> list[dict[str, str]]:
+    """Top-level windows with a title, as (process, title) pairs."""
+    if os.name != "nt":
+        return []
+    script = (
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+        "Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | "
+        "ForEach-Object { $_.ProcessName + [char]9 + $_.MainWindowTitle }"
+    )
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    windows = []
+    for line in proc.stdout.splitlines():
+        name, _, title = line.partition("\t")
+        if name.strip():
+            windows.append({"process": name.strip(), "title": title.strip()})
+    return windows
+
+
+def list_processes(name: str) -> list[int]:
+    if os.name == "nt":
+        script = f"(Get-Process -Name '{name}' -ErrorAction SilentlyContinue).Id"
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    else:
+        proc = subprocess.run(["pgrep", "-x", name], capture_output=True, text=True, check=False)
+    return [int(pid) for pid in proc.stdout.split() if pid.isdigit()]
+
+
+def query_power_plan() -> str:
+    if os.name != "nt":
+        return "unavailable"
+    proc = subprocess.run(
+        ["powercfg", "/getactivescheme"], capture_output=True, text=True, check=False
+    )
+    return proc.stdout.strip() or "unavailable"
+
+
+def query_hags() -> str:
+    """Hardware-accelerated GPU scheduling: HwSchMode 2 is on, 1 is off, unset is the default."""
+    if os.name != "nt":
+        return "unavailable"
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers"
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "HwSchMode")
+    except OSError:
+        return "unset"
+    return str(value)
+
+
+def probe_readiness_facts(root: Path) -> dict[str, Any]:
+    """Gather the machine facts the readiness check judges, plus context it only records."""
+    gpu_state = query_gpu_state()
+    return {
+        "uptime_seconds": uptime_seconds(),
+        "app_windows": list_app_windows(),
+        "mco2_pids": list_processes("mco2"),
+        "git_dirty_files": collect_git_provenance(root)["dirty_files"],
+        "gpu_clock_event_reasons": gpu_state.get("clocks_event_reasons.active"),
+        "power_plan": query_power_plan(),
+        "hags_hwschmode": query_hags(),
+    }
+
+
+def check_readiness(
+    facts: dict[str, Any], allowlist: Sequence[str] = WINDOW_ALLOWLIST
+) -> list[str]:
+    """Named reasons the machine is not ready for an evidence sweep; empty when ready."""
+    failures = []
+    uptime = facts["uptime_seconds"]
+    if uptime > MAX_UPTIME_SECONDS:
+        failures.append(
+            f"uptime {uptime / 60:.0f} min exceeds {MAX_UPTIME_SECONDS // 60} min; reboot first"
+        )
+    allowed = {name.lower() for name in allowlist}
+    for window in facts["app_windows"]:
+        if window["process"].lower() not in allowed:
+            failures.append(f"open app window: {window['process']} ({window['title']})")
+    if facts["mco2_pids"]:
+        pids = ", ".join(str(pid) for pid in facts["mco2_pids"])
+        failures.append(f"mco2 already running (pid {pids})")
+    if facts["git_dirty_files"]:
+        failures.append("dirty git tree: " + "; ".join(facts["git_dirty_files"]))
+    reasons = facts["gpu_clock_event_reasons"]
+    if reasons is None:
+        failures.append("GPU clock-event reasons unavailable")
+    else:
+        active = int(reasons, 16) & ~BENIGN_CLOCK_EVENTS
+        if active:
+            names = [name for bit, name in CLOCK_EVENT_REASONS.items() if active & bit]
+            failures.append(f"GPU clock-event reasons active: {', '.join(names) or hex(active)}")
+    return failures
+
+
+def affinity_mask_excluding(excluded: Sequence[int], cpu_count: int) -> int:
+    mask = (1 << cpu_count) - 1
+    for cpu in excluded:
+        mask &= ~(1 << cpu)
+    if mask == 0:
+        raise RuntimeError(f"no logical CPU left after excluding {list(excluded)}")
+    return mask
+
+
+def get_process_affinity() -> int:
+    if os.name == "nt":
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        process_mask = ctypes.c_size_t()
+        system_mask = ctypes.c_size_t()
+        if not kernel32.GetProcessAffinityMask(
+            ctypes.c_void_p(kernel32.GetCurrentProcess()),
+            ctypes.byref(process_mask),
+            ctypes.byref(system_mask),
+        ):
+            raise OSError(ctypes.get_last_error())
+        return process_mask.value
+    return sum(1 << cpu for cpu in os.sched_getaffinity(0))
+
+
+def set_process_affinity(mask: int) -> None:
+    """Restrict this process; every child it starts inherits the mask."""
+    if os.name == "nt":
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        if not kernel32.SetProcessAffinityMask(ctypes.c_void_p(kernel32.GetCurrentProcess()), mask):
+            raise OSError(ctypes.get_last_error())
+        return
+    os.sched_setaffinity(0, {cpu for cpu in range(mask.bit_length()) if mask >> cpu & 1})
 
 
 def compute_stage_medians(runs: Sequence[dict[str, Any]]) -> dict[str, float] | None:
@@ -883,6 +1149,10 @@ def failed_row(
     return row
 
 
+def csv_flag(value: bool | None) -> str:
+    return "" if value is None else str(value).lower()
+
+
 SUMMARY_FIELDS = [
     "count",
     "bits",
@@ -897,13 +1167,19 @@ SUMMARY_FIELDS = [
     "trial_median_min_ms",
     "trial_median_max_ms",
     "spread_ratio",
+    "spread_p90_p10",
+    "stable",
+    "unstable_rev2",
     "speedup_vs_c",
     "speedup_low",
     "speedup_high",
+    "speedup_ci_low",
+    "speedup_ci_high",
     "verdict",
     "boundary_inversion",
-    "unstable",
-    "claim_supported",
+    "direction_supported",
+    "magnitude_supported",
+    "claim_supported_rev2",
 ]
 
 
@@ -926,6 +1202,9 @@ def run_benchmark_matrix(
     force_fail: bool = False,
     allow_existing: bool = False,
     allow_dirty: bool = False,
+    pilot: bool = False,
+    readiness_facts: dict[str, Any] | None = None,
+    ignore_readiness: bool = False,
 ) -> Path:
     if trials < 1:
         raise ValueError("trials must be at least 1")
@@ -935,12 +1214,15 @@ def run_benchmark_matrix(
     git_prov = collect_git_provenance(root)
 
     # Determine snapshot directory name
-    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+    now = datetime.now(UTC)
+    date_str = now.strftime("%Y-%m-%d")
     short_rev = git_prov["code_revision_short"]
-    if output_dir is None:
-        target_dir = root / "results" / f"{date_str}-{short_rev}"
-    else:
+    if output_dir is not None:
         target_dir = output_dir
+    elif pilot:
+        target_dir = root / "results" / "pilots" / f"{now:%Y-%m-%dT%H%M%S}-{short_rev}"
+    else:
+        target_dir = root / "results" / f"{date_str}-{short_rev}"
 
     if target_dir.exists() and not allow_existing:
         raise FileExistsError(
@@ -956,6 +1238,90 @@ def run_benchmark_matrix(
             + "; ".join(git_prov["dirty_files"])
         )
 
+    # Revision 3: judge the machine before any process starts. A pilot is
+    # non-evidence by design, so it records the check without enforcing it.
+    facts = probe_readiness_facts(root) if readiness_facts is None else readiness_facts
+    failures = check_readiness(facts)
+    if failures and not (ignore_readiness or pilot):
+        raise RuntimeError(
+            "Machine is not ready for an evidence sweep; fix these or pass --ignore-readiness "
+            "for a non-evidence run: " + " | ".join(failures)
+        )
+    non_evidence_reasons = []
+    if pilot:
+        non_evidence_reasons.append("pilot run")
+    if failures:
+        non_evidence_reasons.append("readiness check failed and was overridden")
+    if git_prov["git_dirty"]:
+        non_evidence_reasons.append("dirty git tree")
+    run_conditions = {
+        "evidence": not non_evidence_reasons,
+        "non_evidence_reasons": non_evidence_reasons,
+        "pilot": pilot,
+        "readiness": {
+            "passed": not failures,
+            "failures": failures,
+            "overridden": bool(failures),
+            "facts": facts,
+            "max_uptime_seconds": MAX_UPTIME_SECONDS,
+            "window_allowlist": list(WINDOW_ALLOWLIST),
+        },
+    }
+
+    previous_affinity = get_process_affinity()
+    mask = affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, os.cpu_count() or 1)
+    set_process_affinity(mask)
+    run_conditions["affinity"] = {
+        "excluded_logical_cpus": list(EXCLUDED_LOGICAL_CPUS),
+        "mask": hex(mask),
+        "applied_to": "driver process before any benchmark or probe process; inherited",
+    }
+    try:
+        return sweep_matrix(
+            root=root,
+            target_dir=target_dir,
+            date_str=date_str,
+            git_prov=git_prov,
+            run_conditions=run_conditions,
+            counts=counts,
+            bit_widths=bit_widths,
+            backends=backends,
+            warmups=warmups,
+            reps=reps,
+            trials=trials,
+            input_seed=input_seed,
+            compression_seed=compression_seed,
+            case_order_seed=case_order_seed,
+            gpu_warmup_seconds=gpu_warmup_seconds,
+            case_warmup_seconds=case_warmup_seconds,
+            in_process_warmup_seconds=in_process_warmup_seconds,
+            force_fail=force_fail,
+        )
+    finally:
+        set_process_affinity(previous_affinity)
+
+
+def sweep_matrix(
+    *,
+    root: Path,
+    target_dir: Path,
+    date_str: str,
+    git_prov: dict[str, Any],
+    run_conditions: dict[str, Any],
+    counts: Sequence[int],
+    bit_widths: Sequence[int],
+    backends: Sequence[str],
+    warmups: int,
+    reps: int,
+    trials: int,
+    input_seed: int,
+    compression_seed: int,
+    case_order_seed: int,
+    gpu_warmup_seconds: float,
+    case_warmup_seconds: float,
+    in_process_warmup_seconds: float,
+    force_fail: bool,
+) -> Path:
     binary = find_binary(root)
     toolchain_prov = collect_hardware_and_toolchain(root)
     build_prov = collect_build_commands(root)
@@ -1150,17 +1516,13 @@ def run_benchmark_matrix(
 
         # Comparisons and flags, only between cases that all passed.
         cpu_case = cases[0]
-        by_boundary = {c["timing_boundary"]: c for c in cases}
-        inversion = False
-        resident = by_boundary.get("resident")
-        host_origin = by_boundary.get("host-origin")
-        if (
-            resident is not None
-            and host_origin is not None
-            and resident["statistics"] is not None
-            and host_origin["statistics"] is not None
-        ):
-            inversion = host_origin["statistics"]["median_ms"] < resident["statistics"]["median_ms"]
+        inversion = boundary_inversion(
+            {
+                c["timing_boundary"]: c["statistics"]["median_ms"]
+                for c in cases
+                if c is not cpu_case and c["statistics"] is not None
+            }
+        )
 
         for case in cases:
             stats = case["statistics"]
@@ -1172,9 +1534,13 @@ def run_benchmark_matrix(
                         "speedup_vs_cpu": 1.0,
                         "speedup_low": 1.0,
                         "speedup_high": 1.0,
+                        "speedup_ci_low": 1.0,
+                        "speedup_ci_high": 1.0,
                         "verdict": "comparator",
                         "boundary_inversion": False,
-                        "claim_supported": None,
+                        "direction_supported": None,
+                        "magnitude_supported": None,
+                        "claim_supported_rev2": None,
                     }
                 )
                 continue
@@ -1183,12 +1549,7 @@ def run_benchmark_matrix(
                 continue
             stats.update(compare_to_comparator(cpu_stats, stats))
             stats["boundary_inversion"] = inversion
-            stats["claim_supported"] = (
-                stats["verdict"] != "inconclusive"
-                and not inversion
-                and not stats["unstable"]
-                and not cpu_stats["unstable"]
-            )
+            stats.update(claim_support(stats["verdict"], inversion, cpu_stats, stats))
 
         for case in cases:
             (target_dir / f"{case['case_id']}.json").write_text(
@@ -1209,7 +1570,6 @@ def run_benchmark_matrix(
                     )
                 )
                 continue
-            claim = stats["claim_supported"]
             summary_rows.append(
                 {
                     "count": count,
@@ -1225,13 +1585,19 @@ def run_benchmark_matrix(
                     "trial_median_min_ms": f"{stats['trial_median_min_ms']:.6f}",
                     "trial_median_max_ms": f"{stats['trial_median_max_ms']:.6f}",
                     "spread_ratio": f"{stats['spread_ratio']:.4f}",
+                    "spread_p90_p10": f"{stats['spread_p90_p10']:.4f}",
+                    "stable": csv_flag(stats["stable"]),
+                    "unstable_rev2": csv_flag(stats["unstable_rev2"]),
                     "speedup_vs_c": f"{stats['speedup_vs_cpu']:.4f}",
                     "speedup_low": f"{stats['speedup_low']:.4f}",
                     "speedup_high": f"{stats['speedup_high']:.4f}",
+                    "speedup_ci_low": f"{stats['speedup_ci_low']:.4f}",
+                    "speedup_ci_high": f"{stats['speedup_ci_high']:.4f}",
                     "verdict": stats["verdict"],
-                    "boundary_inversion": str(stats["boundary_inversion"]).lower(),
-                    "unstable": str(stats["unstable"]).lower(),
-                    "claim_supported": "" if claim is None else str(claim).lower(),
+                    "boundary_inversion": csv_flag(stats["boundary_inversion"]),
+                    "direction_supported": csv_flag(stats["direction_supported"]),
+                    "magnitude_supported": csv_flag(stats["magnitude_supported"]),
+                    "claim_supported_rev2": csv_flag(stats["claim_supported_rev2"]),
                 }
             )
 
@@ -1260,7 +1626,7 @@ def run_benchmark_matrix(
 
     # 5. Run manifest
     manifest_data = {
-        "manifest_version": "2.2",
+        "manifest_version": "3.0",
         "date": date_str,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,
@@ -1314,8 +1680,24 @@ def run_benchmark_matrix(
             ),
             "spread_ratio": "max trial median / min trial median",
             "spread_threshold": SPREAD_THRESHOLD,
-            "claim_rule": CLAIM_RULE,
+            "spread_p90_p10": (
+                f"p{STABILITY_PERCENTILES[1]} / p{STABILITY_PERCENTILES[0]} of the trial medians"
+            ),
+            "stability_threshold": STABILITY_THRESHOLD,
+            "claim_rules": {
+                "verdict": VERDICT_RULE,
+                "direction_supported": DIRECTION_RULE,
+                "magnitude_supported": MAGNITUDE_RULE,
+                "claim_supported_rev2": CLAIM_RULE_REV2,
+            },
+            "bootstrap": {
+                "resamples": BOOTSTRAP_RESAMPLES,
+                "seed": BOOTSTRAP_SEED,
+                "level": BOOTSTRAP_LEVEL,
+                "rule": BOOTSTRAP_RULE,
+            },
         },
+        "run_conditions": run_conditions,
         "inputs": clean_input_meta,
         "summary_csv": csv_path.name,
         "msvc_vectorization_report": vec_report_path.name,
@@ -1400,6 +1782,19 @@ def main() -> None:
         action="store_true",
         help="Run from an uncommitted tree (records the dirty files; not for evidence)",
     )
+    parser.add_argument(
+        "--pilot",
+        action="store_true",
+        help=(
+            "Non-evidence pilot at four sizes and both bit widths, written under "
+            "results/pilots/; records the readiness check without enforcing it"
+        ),
+    )
+    parser.add_argument(
+        "--ignore-readiness",
+        action="store_true",
+        help="Run despite a failed readiness check (marks the snapshot non-evidence)",
+    )
 
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
@@ -1408,8 +1803,8 @@ def main() -> None:
         snapshot_dir = run_benchmark_matrix(
             root=root,
             output_dir=args.output_dir,
-            counts=args.counts,
-            bit_widths=args.bits,
+            counts=PILOT_COUNTS if args.pilot else args.counts,
+            bit_widths=DEFAULT_BITS if args.pilot else args.bits,
             backends=args.backends,
             warmups=args.warmup,
             reps=args.reps,
@@ -1423,6 +1818,8 @@ def main() -> None:
             force_fail=args.force_fail,
             allow_existing=args.allow_existing,
             allow_dirty=args.allow_dirty,
+            pilot=args.pilot,
+            ignore_readiness=args.ignore_readiness,
         )
         print(f"Benchmark completed successfully. Snapshot written to: {snapshot_dir}")
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:

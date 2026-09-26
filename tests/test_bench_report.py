@@ -5,7 +5,9 @@ from bench_report import FIGURES, find_crossovers, index_cases, render_report
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
-def make_case(count, bits, boundary, median, verdict, supported, *, stages=True):
+def make_case(
+    count, bits, boundary, median, verdict, supported, *, stages=True, rev2=None, magnitude=None
+):
     backend = "cpu" if boundary == "comparator" else "cuda"
     stats = {
         "median_ms": median,
@@ -19,12 +21,23 @@ def make_case(count, bits, boundary, median, verdict, supported, *, stages=True)
                 "speedup_vs_cpu": speedup,
                 "speedup_low": speedup * 0.9,
                 "speedup_high": speedup * 1.1,
+                "speedup_ci_low": speedup * 0.95,
+                "speedup_ci_high": speedup * 1.05,
                 "verdict": verdict,
-                "claim_supported": supported,
+                "direction_supported": supported,
+                "magnitude_supported": supported if magnitude is None else magnitude,
+                "claim_supported_rev2": supported if rev2 is None else rev2,
             }
         )
     else:
-        stats.update({"verdict": "comparator", "claim_supported": None})
+        stats.update(
+            {
+                "verdict": "comparator",
+                "direction_supported": None,
+                "magnitude_supported": None,
+                "claim_supported_rev2": None,
+            }
+        )
     run = {"samples_ms": [median, median]}
     if backend == "cuda" and stages:
         run.update({"k1_ms": [0.5 * median] * 2, "k2_ms": [0.1 * median] * 2})
@@ -63,7 +76,19 @@ def sweep_cases():
             cases.append(make_case(count, bits, "comparator", 1.0, None, None))
             verdict = "slower" if ratio > 1 else "faster"
             cases.append(make_case(count, bits, "resident", ratio, verdict, True))
-            cases.append(make_case(count, bits, "host-origin", ratio * 2, verdict, count != 4096))
+            # Host-origin at 2^12 keeps its direction but loses magnitude and the rev 2 claim.
+            cases.append(
+                make_case(
+                    count,
+                    bits,
+                    "host-origin",
+                    ratio * 2,
+                    verdict,
+                    True,
+                    rev2=count != 4096,
+                    magnitude=count != 4096,
+                )
+            )
     return cases
 
 
@@ -82,10 +107,19 @@ def test_render_report_writes_figures_and_table(tmp_path):
         assert len(data) > 10_000
     report = (out / "report.md").read_text(encoding="utf-8")
     assert "abc1234" in report
-    assert report.count("| 2^") == 6
-    assert "†" in report  # host-origin at 2^12 lacks claim support
+    assert report.count("| 2^") == 12  # one row per size, bit width and CUDA path
+    header = next(line for line in report.splitlines() if line.startswith("| Elements"))
+    for column in ("95% CI", "Direction", "Magnitude", "Rev 2"):
+        assert column in header
+    assert (
+        "| 2^12 | 8 | CUDA host-origin | 1 | 1 | 1× | [0.9, 1.1] | [0.95, 1.05] | faster | yes | no | no |"
+        in report
+    )
     assert "CUDA resident, 4-bit: resolved between 2^10 and 2^12" in report
-    assert result["crossovers"][(8, "host-origin")]["status"] == "not resolved"
+    assert "### Revision 2 crossover" in report
+    # Direction alone resolves host-origin; the rev 2 rule does not.
+    assert result["crossovers"][(8, "host-origin")]["status"] == "resolved"
+    assert result["crossovers_rev2"][(8, "host-origin")]["status"] == "not resolved"
 
 
 def test_render_report_defaults_to_the_snapshot_folder(tmp_path):
@@ -109,7 +143,7 @@ def test_stage_figure_tolerates_missing_stage_times(tmp_path):
     assert all(path.is_file() for path in result["figures"])
 
 
-def test_crossover_needs_claim_support_on_both_sides():
+def test_crossover_needs_direction_support_on_both_sides():
     cases = []
     for count, verdict, supported in (
         (1024, "slower", True),
@@ -130,3 +164,24 @@ def test_crossover_needs_claim_support_on_both_sides():
         "interval": [1024, 2048],
         "direction": "slower to faster",
     }
+
+
+def test_rev2_snapshot_fields_still_render(tmp_path):
+    # Frozen revision 2 snapshots carry claim_supported and no CI or direction fields.
+    cases = sweep_cases()
+    for case in cases:
+        stats = case["statistics"]
+        stats["claim_supported"] = stats.pop("claim_supported_rev2")
+        for key in (
+            "direction_supported",
+            "magnitude_supported",
+            "speedup_ci_low",
+            "speedup_ci_high",
+        ):
+            stats.pop(key, None)
+    snapshot = tmp_path / "snap"
+    write_snapshot(snapshot, cases)
+    result = render_report(snapshot, tmp_path / "out")
+    report = result["report"].read_text(encoding="utf-8")
+    assert "| — | faster | yes | — |" in report
+    assert result["crossovers"][(4, "resident")]["status"] == "resolved"

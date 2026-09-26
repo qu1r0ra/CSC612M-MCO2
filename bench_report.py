@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -70,17 +71,44 @@ def stage_medians(case: dict[str, Any]) -> dict[str, float] | None:
     return case.get("stage_medians_ms") or compute_stage_medians(case["trial_runs"])
 
 
+def direction_supported(stats: dict[str, Any]) -> bool:
+    # Revision 2 snapshots predate the field; the rule is recomputable from them.
+    if "direction_supported" in stats:
+        return bool(stats["direction_supported"])
+    return stats["verdict"] in ("faster", "slower") and not stats.get("boundary_inversion")
+
+
+def magnitude_supported(stats: dict[str, Any]) -> bool | None:
+    return stats.get("magnitude_supported")
+
+
+def rev2_supported(stats: dict[str, Any]) -> bool:
+    return bool(stats.get("claim_supported_rev2", stats.get("claim_supported")))
+
+
+def speedup_interval(stats: dict[str, Any]) -> tuple[float, float]:
+    """The bootstrap CI, or the trial-median range for snapshots without one."""
+    if "speedup_ci_low" in stats:
+        return stats["speedup_ci_low"], stats["speedup_ci_high"]
+    return stats["speedup_low"], stats["speedup_high"]
+
+
 def power_label(count: int) -> str:
     return f"2^{count.bit_length() - 1}" if count & (count - 1) == 0 else str(count)
 
 
 def find_crossovers(
-    indexed: dict[tuple[int, int, str], dict[str, Any]], counts: list[int], bits: int, path: str
+    indexed: dict[tuple[int, int, str], dict[str, Any]],
+    counts: list[int],
+    bits: int,
+    path: str,
+    supported: Callable[[dict[str, Any]], bool] = direction_supported,
 ) -> dict[str, Any]:
     """Apply the protocol's crossover rule to one path at one bit width.
 
     The crossover is the interval between adjacent sizes whose verdicts differ
-    (faster vs slower) with ``claim_supported`` true on both sides.
+    (faster vs slower) with the claim ``supported`` on both sides: the
+    direction claim for revision 3, the revision 2 claim for comparison.
     """
     points = []
     for count in counts:
@@ -88,7 +116,7 @@ def find_crossovers(
         if case is None:
             continue
         stats = case["statistics"]
-        points.append((count, stats["verdict"], bool(stats.get("claim_supported"))))
+        points.append((count, stats["verdict"], supported(stats)))
 
     flips = [
         (a[0], b[0], a[1], b[1])
@@ -166,25 +194,32 @@ def plot_speedup(indexed, counts, bit_widths, out: Path) -> None:
             x = np.array([r["count"] for r in rows])
             stats = [r["statistics"] for r in rows]
             y = np.array([s["speedup_vs_cpu"] for s in stats])
-            err = np.array(
-                [
-                    [s["speedup_vs_cpu"] - s["speedup_low"] for s in stats],
-                    [s["speedup_high"] - s["speedup_vs_cpu"] for s in stats],
-                ]
-            )
+            bounds = np.array([speedup_interval(s) for s in stats])
+            err = np.array([y - bounds[:, 0], bounds[:, 1] - y])
             ax.errorbar(
                 x, y, yerr=err, color=COLORS[path], linewidth=1, capsize=2, label=LABELS[path]
             )
-            supported = np.array([bool(s["claim_supported"]) for s in stats])
+            direction = np.array([direction_supported(s) for s in stats])
+            magnitude = np.array([bool(magnitude_supported(s)) for s in stats])
             ax.scatter(
-                x[supported], y[supported], marker=MARKERS[path], color=COLORS[path], zorder=3
+                x[magnitude], y[magnitude], marker=MARKERS[path], color=COLORS[path], zorder=3
             )
+            only = direction & ~magnitude
             ax.scatter(
-                x[~supported],
-                y[~supported],
+                x[only],
+                y[only],
                 marker=MARKERS[path],
                 facecolors="white",
                 edgecolors=COLORS[path],
+                zorder=3,
+            )
+            ax.scatter(
+                x[~direction],
+                y[~direction],
+                marker=MARKERS[path],
+                facecolors="white",
+                edgecolors=COLORS[path],
+                alpha=0.35,
                 zorder=3,
             )
         ax.set_xscale("log", base=2)
@@ -194,7 +229,10 @@ def plot_speedup(indexed, counts, bit_widths, out: Path) -> None:
         ax.grid(True, which="major", alpha=0.3)
     axes[0][0].set_ylabel("speedup vs C comparator")
     axes[0][0].legend(loc="upper left", fontsize=8)
-    fig.suptitle("F2. Speedup vs elements (filled: claim supported; hollow: not)")
+    fig.suptitle(
+        "F2. Speedup vs elements, 95% bootstrap CI "
+        "(filled: magnitude; hollow: direction only; faded: neither)"
+    )
     fig.tight_layout()
     fig.savefig(out, dpi=200)
     plt.close(fig)
@@ -261,36 +299,46 @@ def fmt_ms(value: float) -> str:
     return f"{value:.4g}"
 
 
-def speedup_cell(stats: dict[str, Any]) -> str:
-    mark = "" if stats["claim_supported"] else " †"
-    return (
-        f"{stats['speedup_vs_cpu']:.3g}× "
-        f"[{stats['speedup_low']:.3g}, {stats['speedup_high']:.3g}] "
-        f"{stats['verdict']}{mark}"
-    )
+def yes_no(value: bool | None) -> str:
+    return "—" if value is None else ("yes" if value else "no")
 
 
 def t1_table(indexed, counts, bit_widths) -> list[str]:
     lines = [
         (
-            "| Elements | Bits | C (ms) | Resident (ms) | Resident speedup | "
-            "Host-origin (ms) | Host-origin speedup |"
+            "| Elements | Bits | Path | C (ms) | CUDA (ms) | Speedup | Trial range | 95% CI | "
+            "Verdict | Direction | Magnitude | Rev 2 |"
         ),
-        "|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for count in counts:
         for bits in bit_widths:
-            cells = [power_label(count), str(bits)]
             cpu = indexed.get((count, bits, "comparator"))
-            cells.append(fmt_ms(cpu["statistics"]["median_ms"]) if cpu else "failed")
+            c_ms = fmt_ms(cpu["statistics"]["median_ms"]) if cpu else "failed"
             for path in CUDA_PATHS:
+                cells = [power_label(count), str(bits), LABELS[path], c_ms]
                 case = indexed.get((count, bits, path))
                 if case is None or "verdict" not in case["statistics"]:
-                    cells += ["failed", "—"]
+                    cells += ["failed", *["—"] * 7]
+                    lines.append("| " + " | ".join(cells) + " |")
                     continue
                 stats = case["statistics"]
-                cells += [fmt_ms(stats["median_ms"]), speedup_cell(stats)]
-            lines.append("| " + " | ".join(cells) + " |")
+                ci = (
+                    f"[{stats['speedup_ci_low']:.3g}, {stats['speedup_ci_high']:.3g}]"
+                    if "speedup_ci_low" in stats
+                    else "—"
+                )
+                cells += [
+                    fmt_ms(stats["median_ms"]),
+                    f"{stats['speedup_vs_cpu']:.3g}×",
+                    f"[{stats['speedup_low']:.3g}, {stats['speedup_high']:.3g}]",
+                    ci,
+                    stats["verdict"],
+                    yes_no(direction_supported(stats)),
+                    yes_no(magnitude_supported(stats)),
+                    yes_no(rev2_supported(stats)),
+                ]
+                lines.append("| " + " | ".join(cells) + " |")
     return lines
 
 
@@ -340,6 +388,11 @@ def render_report(
         for bits in bit_widths
         for path in CUDA_PATHS
     }
+    crossovers_rev2 = {
+        (bits, path): find_crossovers(indexed, counts, bits, path, rev2_supported)
+        for bits in bit_widths
+        for path in CUDA_PATHS
+    }
     revision = manifest["git_provenance"]["code_revision_short"]
     report = [
         f"# Size sweep report ({snapshot.name})",
@@ -351,13 +404,23 @@ def render_report(
         "",
         "## Crossover",
         "",
+        "Located from the direction claim on both sides of the flip.",
+        "",
         *crossover_lines(crossovers),
+        "",
+        "### Revision 2 crossover",
+        "",
+        "Located from the unchanged revision 2 claim, for comparison.",
+        "",
+        *crossover_lines(crossovers_rev2),
         "",
         "## T1. Summary",
         "",
         (
-            "Times are pooled medians. Speedup is C median over CUDA median, with the "
-            "trial-median range in brackets. † marks a verdict without claim support."
+            "Times are pooled medians. Speedup is C median over CUDA median. The trial "
+            "range decides the verdict; the 95% CI is the bootstrap interval over trial "
+            "medians. Direction, magnitude and revision 2 are the claim rules recorded in "
+            "the manifest; — marks a field the snapshot predates."
         ),
         "",
         *t1_table(indexed, counts, bit_widths),
@@ -372,6 +435,7 @@ def render_report(
         "figures": [out / name for name in FIGURES.values()],
         "report": out / REPORT,
         "crossovers": crossovers,
+        "crossovers_rev2": crossovers_rev2,
     }
 
 
