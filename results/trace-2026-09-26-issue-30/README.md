@@ -62,7 +62,15 @@ Findings:
 1. **Pinning without the profiler does not hang.** The hang is specific to running under Nsight.
 2. **Core 0 is about 30% slower, every time.** This fits core 0 servicing most device interrupts and DPCs. Unpinned processes that land on core 0 form the tail of the unpinned distribution.
 3. **Excluding core 0 removes the tail.** Spread across processes drops to 1.21× with no outliers. This is a property of our own benchmark process, not a system setting.
-4. **The 3–6× levels from the traced run did not appear on the quiet machine.** Before the reboot many GPU-using apps were open. Whether those apps cause the large levels, and whether excluding core 0 still protects against them, is untested.
+4. **The 3–6× levels from the traced run did not come back, even with apps open.** A second pass ran with Firefox, ChatGPT, Antigravity, Claude, RustDesk and PowerToys open (`pin-not0-busy.json`, `pin-core0-busy.json`):
+
+   | Condition | Processes | Median (ms) | Range (ms) |
+   | --- | --- | --- | --- |
+   | every core except 0 | 18 | 0.144 | 0.126–0.154 |
+   | unpinned | 18 | 0.142 | 0.127–0.161 |
+   | core 0 | 6 | 0.188 | 0.181–0.340 |
+
+   Open apps alone do not reproduce the large levels, and excluding core 0 keeps the spread at 1.22×. The traced run happened after a long session, so the large levels are most likely state that built up over time (such as long uptime, many earlier GPU processes, or Discord, which was not open for this pass). Their exact cause is unresolved. The practical controls are a fresh reboot before an evidence sweep, core 0 excluded, and the open apps recorded.
 
 ## Next steps (issue #30)
 
