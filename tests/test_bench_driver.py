@@ -5,6 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import benchmark_driver
@@ -27,6 +28,8 @@ from benchmark_driver import (
     compare_case_group,
     compare_to_comparator,
     compute_case_statistics,
+    generate_family_inputs,
+    generate_inputs,
     get_process_affinity,
     in_process_warmups,
     run_benchmark_matrix,
@@ -34,6 +37,7 @@ from benchmark_driver import (
     trial_orders,
     williams_rows,
 )
+from input_families import RESNET18_CIFAR_TENSORS, SPARSE_MASK_SEED, select_model_tensors
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -966,3 +970,137 @@ def test_failed_sweep_restores_the_affinity_mask(tmp_path, monkeypatch):
     with pytest.raises(FileNotFoundError):
         run_cpu_snapshot(tmp_path / "out", readiness_facts=READY_FACTS)
     assert get_process_affinity() == before
+
+
+def test_dense_family_inputs_match_revision_3_generator(tmp_path):
+    legacy = generate_inputs([1024, 4096], tmp_path / "legacy")
+    family = generate_family_inputs("dense", [1024, 4096], tmp_path / "family")
+    assert list(family) == ["n1024", "n4096"]
+    for count in (1024, 4096):
+        meta = family[f"n{count}"]
+        assert meta["input_family"] == "dense"
+        assert meta["sha256"] == legacy[count]["sha256"]
+        assert Path(meta["_path"]).read_bytes() == Path(legacy[count]["_path"]).read_bytes()
+
+
+def test_sparse_family_masks_the_dense_input(tmp_path):
+    dense = generate_family_inputs("dense", [1024, 16384], tmp_path / "dense")
+    sparse = generate_family_inputs("sparse", [1024, 16384], tmp_path / "sparse")
+    assert list(sparse) == ["sparse_n1024", "sparse_n16384"]
+    for count in (1024, 16384):
+        meta = sparse[f"sparse_n{count}"]
+        values = np.frombuffer(Path(meta["_path"]).read_bytes(), dtype="<f4")
+        source = np.frombuffer(Path(dense[f"n{count}"]["_path"]).read_bytes(), dtype="<f4")
+        zeros = values == 0
+        assert not np.signbit(values[zeros]).any()
+        np.testing.assert_array_equal(values[~zeros], source[~zeros])
+        assert meta["zero_fraction_realised"] == pytest.approx(zeros.mean())
+        assert abs(meta["zero_fraction_realised"] - 0.9) < 0.03
+        assert meta["mask_seed"] == SPARSE_MASK_SEED
+        assert meta["count"] == count
+
+
+def test_model_family_records_tensor_provenance(tmp_path):
+    inputs = generate_family_inputs("model", [], tmp_path, model_limit=3)
+    assert list(inputs) == [
+        "model_conv1.weight",
+        "model_bn1.weight",
+        "model_layer1.0.conv1.weight",
+    ]
+    conv = inputs["model_conv1.weight"]
+    assert conv["tensor_shape"] == [64, 3, 3, 3]
+    assert conv["count"] == 1728
+    assert conv["seed"] == [2026, 0]
+    assert conv["std"] == pytest.approx(np.sqrt(2.0 / 27))
+    assert Path(conv["_path"]).stat().st_size == 4 * 1728
+    assert inputs["model_bn1.weight"]["std"] == 0.01
+
+
+def test_resnet18_cifar_tensor_table():
+    assert len(RESNET18_CIFAR_TENSORS) == 62
+    assert sum(t.count for t in RESNET18_CIFAR_TENSORS) == 11_173_962
+    assert len(select_model_tensors("distinct")) == 17
+    assert len(select_model_tensors("all", 5)) == 5
+    with pytest.raises(ValueError):
+        select_model_tensors("some")
+    with pytest.raises(ValueError):
+        select_model_tensors("all", 0)
+
+
+def test_driver_rejects_model_options_outside_model_family(tmp_path):
+    with pytest.raises(ValueError, match="model family"):
+        run_benchmark_matrix(
+            root=ROOT,
+            output_dir=tmp_path / "out",
+            counts=[1024],
+            bit_widths=[8],
+            backends=["cpu"],
+            input_family="sparse",
+            model_limit=2,
+            readiness_facts=READY_FACTS,
+            allow_dirty=True,
+        )
+    with pytest.raises(ValueError, match="model family"):
+        run_benchmark_matrix(
+            root=ROOT,
+            output_dir=tmp_path / "out",
+            counts=[1024],
+            bit_widths=[8],
+            backends=["cpu"],
+            input_family="dense",
+            model_tensors="distinct",
+            readiness_facts=READY_FACTS,
+            allow_dirty=True,
+        )
+    with pytest.raises(ValueError, match="unknown input family"):
+        run_benchmark_matrix(
+            root=ROOT,
+            output_dir=tmp_path / "out",
+            counts=[1024],
+            bit_widths=[8],
+            backends=["cpu"],
+            input_family="images",
+            readiness_facts=READY_FACTS,
+            allow_dirty=True,
+        )
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize(
+    ("family", "extra", "keys"),
+    [
+        ("sparse", {"counts": [1024]}, ["sparse_n1024"]),
+        ("model", {"counts": [], "model_limit": 2}, ["model_conv1.weight", "model_bn1.weight"]),
+    ],
+)
+def test_driver_cpu_only_family_snapshot(tmp_path, family, extra, keys):
+    snapshot_dir = tmp_path / f"{family}-snapshot"
+    run_benchmark_matrix(
+        root=ROOT,
+        output_dir=snapshot_dir,
+        bit_widths=[8],
+        backends=["cpu"],
+        warmups=1,
+        reps=2,
+        trials=2,
+        in_process_warmup_seconds=0,
+        allow_existing=True,
+        allow_dirty=True,
+        readiness_facts=READY_FACTS,
+        input_family=family,
+        **extra,
+    )
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["all_cases_passed"] is True
+    assert manifest["matrix_parameters"]["input_family"] == family
+    assert sorted(manifest["inputs"]) == sorted(keys)
+    assert sorted(manifest["cases"]) == sorted(f"case_cpu_comparator_bits8_{key}" for key in keys)
+    assert all(entry["input"] in keys for entry in manifest["matrix_parameters"]["case_order"])
+    for case_id in manifest["cases"]:
+        case_data = json.loads((snapshot_dir / f"{case_id}.json").read_text(encoding="utf-8"))
+        assert case_data["input_family"] == family
+        assert case_data["input_provenance"]["input_key"] == case_data["input_key"]
+    with (snapshot_dir / manifest["summary_csv"]).open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert sorted(row["input_key"] for row in rows) == sorted(keys)
+    assert {row["input_family"] for row in rows} == {family}

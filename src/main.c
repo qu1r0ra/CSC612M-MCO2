@@ -38,9 +38,14 @@ static void usage(FILE *stream)
             "      [--reps UINT32 (default 30)]\n"
             "      [--block-size UINT32] [--grid-size UINT32] [--timings]\n"
             "  mco2 decompress --input RECORD --output OUTPUT.f32\n"
+            "  mco2 expect --input INPUT.f32 --output SUMS.f64 --seeds UINT64\n"
+            "      [--seed-start UINT64 (default 1)] [--backend cpu|cuda]\n"
+            "      [--bits 4|8] [--tensor-id UINT32] [--invocation-id UINT32]\n"
             "\n"
             "Input and output tensors use little-endian raw FP32. Prescribed\n"
-            "random words use little-endian raw uint32, one per element.\n");
+            "random words use little-endian raw uint32, one per element.\n"
+            "expect writes little-endian FP64 per-element sums of the decoded\n"
+            "values, then per-element sums of their squares.\n");
 }
 
 static int read_file(const char *path, uint8_t **bytes, size_t *size)
@@ -965,6 +970,199 @@ done:
     return status;
 }
 
+static void store_f64_le(uint8_t bytes[8], double value)
+{
+    uint64_t bits64;
+
+    memcpy(&bits64, &value, sizeof bits64);
+    mco2_store_u32_le(bytes, (uint32_t)bits64);
+    mco2_store_u32_le(bytes + 4, (uint32_t)(bits64 >> 32));
+}
+
+/* Compresses one input under seeds seed_start..seed_start+seeds-1 with the
+   computed scale, decodes each record, and writes per-element FP64 sums of the
+   decoded values followed by per-element sums of their squares. */
+static mco2_q8_status expect_file(int argc, char **argv)
+{
+    const char *input_path = NULL, *output_path = NULL;
+    const char *backend = "cpu";
+    uint64_t bits = MCO2_Q8_BITS, seeds = 0, seed_start = 1;
+    uint64_t tensor_id = 0, invocation_id = 0, t;
+    int seeds_seen = 0, i;
+    uint8_t *input_bytes = NULL, *record = NULL, *output = NULL;
+    float *values = NULL, *decoded = NULL;
+    uint32_t *words = NULL;
+    double *sums = NULL, *squares = NULL;
+    size_t input_size = 0, count = 0, payload_size, i_size, decoded_count;
+    float scale = 0.0f;
+    uint32_t scale_bits;
+    mco2_q8_status status;
+
+    for (i = 2; i < argc; i++) {
+        const char *option = argv[i];
+        const char *value;
+        if (i + 1 >= argc)
+            return MCO2_Q8_ERR_ARGUMENT;
+        value = argv[++i];
+        if (strcmp(option, "--input") == 0)
+            input_path = value;
+        else if (strcmp(option, "--output") == 0)
+            output_path = value;
+        else if (strcmp(option, "--seeds") == 0) {
+            seeds_seen = parse_u64(value, &seeds) && seeds != 0;
+            if (!seeds_seen)
+                return MCO2_Q8_ERR_ARGUMENT;
+        } else if (strcmp(option, "--seed-start") == 0) {
+            if (!parse_u64(value, &seed_start))
+                return MCO2_Q8_ERR_ARGUMENT;
+        } else if (strcmp(option, "--tensor-id") == 0) {
+            if (!parse_u64(value, &tensor_id))
+                return MCO2_Q8_ERR_ARGUMENT;
+        } else if (strcmp(option, "--invocation-id") == 0) {
+            if (!parse_u64(value, &invocation_id))
+                return MCO2_Q8_ERR_ARGUMENT;
+        } else if (strcmp(option, "--bits") == 0) {
+            if (!parse_u64(value, &bits))
+                return MCO2_Q8_ERR_ARGUMENT;
+        } else if (strcmp(option, "--backend") == 0) {
+            if (strcmp(value, "cpu") != 0 && strcmp(value, "cuda") != 0)
+                return MCO2_Q8_ERR_ARGUMENT;
+            backend = value;
+        } else {
+            return MCO2_Q8_ERR_ARGUMENT;
+        }
+    }
+    if (input_path == NULL || output_path == NULL || !seeds_seen)
+        return MCO2_Q8_ERR_ARGUMENT;
+    if (seed_start > UINT64_MAX - (seeds - 1))
+        return MCO2_Q8_ERR_ARGUMENT;
+    if (bits != MCO2_Q4_BITS && bits != MCO2_Q8_BITS)
+        return MCO2_Q8_ERR_BIT_WIDTH;
+#ifndef MCO2_ENABLE_CUDA
+    if (strcmp(backend, "cuda") == 0)
+        return MCO2_Q8_ERR_CUDA_UNAVAILABLE;
+#endif
+    if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX)
+        return MCO2_Q8_ERR_ID_OVERFLOW;
+
+    if (!read_file(input_path, &input_bytes, &input_size))
+        return MCO2_Q8_ERR_IO;
+    if (input_size == 0 || input_size % sizeof(uint32_t) != 0) {
+        status = MCO2_Q8_ERR_PAYLOAD_LENGTH;
+        goto done;
+    }
+    count = input_size / sizeof(uint32_t);
+    payload_size = (bits == MCO2_Q4_BITS) ? (count + 1) / 2 : count;
+    if (count > SIZE_MAX / (2 * sizeof(double)) ||
+        count > SIZE_MAX - MCO2_Q8_HEADER_SIZE) {
+        status = MCO2_Q8_ERR_COUNT;
+        goto done;
+    }
+    values = (float *)malloc(count * sizeof *values);
+    if (strcmp(backend, "cpu") == 0)
+        words = (uint32_t *)malloc(count * sizeof *words);
+    record = (uint8_t *)malloc(MCO2_Q8_HEADER_SIZE + payload_size);
+    sums = (double *)calloc(count, sizeof *sums);
+    squares = (double *)calloc(count, sizeof *squares);
+    if (values == NULL || (strcmp(backend, "cpu") == 0 && words == NULL) ||
+        record == NULL || sums == NULL || squares == NULL) {
+        status = MCO2_Q8_ERR_MEMORY;
+        goto done;
+    }
+    for (i_size = 0; i_size < count; i_size++) {
+        uint32_t bits32 = mco2_load_u32_le(input_bytes + 4 * i_size);
+        memcpy(&values[i_size], &bits32, sizeof bits32);
+    }
+    status = mco2_q8_compute_scale(values, count, &scale);
+    if (status != MCO2_Q8_OK)
+        goto done;
+
+    for (t = 0; t < seeds; t++) {
+        uint64_t seed = seed_start + t;
+        float record_scale = scale;
+
+        if (strcmp(backend, "cuda") == 0) {
+#ifdef MCO2_ENABLE_CUDA
+            mco2_cuda_timings timings = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+            status = mco2_cuda_compress(
+                (uint8_t)bits, values, count, seed, tensor_id, invocation_id, 0,
+                0.0f, NULL, 256, 0, record + MCO2_Q8_HEADER_SIZE, &record_scale,
+                0, &timings);
+            if (status != MCO2_Q8_OK)
+                goto done;
+            if (memcmp(&record_scale, &scale, sizeof scale) != 0) {
+                status = MCO2_Q8_ERR_SCALE;
+                goto done;
+            }
+#endif
+        } else {
+            mco2_rng_stream stream;
+            if (mco2_rng_stream_init(&stream, seed, tensor_id, invocation_id) !=
+                MCO2_OK) {
+                status = MCO2_Q8_ERR_ID_OVERFLOW;
+                goto done;
+            }
+            mco2_rng_words_cpu(&stream, (uint64_t)count, words);
+            status = mco2_encode_payload((uint8_t)bits, values, count, scale,
+                                         words, record + MCO2_Q8_HEADER_SIZE);
+            if (status != MCO2_Q8_OK)
+                goto done;
+        }
+        status = mco2_q8_header_encode((uint8_t)bits, (uint64_t)count,
+                                       record_scale, record);
+        if (status != MCO2_Q8_OK)
+            goto done;
+        status = mco2_q8_decode_record(record, MCO2_Q8_HEADER_SIZE + payload_size,
+                                       &decoded, &decoded_count);
+        if (status != MCO2_Q8_OK)
+            goto done;
+        if (decoded_count != count) {
+            status = MCO2_Q8_ERR_COUNT;
+            goto done;
+        }
+        for (i_size = 0; i_size < count; i_size++) {
+            double y = (double)decoded[i_size];
+            sums[i_size] += y;
+            squares[i_size] += y * y;
+        }
+        free(decoded);
+        decoded = NULL;
+    }
+
+    output = (uint8_t *)malloc(2 * count * sizeof(double));
+    if (output == NULL) {
+        status = MCO2_Q8_ERR_MEMORY;
+        goto done;
+    }
+    for (i_size = 0; i_size < count; i_size++) {
+        store_f64_le(output + 8 * i_size, sums[i_size]);
+        store_f64_le(output + 8 * (count + i_size), squares[i_size]);
+    }
+    if (!write_file(output_path, output, 2 * count * sizeof(double))) {
+        status = MCO2_Q8_ERR_IO;
+        goto done;
+    }
+    memcpy(&scale_bits, &scale, sizeof scale_bits);
+    printf("{\"backend\":\"%s\",\"bits\":%u,\"count\":%llu,\"seeds\":%llu,"
+           "\"seed_start\":%llu,\"tensor_id\":%llu,\"invocation_id\":%llu,"
+           "\"scale\":%.9g,\"scale_bits\":\"0x%08x\"}\n",
+           backend, (unsigned)bits, (unsigned long long)count,
+           (unsigned long long)seeds, (unsigned long long)seed_start,
+           (unsigned long long)tensor_id, (unsigned long long)invocation_id,
+           (double)scale, (unsigned)scale_bits);
+
+done:
+    free(output);
+    free(decoded);
+    free(squares);
+    free(sums);
+    free(record);
+    free(words);
+    free(values);
+    free(input_bytes);
+    return status;
+}
+
 int main(int argc, char **argv)
 {
     mco2_q8_status status;
@@ -980,6 +1178,8 @@ int main(int argc, char **argv)
         status = bench_file(argc, argv);
     else if (strcmp(argv[1], "decompress") == 0)
         status = decompress_file(argc, argv);
+    else if (strcmp(argv[1], "expect") == 0)
+        status = expect_file(argc, argv);
     else {
         usage(stderr);
         return 2;

@@ -141,3 +141,12 @@ bench-matrix *args: build-cuda
 [unix]
 bench-matrix *args: build-cuda
     MCO2_TEST_CUDA=1 uv run python benchmark_driver.py {{args}}
+
+# Build the CUDA-enabled tool and run the Layer 3 expectation suite and its figure
+[windows]
+unbiasedness *args: build-cuda
+    $env:MCO2_TEST_CUDA = '1'; uv run python unbiasedness.py {{args}}
+
+[unix]
+unbiasedness *args: build-cuda
+    MCO2_TEST_CUDA=1 uv run python unbiasedness.py {{args}}

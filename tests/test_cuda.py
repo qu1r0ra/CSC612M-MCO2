@@ -774,3 +774,30 @@ def test_cuda_timings_are_one_json_stderr_line(tmp_path, bits: int):
     timings = json.loads(lines[0])
     assert set(timings) == {"k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms"}
     assert all(isinstance(value, (int, float)) and value >= 0 for value in timings.values())
+
+
+@pytest.mark.parametrize("bits", ["4", "8"])
+def test_cuda_expect_matches_cpu_bytes(tmp_path, bits):
+    values = np.random.default_rng(11).normal(size=4099).astype(np.float32)
+    input_path = tmp_path / "input.f32"
+    _write_values(input_path, values)
+    outputs = {}
+    for backend in ("cpu", "cuda"):
+        output_path = tmp_path / f"sums-{backend}.f64"
+        result = _run(
+            "expect",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--seeds",
+            "16",
+            "--bits",
+            bits,
+            "--backend",
+            backend,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["backend"] == backend
+        outputs[backend] = output_path.read_bytes()
+    assert outputs["cuda"] == outputs["cpu"]

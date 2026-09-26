@@ -257,6 +257,16 @@ This section adds paths to revision 3; it is not a new revision. The revision 3 
 - **Correctness.** Each path's benchmark record, under each boundary and policy, must be byte-identical to `mco2 compress` before timing.
 - **Evidence status.** Issue #20 adds tests and a tiny non-evidence matrix only. Extension sweeps feed the publication matrix of issue #25 and follow the pilot rule above.
 
+### Input families (paper extension)
+
+`--input-family dense|sparse|model` selects the inputs of a matrix run; the default is `dense`, and a dense run records the revision 3 case identifiers and input hashes. Spec: [qu1r0ra/CSC612M-MCO2-Paper#21](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/21). Every family uses the same correctness gate, statistics, and claim rules; `input_provenance` and the manifest's `inputs` record how each input was made.
+
+- **Dense.** Standard-normal FP32 values from `numpy.random.default_rng(2026)`, one generator drawn in `--counts` order. Case identifiers end in `n{count}`.
+- **Sparse.** The dense vector of the same seed and count, with each element set to `+0.0` independently with probability 0.9 by a Bernoulli mask from `default_rng(1021)`. The manifest records the mask seed and the target and realised zero fractions. Case identifiers end in `sparse_n{count}`.
+- **Model.** Synthetic tensors with the 62 parameter shapes of ResNet-18 for CIFAR-10 (11,173,962 parameters; names follow the common CIFAR implementation, e.g. `layer2.0.shortcut.0.weight`). No training data or trained weights are used. Convolution and linear weights are He-normal, $N(0, 2/\text{fan\_in})$; biases and batch-norm parameters are $N(0, 0.01^2)$. Tensor `i` in module order uses `default_rng([2026, i])`. `--model-tensors distinct` (default) keeps the first tensor of each distinct (shape, kind), 17 tensors; `all` keeps all 62; `--model-limit N` keeps the first N. The model family ignores `--counts`. Case identifiers end in `model_{tensor name}`.
+- **Snapshots.** A non-pilot run of a non-dense family writes `results/<date>-<short_rev>-<family>/`. Summary rows carry `input_family` and `input_key`. `bench_report.py` reads dense cases only.
+- **Model option guard.** `--model-tensors` and `--model-limit` are rejected with any other family.
+
 ## Comparison backends
 
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.
@@ -280,8 +290,7 @@ Verify decoding outside the measured compression interval.
 - Main platform: the local RTX 5060, subject to fresh inventory and successful build verification.
 - Element counts: `2^10`, `2^14`, `2^18`, and `2^22` for the course run; the size sweep covers every power of two to `2^26`.
 - Bit widths: 4 and 8.
-- Input families: dense centered values and sparse values.
-- Add one pinned synthetic collection shaped like reference-model tensors without requiring training data.
+- Input families: dense centered values for the course run; sparse values and a pinned synthetic collection shaped like reference-model tensors, without training data, as the paper extension above.
 - Use 10 warmups and at least 30 measured repetitions per case.
 - Report median and interquartile range.
 - Run each path as a separate process in several trials with balanced path order (default 24 trials, every ordering of the four paths once; a Williams design for the extension's larger path sets), and report each case's per-trial medians and spread ratio. Within-process IQR understates run-to-run variation, especially for sub-millisecond GPU paths dominated by launch and synchronization latency.
