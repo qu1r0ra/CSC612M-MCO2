@@ -146,6 +146,53 @@ Known limitations, in addition to those of run 1:
 
 - **Diagnosis coverage:** the cause of the remaining slow processes was not identified. The diagnosis ruled out display contention, SM clock ramping, repetition count, process priority, and idle gaps, but it did not test other WDDM scheduling behaviour or memory clock behaviour.
 
+### Revision 3 (resident claim)
+
+This revision was fixed and merged before its pilot and its sweep ran. The run 1 and revision 2 snapshots stay as recorded; revision 3 is a separate snapshot. Tracking issue: [qu1r0ra/CSC612M-MCO2-Paper#30](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/30). The decision record is [ADR 0002](adr/0002-core-0-exclusion-and-split-claims.md).
+
+#### Diagnosis
+
+The evidence is in [`results/trace-2026-09-26-issue-30/`](../results/trace-2026-09-26-issue-30/README.md). It ran from an uncommitted tree and supports no claim.
+
+- **The resident path is launch-bound below about `2^21`.** Under Nsight Systems, kernel busy time was 9.0 µs per repetition in all 72 traced processes at `2^14`, 8-bit. Span per repetition ran from 136 to 920 µs, so GPU compute was under 7% of it.
+- **Slow processes are slow on the CPU side, and the level is per process.** The `cudaLaunchKernel` median fell into discrete levels (about 6, 9, 30 and 48 µs). A process kept its level for its whole life, and the GPU gaps followed the API interval.
+- **Physical core 0 is about 30% slower.** Untraced processes pinned to core 0 had a median of 0.184–0.188 ms, against 0.139–0.146 ms on every other core. This held on a quiet and on a busy desktop. Unpinned processes that land on core 0 form the tail that failed revision 2's spread rule.
+- **Excluding core 0 removes the tail.** The spread across processes fell to 1.16–1.22× at `2^10`, `2^14` and `2^20`, on both desktops, with no outliers.
+- **Unreproduced:** the 3–6× launch levels seen in the traced run, which followed a long session, did not come back after a reboot, with or without heavy apps open. Their cause is unresolved.
+
+The agent changed no GPU clock, power plan, HAGS, or other system setting for this diagnosis.
+
+#### Changes
+
+- **Core 0 excluded.** The driver sets its own process affinity to exclude logical CPUs 0 and 1 (physical core 0) before it starts any benchmark or probe process; children inherit it. This applies to every path, the C comparator included. The manifest records the mask.
+- **Claim split.** Each comparison reports two claims in place of `claim_supported`:
+  - `direction_supported`: the conservative verdict is `faster` or `slower`, and the cell has no boundary inversion.
+  - `magnitude_supported`: `direction_supported`, and both sides are stable.
+  - The revision 2 claim is still computed as `claim_supported_rev2`, for comparison only.
+- **Percentile stability.** `stable` means `spread_p90_p10 <= 1.25`, the 90th over the 10th percentile of trial medians (`numpy` method `linear`), so one outlier process no longer vetoes a case. The max/min `spread_ratio` is still reported.
+- **Bootstrap CI.** Each speedup reports a 95% percentile bootstrap interval: 10,000 resamples of each side's trial medians, independently, from `numpy.random.default_rng(31)`. The CI is reported; no claim depends on it.
+- **Graph path.** `resident-graph` captures the resident sequence (1 memset, then K1–K3) as a CUDA Graph once, outside timing, and times each repetition as one graph launch. It is compared with the comparator like every other path, and with `resident` under the same rules (F4). Its one-time capture-and-instantiate cost is recorded per process.
+- **24 trials.** Each case runs 24 trials, every ordering of the four paths once, so each path holds each position and follows each other path equally often. The sweep takes about 3.2 hours.
+- **Direction-based crossover.** The crossover rule is unchanged except that it uses `direction_supported` on both sides in place of `claim_supported`. The report also gives the crossover under the revision 2 claim, for comparison.
+- **Readiness check.** An evidence sweep refuses to start unless:
+  - uptime is at most 30 minutes (a fresh reboot);
+  - no app window is open outside the allowlist (the Claude app and shell hosts);
+  - no `mco2` process is running;
+  - the git tree is clean;
+  - the GPU reports no clock-event reason other than `GpuIdle`.
+  The manifest (version 3.0) records these facts, the power plan, and the HAGS state. `--ignore-readiness` runs anyway and marks the snapshot non-evidence.
+- **Pilot.** `--pilot` runs the sweep's code path at `2^10`, `2^14`, `2^20` and `2^26`, both bit widths, into `results/pilots/`, recording the readiness check without enforcing it. A pilot is never evidence.
+
+Unchanged: the grid, 30 measured repetitions, the time-based in-process warm-up (1 s), the 20 s and 3 s GPU warm-ups, the randomized case order and its seed, the pooled statistics, the conservative verdict, the boundary-inversion rule (now checked against every resident path), and the correctness gates. GPU clocks, power, and desktop settings stay at their defaults; the user, not the agent, reboots and closes apps before the sweep.
+
+#### Pilot rule
+
+A pilot runs from the merged tree before the sweep. After the pilot, only outright bugs may be fixed, each with a test and recorded here or in its pull request. No parameter or threshold changes after the pilot.
+
+#### Pre-registered outcome
+
+Revision 3's result is final for resident stability: whatever it supports is what the paper claims, and no revision 4 is made for stability. The paper reports, per path and bit width, which direction claims and which magnitude claims hold, the graph-vs-resident finding, both crossovers, and the graph capture cost. It reports the diagnosis and the core-0 finding either way, and discloses the unexplained 3–6× levels as a limitation.
+
 ## Comparison backends
 
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.
@@ -179,4 +226,4 @@ Verify decoding outside the measured compression interval.
 
 Each case records seeds, invocation identifiers, code revision, build flags, hardware, transfer policy, header and payload bytes, timing boundary, and correctness status.
 Preserve raw samples and configuration with the result.
-A speedup or slowdown is claimed only for cases with `claim_supported = true` under the claim rule in the technical contract; every other case, including slowdowns and unstable cases, is reported as measured with its flags and supports no claim.
+From revision 3, a speedup or slowdown direction is claimed only where `direction_supported = true`, and its size only where `magnitude_supported = true`, under the claim rule in the technical contract. Every other case is reported as measured with its flags and supports no claim. Snapshots before revision 3 use `claim_supported` under the rule they recorded.

@@ -156,18 +156,23 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 
 ## Benchmark matrix and frozen snapshot
 
-The benchmark driver measures in-process throughput with `mco2 bench` for the C comparator, CUDA resident, and CUDA host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (102 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of six trials with balanced path order. Each timed process first runs about one second of untimed repetitions of its path (protocol revision 2); `--warmup-seconds 0` restores the run 1 behaviour of snapshot `results/2026-09-25-674bd5b`. The driver refuses a dirty working tree; commit first, or pass `--allow-dirty` for a non-evidence run. The course snapshot `results/2026-09-25-59c8967` was produced by revision `59c8967`, whose driver ran the four course sizes in ascending order without a warm-up; reproduce it from that revision.
+The benchmark driver measures in-process throughput with `mco2 bench` for the C comparator and the CUDA resident, resident-graph, and host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (102 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of 24 trials, one per ordering of the four paths. Each timed process first runs about one second of untimed repetitions of its path. The driver excludes physical core 0 from its own affinity before starting any process (protocol revision 3); children inherit the mask.
+
+An evidence sweep refuses to start unless the readiness check passes: a reboot within 30 minutes, no app windows outside the allowlist, no running `mco2`, a clean git tree, and no GPU clock-event reason other than `GpuIdle`. `--ignore-readiness` and `--allow-dirty` run anyway and mark the snapshot non-evidence. Earlier snapshots came from earlier revisions of the driver; reproduce each from its recorded revision. The course snapshot `results/2026-09-25-59c8967` was produced by revision `59c8967`, whose driver ran the four course sizes in ascending order without a warm-up.
 
 ### Running the benchmark matrix
 
 ```powershell
-# Build the CUDA executable and run the 102-case size sweep (about 45 minutes)
+# Pilot: four sizes, both bit widths, into results/pilots/ (never evidence)
+just bench-matrix --pilot
+
+# Build the CUDA executable and run the 102-case size sweep (about 3.2 hours)
 just bench-matrix
 
 # Course sizes only, with the sweep's warm-up and random case order
 just bench-matrix --counts 1024 16384 262144 4194304
 
-# Render F1-F3 and report.md (crossover, T1) into a snapshot folder
+# Render F1-F4 and report.md (crossover, T1) into a snapshot or pilot folder
 just figures results/<date>-<short_rev>
 ```
 
