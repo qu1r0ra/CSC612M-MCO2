@@ -198,6 +198,43 @@ Fixes after the pilot at `3b578d2` (`results/pilots/2026-09-26T100830-3b578d2`, 
 
 Revision 3's result is final for resident stability: whatever it supports is what the paper claims, and no revision 4 is made for stability. The paper reports, per path and bit width, which direction claims and which magnitude claims hold, the graph-vs-resident finding, both crossovers, and the graph capture cost. It reports the diagnosis and the core-0 finding either way, and discloses the unexplained 3–6× levels as a limitation.
 
+### Sweep result (revision 3)
+
+Snapshot `results/2026-09-26-a1d2439` comes from clean revision `a1d2439`, the merged tree after the pilot fix. The readiness check passed and was enforced, with no override, 5 minutes after a fresh reboot; only the Claude app and the Windows input host were open. The manifest records `evidence: true` and affinity mask `0xffc`. All 136 cases passed the correctness gates. The sweep ran from 11:34 to 14:22 UTC (about 2 h 48 min). The T1 table and crossover lines are in [its `report.md`](../results/2026-09-26-a1d2439/report.md), and the figures are [F1](../results/2026-09-26-a1d2439/f1_time_vs_elements.png), [F2](../results/2026-09-26-a1d2439/f2_speedup_vs_elements.png), [F3](../results/2026-09-26-a1d2439/f3_stage_breakdown.png) and [F4](../results/2026-09-26-a1d2439/f4_graph_vs_resident.png). The GPU reported no active clock-event reason at any of three readings:
+
+- start: P8 at 405 MHz SM (idle);
+- after the warm-up: P1 at 2,955 MHz;
+- end: P8 at 262 MHz.
+
+No clock lock or other system setting was in effect.
+
+- **Claims:** every comparison has both a direction claim and a magnitude claim: 34 of 34 cells for each path against the comparator, and 34 of 34 for the graph against resident. No cell is inverted.
+
+  | Path | Supported slower | Supported faster | Speedup range |
+  | --- | --- | --- | --- |
+  | Resident | `2^10`–`2^12` | `2^13`–`2^26` | 0.19–309× |
+  | Resident-graph | none | `2^10`–`2^26` | 1.06–317× |
+  | Host-origin | `2^10`–`2^13` | `2^14`–`2^26` | 0.10–31.3× |
+
+- **Crossover (direction rule):** the same at both bit widths.
+
+  | Path | Crossover |
+  | --- | --- |
+  | Resident | between `2^12` and `2^13` |
+  | Host-origin | between `2^13` and `2^14` |
+  | Resident-graph | none; faster from `2^10`, the smallest size |
+
+  Under the revision 2 claim the crossovers are the same, except that host-origin 8-bit is unresolved (supported slower up to `2^12`, supported faster from `2^18`). The revision 2 claim fails in 2 resident and 8 host-origin cells, all on the max/min spread of the CUDA side.
+- **Stability:** every case is stable. The largest `spread_p90_p10` is 1.160 for resident (`2^10`, 8-bit), 1.105 for resident-graph, 1.245 for host-origin (`2^17`, 4-bit), and 1.018 for the comparator. Host-origin's largest spread is 0.005 under the threshold.
+- **Graph vs resident:** the graph is faster than resident in all 34 cells, with both claims. The speedup is 5.2–6.5× from `2^10` to `2^15`, falls to 2.0–2.1× at `2^20`, and is 1.03× at `2^26`. Up to `2^15` the graph takes 0.020–0.023 ms per repetition, against 0.105–0.141 ms for resident.
+- **Graph capture cost:** the one-time capture and instantiation took a per-case median of 0.171–0.229 ms (0.158–0.369 ms over the 24 processes of each case), rising slightly with size. At `2^14` the median, 0.180 ms, equals the saving from about 1.6 repetitions (0.114 ms each). A single call with capture included would therefore be slower than resident; the timed repetitions exclude capture by design.
+
+Known limitations:
+
+- **Unexplained launch levels:** the slow launch levels seen before the revision 3 diagnosis (spans 3–6× the fastest, after a long session) were not reproduced, and their cause is unknown. This sweep ran right after a reboot; a desktop that has run for a long time may be slower and less stable than these results show.
+- **Core 0 cause untested:** core 0 was excluded because it measured about 30% slower. Why it is slower was not tested.
+- **One machine, one sweep:** every result comes from one laptop, one reboot, and one sweep, and describes that machine under those conditions.
+
 ## Comparison backends
 
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.

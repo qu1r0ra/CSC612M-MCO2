@@ -1,0 +1,747 @@
+{
+  "manifest_version": "3.0",
+  "date": "2026-09-26",
+  "created_at_utc": "2026-09-26T14:22:55.569855+00:00",
+  "git_provenance": {
+    "code_revision": "a1d2439563cf5a20a116ef688dce134cca43ba13",
+    "code_revision_short": "a1d2439",
+    "git_dirty": false,
+    "dirty_files": []
+  },
+  "hardware": {
+    "gpu_name": "NVIDIA GeForce RTX 5060",
+    "compute_capability": "12.0",
+    "host_cpu": "AMD64 Family 25 Model 33 Stepping 2, AuthenticAMD"
+  },
+  "toolkit_and_driver": {
+    "cuda_toolkit": "Cuda compilation tools, release 13.4, V13.4.59",
+    "driver_version": "610.88",
+    "c_compiler": "Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36260 for x64"
+  },
+  "build_flags": {
+    "source": "just --dry-run build-cuda",
+    "commands": [
+      "New-Item -ItemType Directory -Force build | Out-Null",
+      "./scripts/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include /c src\\main.c /Fo:build\\main_cuda.obj",
+      "./scripts/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include /c src\\codec.c /Fo:build\\codec_cuda.obj",
+      "./scripts/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include /c src\\quantizer.c /Fo:build\\quantizer_cuda_host.obj",
+      "./scripts/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include /c src\\rng_cpu.c /Fo:build\\rng_cpu_cuda.obj",
+      "./scripts/with-msvc.ps1 nvcc -O2 -arch=native -Isrc -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true -Xcompiler /wd4068 -c src\\quantizer_cuda.cu -o build\\quantizer_cuda.obj",
+      "./scripts/with-msvc.ps1 nvcc -O2 -arch=native -Isrc -Ithird_party/random123/include build\\main_cuda.obj build\\codec_cuda.obj build\\quantizer_cuda_host.obj build\\rng_cpu_cuda.obj build\\quantizer_cuda.obj -o build\\mco2.exe"
+    ],
+    "comparator_c": "/nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include",
+    "cuda_nvcc": "-O2 -arch=native -Isrc -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true -Xcompiler /wd4068"
+  },
+  "transfer_policy": "pageable",
+  "gpu_state": {
+    "note": "Instantaneous nvidia-smi readings before the warm-up, after it, and after the last timed process; they describe the GPU around the run, not clock stability during it.",
+    "start": {
+      "pstate": "P8",
+      "clocks.sm": "405 MHz",
+      "clocks.mem": "405 MHz",
+      "clocks.max.sm": "3090 MHz",
+      "temperature.gpu": "43",
+      "power.draw": "13.74 W",
+      "clocks_event_reasons.active": "0x0000000000000000",
+      "captured_at_utc": "2026-09-26T11:34:32.537073+00:00"
+    },
+    "warmup": {
+      "seconds_requested": 20.0,
+      "seconds_elapsed": 20.531000000000006,
+      "workload": "cuda resident, 8-bit, input_n67108864, 100 reps per process",
+      "processes": 21
+    },
+    "after_warmup": {
+      "pstate": "P1",
+      "clocks.sm": "2955 MHz",
+      "clocks.mem": "14001 MHz",
+      "clocks.max.sm": "3090 MHz",
+      "temperature.gpu": "63",
+      "power.draw": "82.08 W",
+      "clocks_event_reasons.active": "0x0000000000000000",
+      "captured_at_utc": "2026-09-26T11:34:58.006781+00:00"
+    },
+    "end": {
+      "pstate": "P8",
+      "clocks.sm": "262 MHz",
+      "clocks.mem": "405 MHz",
+      "clocks.max.sm": "3090 MHz",
+      "temperature.gpu": "44",
+      "power.draw": "13.79 W",
+      "clocks_event_reasons.active": "0x0000000000000000",
+      "captured_at_utc": "2026-09-26T14:22:55.459354+00:00"
+    }
+  },
+  "matrix_parameters": {
+    "counts": [
+      1024,
+      2048,
+      4096,
+      8192,
+      16384,
+      32768,
+      65536,
+      131072,
+      262144,
+      524288,
+      1048576,
+      2097152,
+      4194304,
+      8388608,
+      16777216,
+      33554432,
+      67108864
+    ],
+    "bit_widths": [
+      4,
+      8
+    ],
+    "backends": [
+      "cpu",
+      "cuda"
+    ],
+    "warmup": 10,
+    "in_process_warmup_seconds": 1.0,
+    "in_process_warmup_rule": "per path: max(warmup, ceil(target_seconds * 1000 / probe median ms)), probe = one untimed mco2 bench process with the base warmup and reps",
+    "reps": 30,
+    "trials": 24,
+    "trial_orders": [
+      [
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cuda-host-origin"
+      ],
+      [
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-host-origin",
+        "cuda-resident-graph"
+      ],
+      [
+        "cpu-comparator",
+        "cuda-resident-graph",
+        "cuda-resident",
+        "cuda-host-origin"
+      ],
+      [
+        "cpu-comparator",
+        "cuda-resident-graph",
+        "cuda-host-origin",
+        "cuda-resident"
+      ],
+      [
+        "cpu-comparator",
+        "cuda-host-origin",
+        "cuda-resident",
+        "cuda-resident-graph"
+      ],
+      [
+        "cpu-comparator",
+        "cuda-host-origin",
+        "cuda-resident-graph",
+        "cuda-resident"
+      ],
+      [
+        "cuda-resident",
+        "cpu-comparator",
+        "cuda-resident-graph",
+        "cuda-host-origin"
+      ],
+      [
+        "cuda-resident",
+        "cpu-comparator",
+        "cuda-host-origin",
+        "cuda-resident-graph"
+      ],
+      [
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cpu-comparator",
+        "cuda-host-origin"
+      ],
+      [
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cuda-host-origin",
+        "cpu-comparator"
+      ],
+      [
+        "cuda-resident",
+        "cuda-host-origin",
+        "cpu-comparator",
+        "cuda-resident-graph"
+      ],
+      [
+        "cuda-resident",
+        "cuda-host-origin",
+        "cuda-resident-graph",
+        "cpu-comparator"
+      ],
+      [
+        "cuda-resident-graph",
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-host-origin"
+      ],
+      [
+        "cuda-resident-graph",
+        "cpu-comparator",
+        "cuda-host-origin",
+        "cuda-resident"
+      ],
+      [
+        "cuda-resident-graph",
+        "cuda-resident",
+        "cpu-comparator",
+        "cuda-host-origin"
+      ],
+      [
+        "cuda-resident-graph",
+        "cuda-resident",
+        "cuda-host-origin",
+        "cpu-comparator"
+      ],
+      [
+        "cuda-resident-graph",
+        "cuda-host-origin",
+        "cpu-comparator",
+        "cuda-resident"
+      ],
+      [
+        "cuda-resident-graph",
+        "cuda-host-origin",
+        "cuda-resident",
+        "cpu-comparator"
+      ],
+      [
+        "cuda-host-origin",
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-resident-graph"
+      ],
+      [
+        "cuda-host-origin",
+        "cpu-comparator",
+        "cuda-resident-graph",
+        "cuda-resident"
+      ],
+      [
+        "cuda-host-origin",
+        "cuda-resident",
+        "cpu-comparator",
+        "cuda-resident-graph"
+      ],
+      [
+        "cuda-host-origin",
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cpu-comparator"
+      ],
+      [
+        "cuda-host-origin",
+        "cuda-resident-graph",
+        "cpu-comparator",
+        "cuda-resident"
+      ],
+      [
+        "cuda-host-origin",
+        "cuda-resident-graph",
+        "cuda-resident",
+        "cpu-comparator"
+      ]
+    ],
+    "case_order_seed": 612,
+    "case_order": [
+      {
+        "count": 524288,
+        "bits": 4
+      },
+      {
+        "count": 4096,
+        "bits": 8
+      },
+      {
+        "count": 33554432,
+        "bits": 8
+      },
+      {
+        "count": 33554432,
+        "bits": 4
+      },
+      {
+        "count": 2048,
+        "bits": 4
+      },
+      {
+        "count": 65536,
+        "bits": 4
+      },
+      {
+        "count": 1024,
+        "bits": 4
+      },
+      {
+        "count": 1024,
+        "bits": 8
+      },
+      {
+        "count": 8192,
+        "bits": 8
+      },
+      {
+        "count": 131072,
+        "bits": 4
+      },
+      {
+        "count": 16777216,
+        "bits": 8
+      },
+      {
+        "count": 65536,
+        "bits": 8
+      },
+      {
+        "count": 8192,
+        "bits": 4
+      },
+      {
+        "count": 16384,
+        "bits": 8
+      },
+      {
+        "count": 262144,
+        "bits": 8
+      },
+      {
+        "count": 8388608,
+        "bits": 4
+      },
+      {
+        "count": 2048,
+        "bits": 8
+      },
+      {
+        "count": 32768,
+        "bits": 8
+      },
+      {
+        "count": 8388608,
+        "bits": 8
+      },
+      {
+        "count": 4096,
+        "bits": 4
+      },
+      {
+        "count": 67108864,
+        "bits": 8
+      },
+      {
+        "count": 32768,
+        "bits": 4
+      },
+      {
+        "count": 1048576,
+        "bits": 8
+      },
+      {
+        "count": 262144,
+        "bits": 4
+      },
+      {
+        "count": 2097152,
+        "bits": 8
+      },
+      {
+        "count": 2097152,
+        "bits": 4
+      },
+      {
+        "count": 16384,
+        "bits": 4
+      },
+      {
+        "count": 16777216,
+        "bits": 4
+      },
+      {
+        "count": 524288,
+        "bits": 8
+      },
+      {
+        "count": 131072,
+        "bits": 8
+      },
+      {
+        "count": 1048576,
+        "bits": 4
+      },
+      {
+        "count": 4194304,
+        "bits": 8
+      },
+      {
+        "count": 4194304,
+        "bits": 4
+      },
+      {
+        "count": 67108864,
+        "bits": 4
+      }
+    ],
+    "invocation_scheme": "every trial reuses base invocation 0; identifiers per repetition are copied from each mco2 bench configuration",
+    "input_seed": 2026,
+    "compression_seed": 42
+  },
+  "statistics_method": {
+    "pooled": "median and IQR over all measured repetitions of all trials",
+    "quantile_method": "numpy.percentile(method='linear')",
+    "numpy_version": "2.4.6",
+    "speedup_point": "CPU pooled median / CUDA pooled median",
+    "speedup_range": "[CPU min trial median / CUDA max trial median, CPU max trial median / CUDA min trial median]",
+    "spread_ratio": "max trial median / min trial median",
+    "spread_threshold": 1.25,
+    "spread_p90_p10": "p90 / p10 of the trial medians",
+    "stability_threshold": 1.25,
+    "claim_rules": {
+      "verdict": "verdict is 'faster' when baseline trial-median minimum / candidate trial-median maximum > 1, 'slower' when baseline trial-median maximum / candidate trial-median minimum < 1, and 'inconclusive' otherwise",
+      "direction_supported": "direction_supported: verdict is not 'inconclusive' and boundary_inversion is false (host-origin pooled median is not below the pooled median of any resident path)",
+      "magnitude_supported": "magnitude_supported: direction_supported and both the candidate and the baseline have spread_p90_p10 <= 1.25 (90th over 10th percentile of trial medians, numpy method 'linear')",
+      "claim_supported_rev2": "claim_supported_rev2: verdict is not 'inconclusive', boundary_inversion is false, and both the candidate and the baseline have spread_ratio <= 1.25 (maximum over minimum trial median)"
+    },
+    "bootstrap": {
+      "resamples": 10000,
+      "seed": 31,
+      "level": 0.95,
+      "rule": "95% percentile bootstrap: resample each path's trial medians with replacement, independently, 10000 times from numpy.random.default_rng(31); the statistic is the baseline median of resampled trial medians over the candidate median of resampled trial medians"
+    }
+  },
+  "run_conditions": {
+    "evidence": true,
+    "non_evidence_reasons": [],
+    "pilot": false,
+    "readiness": {
+      "passed": true,
+      "failures": [],
+      "overridden": false,
+      "enforced": true,
+      "facts": {
+        "uptime_seconds": 310.687,
+        "app_windows": [
+          {
+            "process": "claude",
+            "title": "Claude"
+          },
+          {
+            "process": "TextInputHost",
+            "title": "Windows Input Experience"
+          }
+        ],
+        "mco2_pids": [],
+        "git_dirty_files": [],
+        "gpu_clock_event_reasons": "0x0000000000000000",
+        "power_plan": "Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)",
+        "hags_hwschmode": "unset"
+      },
+      "max_uptime_seconds": 1800,
+      "window_allowlist": [
+        "claude",
+        "explorer",
+        "TextInputHost",
+        "ShellExperienceHost",
+        "StartMenuExperienceHost",
+        "SearchHost",
+        "LockApp"
+      ]
+    },
+    "affinity": {
+      "excluded_logical_cpus": [
+        0,
+        1
+      ],
+      "mask": "0xffc",
+      "previous_mask": "0xfff",
+      "applied_to": "driver process before any benchmark or probe process; inherited"
+    }
+  },
+  "inputs": {
+    "1024": {
+      "count": 1024,
+      "filename": "input_n1024.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "5d427e8b2cff71f492e1e2454df157cbbca26cee73cb470bd16894780d5b9595"
+    },
+    "2048": {
+      "count": 2048,
+      "filename": "input_n2048.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "2013fcf8b6242588b1f4655ca6aaa901fd7c17594e5f61cb3f0a06440c131058"
+    },
+    "4096": {
+      "count": 4096,
+      "filename": "input_n4096.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "627084702fa16879de453bf4f294c060e63f76af8f6ab576126ca6122836daf2"
+    },
+    "8192": {
+      "count": 8192,
+      "filename": "input_n8192.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "74db5d184b389e5c8a3d212e7aa778b7741a465d812a40893996ef8f4aa65069"
+    },
+    "16384": {
+      "count": 16384,
+      "filename": "input_n16384.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "0b032e6769e5c3c1e41d3faaf6414f9c426022270a67f6d1a6cd40f936f9ef1a"
+    },
+    "32768": {
+      "count": 32768,
+      "filename": "input_n32768.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "fdc20f973adc15faf96758b98cab6a16a46b5116d8d4b3d68f1d0ed40f24d723"
+    },
+    "65536": {
+      "count": 65536,
+      "filename": "input_n65536.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "805ef1027fff7f7f0c7adabd93dd95573f80c1de4a9fc5daec3e768bc46dce75"
+    },
+    "131072": {
+      "count": 131072,
+      "filename": "input_n131072.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "e5e08999028a3580462a3c37fbfb66b0d1aa276e9b21344c2d8f147f89fcf13c"
+    },
+    "262144": {
+      "count": 262144,
+      "filename": "input_n262144.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "a4e7380695ae9191d86443ca679300a2a7d5c36b92d4a6eebbe4e8a0f8abfdd6"
+    },
+    "524288": {
+      "count": 524288,
+      "filename": "input_n524288.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "cf9b5eb6c22ac2cf90fa26fe5d387e408bb76621f7d0aa2fecaa60644c6ce280"
+    },
+    "1048576": {
+      "count": 1048576,
+      "filename": "input_n1048576.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "f38803175118444ab40685b2c5a992616af119a6d88c7970685975da59f47a01"
+    },
+    "2097152": {
+      "count": 2097152,
+      "filename": "input_n2097152.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "1d4d9670ef3c4cd00256f1983a458eeb58afcc0b05f1ca34b9397b0c44a3d2c5"
+    },
+    "4194304": {
+      "count": 4194304,
+      "filename": "input_n4194304.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "6a896ae699b01c5363c29b8c8b7d06d638e8645dac9e9da4e8feab50a6517843"
+    },
+    "8388608": {
+      "count": 8388608,
+      "filename": "input_n8388608.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "8728104e2d441a711874df58009a1f48e2024c539f1a3034638e11144dbc1d6d"
+    },
+    "16777216": {
+      "count": 16777216,
+      "filename": "input_n16777216.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "945a1e7608590900f52c44e2d9f69859a8753f44af15cbf8f308403d52c1f8e4"
+    },
+    "33554432": {
+      "count": 33554432,
+      "filename": "input_n33554432.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "03f717136c5559a6f93ed84649ad000b16fa15865cf687c2da878da327b32096"
+    },
+    "67108864": {
+      "count": 67108864,
+      "filename": "input_n67108864.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": 2026,
+      "sha256": "c6e51f0e65f097165e25ae4be005e5f722a0bfc319ffeacbb530fb21055430a4"
+    }
+  },
+  "summary_csv": "summary.csv",
+  "msvc_vectorization_report": "msvc_vectorization_report.txt",
+  "cases": [
+    "case_cpu_comparator_bits4_n1024",
+    "case_cuda_resident_bits4_n1024",
+    "case_cuda_resident-graph_bits4_n1024",
+    "case_cuda_host-origin_bits4_n1024",
+    "case_cpu_comparator_bits8_n1024",
+    "case_cuda_resident_bits8_n1024",
+    "case_cuda_resident-graph_bits8_n1024",
+    "case_cuda_host-origin_bits8_n1024",
+    "case_cpu_comparator_bits4_n2048",
+    "case_cuda_resident_bits4_n2048",
+    "case_cuda_resident-graph_bits4_n2048",
+    "case_cuda_host-origin_bits4_n2048",
+    "case_cpu_comparator_bits8_n2048",
+    "case_cuda_resident_bits8_n2048",
+    "case_cuda_resident-graph_bits8_n2048",
+    "case_cuda_host-origin_bits8_n2048",
+    "case_cpu_comparator_bits4_n4096",
+    "case_cuda_resident_bits4_n4096",
+    "case_cuda_resident-graph_bits4_n4096",
+    "case_cuda_host-origin_bits4_n4096",
+    "case_cpu_comparator_bits8_n4096",
+    "case_cuda_resident_bits8_n4096",
+    "case_cuda_resident-graph_bits8_n4096",
+    "case_cuda_host-origin_bits8_n4096",
+    "case_cpu_comparator_bits4_n8192",
+    "case_cuda_resident_bits4_n8192",
+    "case_cuda_resident-graph_bits4_n8192",
+    "case_cuda_host-origin_bits4_n8192",
+    "case_cpu_comparator_bits8_n8192",
+    "case_cuda_resident_bits8_n8192",
+    "case_cuda_resident-graph_bits8_n8192",
+    "case_cuda_host-origin_bits8_n8192",
+    "case_cpu_comparator_bits4_n16384",
+    "case_cuda_resident_bits4_n16384",
+    "case_cuda_resident-graph_bits4_n16384",
+    "case_cuda_host-origin_bits4_n16384",
+    "case_cpu_comparator_bits8_n16384",
+    "case_cuda_resident_bits8_n16384",
+    "case_cuda_resident-graph_bits8_n16384",
+    "case_cuda_host-origin_bits8_n16384",
+    "case_cpu_comparator_bits4_n32768",
+    "case_cuda_resident_bits4_n32768",
+    "case_cuda_resident-graph_bits4_n32768",
+    "case_cuda_host-origin_bits4_n32768",
+    "case_cpu_comparator_bits8_n32768",
+    "case_cuda_resident_bits8_n32768",
+    "case_cuda_resident-graph_bits8_n32768",
+    "case_cuda_host-origin_bits8_n32768",
+    "case_cpu_comparator_bits4_n65536",
+    "case_cuda_resident_bits4_n65536",
+    "case_cuda_resident-graph_bits4_n65536",
+    "case_cuda_host-origin_bits4_n65536",
+    "case_cpu_comparator_bits8_n65536",
+    "case_cuda_resident_bits8_n65536",
+    "case_cuda_resident-graph_bits8_n65536",
+    "case_cuda_host-origin_bits8_n65536",
+    "case_cpu_comparator_bits4_n131072",
+    "case_cuda_resident_bits4_n131072",
+    "case_cuda_resident-graph_bits4_n131072",
+    "case_cuda_host-origin_bits4_n131072",
+    "case_cpu_comparator_bits8_n131072",
+    "case_cuda_resident_bits8_n131072",
+    "case_cuda_resident-graph_bits8_n131072",
+    "case_cuda_host-origin_bits8_n131072",
+    "case_cpu_comparator_bits4_n262144",
+    "case_cuda_resident_bits4_n262144",
+    "case_cuda_resident-graph_bits4_n262144",
+    "case_cuda_host-origin_bits4_n262144",
+    "case_cpu_comparator_bits8_n262144",
+    "case_cuda_resident_bits8_n262144",
+    "case_cuda_resident-graph_bits8_n262144",
+    "case_cuda_host-origin_bits8_n262144",
+    "case_cpu_comparator_bits4_n524288",
+    "case_cuda_resident_bits4_n524288",
+    "case_cuda_resident-graph_bits4_n524288",
+    "case_cuda_host-origin_bits4_n524288",
+    "case_cpu_comparator_bits8_n524288",
+    "case_cuda_resident_bits8_n524288",
+    "case_cuda_resident-graph_bits8_n524288",
+    "case_cuda_host-origin_bits8_n524288",
+    "case_cpu_comparator_bits4_n1048576",
+    "case_cuda_resident_bits4_n1048576",
+    "case_cuda_resident-graph_bits4_n1048576",
+    "case_cuda_host-origin_bits4_n1048576",
+    "case_cpu_comparator_bits8_n1048576",
+    "case_cuda_resident_bits8_n1048576",
+    "case_cuda_resident-graph_bits8_n1048576",
+    "case_cuda_host-origin_bits8_n1048576",
+    "case_cpu_comparator_bits4_n2097152",
+    "case_cuda_resident_bits4_n2097152",
+    "case_cuda_resident-graph_bits4_n2097152",
+    "case_cuda_host-origin_bits4_n2097152",
+    "case_cpu_comparator_bits8_n2097152",
+    "case_cuda_resident_bits8_n2097152",
+    "case_cuda_resident-graph_bits8_n2097152",
+    "case_cuda_host-origin_bits8_n2097152",
+    "case_cpu_comparator_bits4_n4194304",
+    "case_cuda_resident_bits4_n4194304",
+    "case_cuda_resident-graph_bits4_n4194304",
+    "case_cuda_host-origin_bits4_n4194304",
+    "case_cpu_comparator_bits8_n4194304",
+    "case_cuda_resident_bits8_n4194304",
+    "case_cuda_resident-graph_bits8_n4194304",
+    "case_cuda_host-origin_bits8_n4194304",
+    "case_cpu_comparator_bits4_n8388608",
+    "case_cuda_resident_bits4_n8388608",
+    "case_cuda_resident-graph_bits4_n8388608",
+    "case_cuda_host-origin_bits4_n8388608",
+    "case_cpu_comparator_bits8_n8388608",
+    "case_cuda_resident_bits8_n8388608",
+    "case_cuda_resident-graph_bits8_n8388608",
+    "case_cuda_host-origin_bits8_n8388608",
+    "case_cpu_comparator_bits4_n16777216",
+    "case_cuda_resident_bits4_n16777216",
+    "case_cuda_resident-graph_bits4_n16777216",
+    "case_cuda_host-origin_bits4_n16777216",
+    "case_cpu_comparator_bits8_n16777216",
+    "case_cuda_resident_bits8_n16777216",
+    "case_cuda_resident-graph_bits8_n16777216",
+    "case_cuda_host-origin_bits8_n16777216",
+    "case_cpu_comparator_bits4_n33554432",
+    "case_cuda_resident_bits4_n33554432",
+    "case_cuda_resident-graph_bits4_n33554432",
+    "case_cuda_host-origin_bits4_n33554432",
+    "case_cpu_comparator_bits8_n33554432",
+    "case_cuda_resident_bits8_n33554432",
+    "case_cuda_resident-graph_bits8_n33554432",
+    "case_cuda_host-origin_bits8_n33554432",
+    "case_cpu_comparator_bits4_n67108864",
+    "case_cuda_resident_bits4_n67108864",
+    "case_cuda_resident-graph_bits4_n67108864",
+    "case_cuda_host-origin_bits4_n67108864",
+    "case_cpu_comparator_bits8_n67108864",
+    "case_cuda_resident_bits8_n67108864",
+    "case_cuda_resident-graph_bits8_n67108864",
+    "case_cuda_host-origin_bits8_n67108864"
+  ],
+  "all_cases_passed": true
+}
