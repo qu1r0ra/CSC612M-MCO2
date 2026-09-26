@@ -6,14 +6,24 @@ from pathlib import Path
 
 import pytest
 
+import benchmark_driver
 from benchmark_driver import (
+    BOOTSTRAP_SEED,
     DEFAULT_COUNTS,
     DEFAULT_TRIALS,
+    EXCLUDED_LOGICAL_CPUS,
+    PILOT_COUNTS,
     SUMMARY_FIELDS,
+    affinity_mask_excluding,
+    bootstrap_speedup_ci,
+    boundary_inversion,
     case_order,
+    check_readiness,
+    claim_support,
     compact_invocation_ids,
     compare_to_comparator,
     compute_case_statistics,
+    get_process_affinity,
     in_process_warmups,
     run_benchmark_matrix,
     trial_orders,
@@ -41,6 +51,7 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
         in_process_warmup_seconds=0,
         allow_existing=True,
         allow_dirty=True,
+        readiness_facts=READY_FACTS,
     )
     assert result_dir == snapshot_dir
 
@@ -48,13 +59,26 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "2.2"
+    assert manifest["manifest_version"] == "3.0"
     assert manifest["transfer_policy"] == "pageable"
     assert len(manifest["cases"]) == 2  # 1 size * 2 bit widths * 1 CPU path
     assert manifest["all_cases_passed"] is True
     assert manifest["gpu_state"]["warmup"] is None
     assert manifest["matrix_parameters"]["in_process_warmup_seconds"] == 0
     assert "disabled" in manifest["matrix_parameters"]["in_process_warmup_rule"]
+    conditions = manifest["run_conditions"]
+    assert conditions["readiness"]["passed"] is True
+    assert conditions["readiness"]["overridden"] is False
+    assert conditions["pilot"] is False
+    assert conditions["affinity"]["excluded_logical_cpus"] == list(EXCLUDED_LOGICAL_CPUS)
+    assert conditions["evidence"] is (not manifest["git_provenance"]["git_dirty"])
+    assert set(manifest["statistics_method"]["claim_rules"]) == {
+        "verdict",
+        "direction_supported",
+        "magnitude_supported",
+        "claim_supported_rev2",
+    }
+    assert manifest["statistics_method"]["bootstrap"]["seed"] == BOOTSTRAP_SEED
 
     csv_path = snapshot_dir / manifest["summary_csv"]
     assert csv_path.is_file()
@@ -85,6 +109,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         in_process_warmup_seconds=0.01,
         allow_existing=True,
         allow_dirty=True,
+        readiness_facts=READY_FACTS,
     )
     assert result_dir == snapshot_dir
 
@@ -93,7 +118,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "2.2"
+    assert manifest["manifest_version"] == "3.0"
     assert "date" in manifest
     assert "created_at_utc" in manifest
     assert "git_provenance" in manifest
@@ -248,7 +273,11 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         else:
             assert stats["speedup_low"] <= stats["speedup_vs_cpu"] <= stats["speedup_high"]
             assert stats["verdict"] in ("faster", "slower", "inconclusive")
-            assert isinstance(stats["claim_supported"], bool)
+            assert stats["speedup_ci_low"] <= stats["speedup_ci_high"]
+            assert isinstance(stats["direction_supported"], bool)
+            assert isinstance(stats["magnitude_supported"], bool)
+            assert isinstance(stats["claim_supported_rev2"], bool)
+            assert stats["direction_supported"] or not stats["magnitude_supported"]
 
     # 3. Summary CSV
     csv_path = snapshot_dir / manifest["summary_csv"]
@@ -293,6 +322,7 @@ def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
         force_fail=True,
         allow_existing=True,
         allow_dirty=True,
+        readiness_facts=READY_FACTS,
     )
     assert result_dir == snapshot_dir
 
@@ -319,7 +349,9 @@ def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
         assert row["iqr_ms"] == ""
         assert row["speedup_vs_c"] == ""
         assert row["verdict"] == ""
-        assert row["claim_supported"] == ""
+        assert row["direction_supported"] == ""
+        assert row["magnitude_supported"] == ""
+        assert row["claim_supported_rev2"] == ""
 
 
 def test_driver_refuses_to_overwrite_existing_snapshot(tmp_path):
@@ -401,5 +433,176 @@ def test_speedup_verdicts_use_trial_median_ranges():
     assert result["verdict"] == "inconclusive"
     assert result["speedup_low"] < 1.0 < result["speedup_high"]
     assert cpu["spread_ratio"] == pytest.approx(1.1)
-    assert cpu["unstable"] is False
-    assert overlap["unstable"] is True  # 12 / 9 > 1.25
+    assert cpu["unstable_rev2"] is False
+    assert overlap["unstable_rev2"] is True  # 12 / 9 > 1.25
+
+
+def test_p90_p10_spread_ignores_one_outlier_trial():
+    # Linear percentiles of [1..10]: P10 = 1.9, P90 = 9.1.
+    stats = compute_case_statistics([[float(m)] for m in range(1, 11)])
+    assert stats["spread_p90_p10"] == pytest.approx(9.1 / 1.9)
+    assert stats["stable"] is False
+
+    medians = [1.0] * 23 + [3.0]
+    stats = compute_case_statistics([[m] for m in medians])
+    assert stats["spread_ratio"] == pytest.approx(3.0)
+    assert stats["unstable_rev2"] is True
+    assert stats["spread_p90_p10"] == pytest.approx(1.0)
+    assert stats["stable"] is True
+
+
+def test_direction_claim_survives_instability_but_magnitude_does_not():
+    cpu = compute_case_statistics([[10.0], [10.2], [10.1], [10.3]])
+    # Always faster than the comparator, but its trial medians spread 2x.
+    noisy = compute_case_statistics([[1.0], [2.0], [1.0], [2.0]])
+    comparison = compare_to_comparator(cpu, noisy)
+    assert comparison["verdict"] == "faster"
+    assert noisy["stable"] is False
+
+    claims = claim_support(comparison["verdict"], False, cpu, noisy)
+    assert claims == {
+        "direction_supported": True,
+        "magnitude_supported": False,
+        "claim_supported_rev2": False,
+    }
+    # An unstable comparator also blocks the magnitude claim.
+    steady = compute_case_statistics([[1.0], [1.01], [1.02], [1.0]])
+    assert claim_support("faster", False, noisy, steady)["magnitude_supported"] is False
+    assert claim_support("faster", False, cpu, steady) == {
+        "direction_supported": True,
+        "magnitude_supported": True,
+        "claim_supported_rev2": True,
+    }
+    assert claim_support("faster", True, cpu, steady)["direction_supported"] is False
+    assert claim_support("inconclusive", False, cpu, steady)["direction_supported"] is False
+
+
+def test_bootstrap_ci_is_deterministic_and_brackets_the_point_estimate():
+    cpu = [10.0, 10.4, 9.8, 10.1, 10.3, 9.9]
+    cuda = [2.0, 2.2, 1.9, 2.1, 2.05, 1.95]
+    first = bootstrap_speedup_ci(cpu, cuda)
+    assert first == bootstrap_speedup_ci(cpu, cuda)
+    low, high = first
+    assert low < 10.05 / 2.025 < high
+    assert bootstrap_speedup_ci(cpu, cuda, seed=BOOTSTRAP_SEED + 1) != first
+
+    comparison = compare_to_comparator(
+        compute_case_statistics([[m] for m in cpu]), compute_case_statistics([[m] for m in cuda])
+    )
+    assert (comparison["speedup_ci_low"], comparison["speedup_ci_high"]) == first
+
+
+def test_boundary_inversion_covers_every_resident_path():
+    assert boundary_inversion({"resident": 1.0, "host-origin": 2.0}) is False
+    assert boundary_inversion({"resident": 3.0, "host-origin": 2.0}) is True
+    assert boundary_inversion({"resident": 1.0, "resident-graph": 2.5, "host-origin": 2.0}) is True
+    assert boundary_inversion({"resident": 1.0}) is False
+
+
+READY_FACTS = {
+    "uptime_seconds": 600.0,
+    "app_windows": [
+        {"process": "claude", "title": "Claude"},
+        {"process": "TextInputHost", "title": "Windows Input Experience"},
+    ],
+    "mco2_pids": [],
+    "git_dirty_files": [],
+    "gpu_clock_event_reasons": "0x0000000000000001",
+    "power_plan": "Balanced",
+    "hags_hwschmode": "unset",
+}
+
+
+def test_readiness_passes_on_a_quiet_fresh_machine():
+    assert check_readiness(READY_FACTS) == []
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ({"uptime_seconds": 31 * 60.0}, "uptime 31 min"),
+        (
+            {"app_windows": [*READY_FACTS["app_windows"], {"process": "firefox", "title": "x"}]},
+            "open app window: firefox",
+        ),
+        ({"mco2_pids": [4242]}, "mco2 already running (pid 4242)"),
+        ({"git_dirty_files": [" M benchmark_driver.py"]}, "dirty git tree"),
+        ({"gpu_clock_event_reasons": "0x0000000000000024"}, "SwPowerCap, SwThermalSlowdown"),
+        ({"gpu_clock_event_reasons": None}, "clock-event reasons unavailable"),
+        ({"gpu_clock_event_reasons": "[N/A]"}, "clock-event reasons unavailable"),
+    ],
+)
+def test_readiness_names_each_failure(change, reason):
+    failures = check_readiness({**READY_FACTS, **change})
+    assert len(failures) == 1
+    assert reason in failures[0]
+
+
+def test_pilot_is_four_sizes_from_the_sweep_grid():
+    assert len(PILOT_COUNTS) == 4
+    assert set(PILOT_COUNTS) <= set(DEFAULT_COUNTS)
+
+
+def test_affinity_mask_excludes_core_zero():
+    assert affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, 0b1111_1111_1111) == 0b1111_1111_1100
+    # Built from the current mask, so CPUs the process never had stay excluded.
+    assert affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, 0b1010_1111) == 0b1010_1100
+    with pytest.raises(RuntimeError, match="no logical CPU"):
+        affinity_mask_excluding((0, 1), 0b11)
+
+
+def run_cpu_snapshot(out, **kwargs):
+    return run_benchmark_matrix(
+        root=ROOT,
+        output_dir=out,
+        counts=[1024],
+        bit_widths=[4],
+        backends=["cpu"],
+        warmups=1,
+        reps=1,
+        trials=1,
+        in_process_warmup_seconds=0,
+        allow_dirty=True,
+        **kwargs,
+    )
+
+
+def test_failed_readiness_stops_the_sweep_before_any_process(tmp_path):
+    busy = {**READY_FACTS, "uptime_seconds": 5 * 3600.0}
+    with pytest.raises(RuntimeError, match="uptime 300 min"):
+        run_cpu_snapshot(tmp_path / "out", readiness_facts=busy)
+    assert not (tmp_path / "out").exists()
+
+
+def test_readiness_override_marks_the_snapshot_non_evidence(tmp_path):
+    busy = {**READY_FACTS, "mco2_pids": [4242]}
+    before = get_process_affinity()
+    out = run_cpu_snapshot(tmp_path / "out", readiness_facts=busy, ignore_readiness=True)
+    assert get_process_affinity() == before
+    conditions = json.loads((out / "manifest.json").read_text(encoding="utf-8"))["run_conditions"]
+    assert conditions["evidence"] is False
+    assert conditions["readiness"]["overridden"] is True
+    assert "readiness check failed and was overridden" in conditions["non_evidence_reasons"]
+
+
+def test_pilot_records_readiness_without_enforcing_it(tmp_path):
+    busy = {**READY_FACTS, "uptime_seconds": 5 * 3600.0}
+    out = run_cpu_snapshot(tmp_path / "out", readiness_facts=busy, pilot=True)
+    conditions = json.loads((out / "manifest.json").read_text(encoding="utf-8"))["run_conditions"]
+    assert conditions["pilot"] is True
+    assert conditions["evidence"] is False
+    assert conditions["readiness"]["passed"] is False
+    assert conditions["readiness"]["overridden"] is False
+    assert conditions["readiness"]["enforced"] is False
+    assert "pilot run" in conditions["non_evidence_reasons"]
+
+
+def test_failed_sweep_restores_the_affinity_mask(tmp_path, monkeypatch):
+    def missing_binary(root):
+        raise FileNotFoundError("no binary")
+
+    monkeypatch.setattr(benchmark_driver, "find_binary", missing_binary)
+    before = get_process_affinity()
+    with pytest.raises(FileNotFoundError):
+        run_cpu_snapshot(tmp_path / "out", readiness_facts=READY_FACTS)
+    assert get_process_affinity() == before
