@@ -38,8 +38,8 @@ This protocol was fixed before the sweep ran. The course snapshot above stays th
 - Case order: the 34 (size, bits) cases run in a random order drawn with `numpy.random.default_rng(612)`. The manifest records the seed and the order, and each case JSON records its `execution_index`. Path order within a case stays balanced across trials.
 - GPU warm-up: before the first timed process, the driver runs the resident path untimed on the largest input for 20 seconds. Before each case's timed processes, after its correctness gate, it runs the same work on that case's input for 3 seconds, so clocks recover after the gate and after long CPU processes of the previous case. The manifest records `nvidia-smi` state before and after the initial warm-up and after the last timed process; each case JSON records its state after its own warm-up.
 - Copy timing: the host-origin path records H2D and D2H times for every repetition with CUDA events. Each case also records the median of each stage, plus `other_ms`, the median of wall time minus the timed stages. The wall-clock total stays the headline measure. Stage times are diagnosis only, never summed into a path time.
-- Crossover: for one path at one bit width, the crossover is the interval between two adjacent grid sizes whose verdicts differ (`slower` on one side, `faster` on the other), with `claim_supported` true on both sides. If no such interval exists, or more than one exists, the crossover is reported as not resolved, bracketed by the largest supported slower size and the smallest supported faster size.
-- Outputs: `just figures <snapshot>` writes F1 (time vs elements, log-log, band = trial-median range), F2 (speedup vs elements with a 1× line; filled markers where `claim_supported`, hollow otherwise), F3 (CUDA stage shares at `2^14`, `2^18`, `2^22`, `2^26`), and `report.md` (crossover and the T1 table) into the snapshot folder.
+- Crossover: for one path at one bit width, the crossover is the interval between two adjacent grid sizes whose verdicts differ (`slower` on one side, `faster` on the other), with `claim_supported` true on both sides (from revision 3, `direction_supported`). If no such interval exists, or more than one exists, the crossover is reported as not resolved, bracketed by the largest supported slower size and the smallest supported faster size.
+- Outputs: `just figures <snapshot>` writes F1 (time vs elements, log-log, band = trial-median range), F2 (speedup vs elements with a 1× line; filled markers where `claim_supported`, hollow otherwise; from revision 3, filled for a magnitude claim and hollow for a direction claim only, faded otherwise, with a bootstrap CI), F3 (CUDA stage shares at `2^14`, `2^18`, `2^22`, `2^26`), F4 from revision 3 (`resident-graph` speedup over `resident`), and `report.md` (crossover and the T1 table) into the snapshot folder.
 
 ### Sweep result (run 1)
 
@@ -148,7 +148,7 @@ Known limitations, in addition to those of run 1:
 
 ### Revision 3 (resident claim)
 
-This revision was fixed and merged before its pilot and its sweep ran. The run 1 and revision 2 snapshots stay as recorded; revision 3 is a separate snapshot. Tracking issue: [qu1r0ra/CSC612M-MCO2-Paper#30](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/30). The decision record is [ADR 0002](adr/0002-core-0-exclusion-and-split-claims.md).
+This revision was fixed and merged before its pilot and its sweep ran. The run 1 and revision 2 snapshots stay as recorded; revision 3 is a separate snapshot. Spec: [qu1r0ra/CSC612M-MCO2-Paper#31](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/31); diagnosis: [#30](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/30). The decision record is [ADR 0002](adr/0002-core-0-exclusion-and-split-claims.md).
 
 #### Diagnosis
 
@@ -157,8 +157,8 @@ The evidence is in [`results/trace-2026-09-26-issue-30/`](../results/trace-2026-
 - **The resident path is launch-bound below about `2^21`.** Under Nsight Systems, kernel busy time was 9.0 µs per repetition in all 72 traced processes at `2^14`, 8-bit. Span per repetition ran from 136 to 920 µs, so GPU compute was under 7% of it.
 - **Slow processes are slow on the CPU side, and the level is per process.** The `cudaLaunchKernel` median fell into discrete levels (about 6, 9, 30 and 48 µs). A process kept its level for its whole life, and the GPU gaps followed the API interval.
 - **Physical core 0 is about 30% slower.** Untraced processes pinned to core 0 had a median of 0.184–0.188 ms, against 0.139–0.146 ms on every other core. This held on a quiet and on a busy desktop. Unpinned processes that land on core 0 form the tail that failed revision 2's spread rule.
-- **Excluding core 0 removes the tail.** The spread across processes fell to 1.16–1.22× at `2^10`, `2^14` and `2^20`, on both desktops, with no outliers.
-- **Unreproduced:** the 3–6× launch levels seen in the traced run, which followed a long session, did not come back after a reboot, with or without heavy apps open. Their cause is unresolved.
+- **Excluding core 0 removes the tail.** At `2^14`, the spread across processes fell to 1.21× on the quiet desktop and 1.22× on the busy one, with no outliers.
+- **Unreproduced:** the slow launch levels seen in the traced run (spans 3–6× the fastest), which followed a long session, did not come back after a reboot, with or without heavy apps open. Their cause is unresolved.
 
 The agent changed no GPU clock, power plan, HAGS, or other system setting for this diagnosis.
 
@@ -170,20 +170,21 @@ The agent changed no GPU clock, power plan, HAGS, or other system setting for th
   - `magnitude_supported`: `direction_supported`, and both sides are stable.
   - The revision 2 claim is still computed as `claim_supported_rev2`, for comparison only.
 - **Percentile stability.** `stable` means `spread_p90_p10 <= 1.25`, the 90th over the 10th percentile of trial medians (`numpy` method `linear`), so one outlier process no longer vetoes a case. The max/min `spread_ratio` is still reported.
-- **Bootstrap CI.** Each speedup reports a 95% percentile bootstrap interval: 10,000 resamples of each side's trial medians, independently, from `numpy.random.default_rng(31)`. The CI is reported; no claim depends on it.
-- **Graph path.** `resident-graph` captures the resident sequence (1 memset, then K1–K3) as a CUDA Graph once, outside timing, and times each repetition as one graph launch. It is compared with the comparator like every other path, and with `resident` under the same rules (F4). Its one-time capture-and-instantiate cost is recorded per process.
+- **Bootstrap CI.** Each speedup reports a 95% percentile bootstrap interval: 10,000 resamples of each side's trial medians, independently, from `numpy.random.default_rng(31)`. Each resample's statistic is the comparator's median resampled trial median over the CUDA one. The CI is reported; no claim depends on it.
+- **Graph path.** `resident-graph` captures one resident repetition (1 memset and 12 kernel launches, with the same kernels, geometry and buffers as `resident`) as a CUDA Graph once, outside timing, and times each repetition as one graph launch. It is compared with the comparator like every other path, and with `resident` under the same rules (F4). Its one-time capture-and-instantiate cost is recorded per process.
 - **24 trials.** Each case runs 24 trials, every ordering of the four paths once, so each path holds each position and follows each other path equally often. The sweep takes about 3.2 hours.
 - **Direction-based crossover.** The crossover rule is unchanged except that it uses `direction_supported` on both sides in place of `claim_supported`. The report also gives the crossover under the revision 2 claim, for comparison.
 - **Readiness check.** An evidence sweep refuses to start unless:
   - uptime is at most 30 minutes (a fresh reboot);
-  - no app window is open outside the allowlist (the Claude app and shell hosts);
+  - no app window is open outside `WINDOW_ALLOWLIST` in `benchmark_driver.py` (the Claude app and Windows shell hosts);
   - no `mco2` process is running;
   - the git tree is clean;
-  - the GPU reports no clock-event reason other than `GpuIdle`.
+  - the GPU reports no clock-event reason other than `GpuIdle` (idle is not throttling).
   The manifest (version 3.0) records these facts, the power plan, and the HAGS state. `--ignore-readiness` runs anyway and marks the snapshot non-evidence.
-- **Pilot.** `--pilot` runs the sweep's code path at `2^10`, `2^14`, `2^20` and `2^26`, both bit widths, into `results/pilots/`, recording the readiness check without enforcing it. A pilot is never evidence.
+- **Boundary inversion against every resident path.** A cell is inverted when host-origin is faster than `resident` or `resident-graph`.
+- **Pilot.** `--pilot` runs the sweep's code path at `2^10`, `2^14`, `2^20` and `2^26`, both bit widths, into `results/pilots/`. The only difference from a sweep is that the readiness check is recorded, not enforced. A pilot is never evidence.
 
-Unchanged: the grid, 30 measured repetitions, the time-based in-process warm-up (1 s), the 20 s and 3 s GPU warm-ups, the randomized case order and its seed, the pooled statistics, the conservative verdict, the boundary-inversion rule (now checked against every resident path), and the correctness gates. GPU clocks, power, and desktop settings stay at their defaults; the user, not the agent, reboots and closes apps before the sweep.
+Unchanged: the grid, 30 measured repetitions, the time-based in-process warm-up (1 s), the 20 s and 3 s GPU warm-ups, the randomized case order and its seed, the pooled statistics, the conservative verdict, and the correctness gates. GPU clocks, power, and desktop settings stay at their defaults; the user, not the agent, reboots and closes apps before the sweep.
 
 #### Pilot rule
 
