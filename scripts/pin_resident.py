@@ -9,7 +9,9 @@ process gets a hard timeout so a hang stops the run instead of stalling it.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
+import os
 import random
 import statistics
 import subprocess
@@ -20,7 +22,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmark_driver import (  # noqa: E402
+from benchmark_driver import (
     DEFAULT_COMPRESSION_SEED,
     collect_git_provenance,
     find_binary,
@@ -28,7 +30,7 @@ from benchmark_driver import (  # noqa: E402
     query_gpu_state,
     warm_up_gpu,
 )
-from scripts.trace_resident import set_affinity  # noqa: E402
+from scripts.trace_resident import set_affinity
 
 NOT_CORE0 = -1
 
@@ -38,9 +40,6 @@ def apply_affinity(core: int | None) -> None:
     if core != NOT_CORE0:
         set_affinity(core)
         return
-    import ctypes
-    import os
-
     mask = ((1 << (os.cpu_count() or 1)) - 1) & ~0b11
     kernel32 = ctypes.windll.kernel32
     kernel32.GetCurrentProcess.restype = ctypes.c_void_p
