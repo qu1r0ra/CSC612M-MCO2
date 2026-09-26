@@ -650,3 +650,55 @@ def test_cpu_bench_rejects_nonfinite_input_before_emitting_samples(tmp_path):
     assert result.returncode != 0
     assert "non-finite" in result.stderr
     assert result.stdout == ""
+
+
+def _expect(
+    tmp_path: Path, values: np.ndarray, *extra: str
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    input_path = tmp_path / "expect-input.f32"
+    output_path = tmp_path / "sums.f64"
+    _write_f32(input_path, values)
+    result = _run("expect", "--input", str(input_path), "--output", str(output_path), *extra)
+    return result, output_path
+
+
+@pytest.mark.parametrize("bits", ["4", "8"])
+def test_expect_sums_match_decoded_compress_records(tmp_path, bits):
+    values = np.random.default_rng(7).normal(size=33).astype(np.float32)
+    seeds, seed_start = 5, 3
+    result, output_path = _expect(
+        tmp_path, values, "--seeds", str(seeds), "--seed-start", str(seed_start), "--bits", bits
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["seeds"] == seeds
+    assert report["count"] == values.size
+
+    decoded = np.stack(
+        [
+            decode_record(_compress(tmp_path, values, seed=k, extra=("--bits", bits))).astype(
+                np.float64
+            )
+            for k in range(seed_start, seed_start + seeds)
+        ]
+    )
+    raw = np.frombuffer(output_path.read_bytes(), dtype="<f8")
+    assert raw.size == 2 * values.size
+    np.testing.assert_array_equal(raw[: values.size], decoded.sum(axis=0))
+    np.testing.assert_array_equal(raw[values.size :], (decoded * decoded).sum(axis=0))
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ("--seeds", "0"),
+        ("--seeds", "2", "--bits", "6"),
+        ("--seeds", "2", "--backend", "gpu"),
+        ("--bits", "8"),
+    ],
+)
+def test_expect_rejects_invalid_arguments(tmp_path, extra):
+    result, output_path = _expect(tmp_path, np.asarray([1.0, -0.5], dtype=np.float32), *extra)
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert not output_path.exists()

@@ -175,9 +175,17 @@ just bench-matrix --counts 1024 16384 262144 4194304
 # Publication extension: GPU-origin paths and pinned transfers (nine paths, trials a multiple of 18)
 just bench-matrix --boundaries gpu-origin --transfer-policies pageable pinned --trials 18
 
-# Render F1-F4 and report.md (crossover, T1) into a snapshot or pilot folder
+# Paper extension input families (non-dense snapshots get a -<family> suffix)
+just bench-matrix --input-family sparse --counts 1024 16384 262144 4194304
+just bench-matrix --input-family model --model-tensors distinct
+
+# Render F1-F4 and report.md (crossover, T1) into a snapshot or pilot folder (dense cases only)
 just figures results/<date>-<short_rev>
 ```
+
+### Layer 3 empirical expectation suite
+
+`just unbiasedness` builds the CUDA executable and runs the full expectation suite of the technical contract (correctness layer 3): four inputs, both bit widths, both backends, 4,096 seeds, about a minute on the RTX 5060. It writes `results/<date>-<short_rev>-unbiasedness/unbiasedness.json` and `f_unbiasedness.png` and exits nonzero if any case fails. Run it from a clean tree; `--allow-dirty`, `--seeds N`, `--backends cpu`, and `--output-dir DIR` give non-evidence runs.
 
 ### Inspecting results and provenance
 

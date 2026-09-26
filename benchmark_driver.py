@@ -30,6 +30,19 @@ from typing import Any
 
 import numpy as np
 
+from input_families import (
+    INPUT_FAMILIES,
+    MODEL_NAME,
+    MODEL_TENSOR_SETS,
+    SPARSE_MASK_SEED,
+    SPARSE_ZERO_FRACTION,
+    dense_vectors,
+    model_tensor_seed,
+    model_tensor_std,
+    model_tensor_values,
+    select_model_tensors,
+    sparsify,
+)
 from mco2_oracle import decode_record, reference_fp64
 
 HEADER_STRUCT = struct.Struct("<4sBBHQf")
@@ -482,6 +495,77 @@ def generate_inputs(
         }
 
     return provenance
+
+
+def write_input(directory: Path, name: str, values: np.ndarray) -> tuple[str, Path]:
+    bytes_data = values.astype("<f4").tobytes()
+    file_path = directory / name
+    file_path.write_bytes(bytes_data)
+    return hashlib.sha256(bytes_data).hexdigest(), file_path
+
+
+def generate_family_inputs(
+    family: str,
+    counts: Sequence[int],
+    directory: Path,
+    seed: int = DEFAULT_INPUT_SEED,
+    model_tensors: str = "distinct",
+    model_limit: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Inputs of one family keyed by input key; dense keys are `n{count}` as in revision 3."""
+    if family == "dense":
+        return {
+            f"n{count}": {"input_family": "dense", "input_key": f"n{count}", **meta}
+            for count, meta in generate_inputs(counts, directory, seed).items()
+        }
+    directory.mkdir(parents=True, exist_ok=True)
+    provenance: dict[str, dict[str, Any]] = {}
+    if family == "sparse":
+        for count, dense in zip(counts, dense_vectors(counts, seed), strict=True):
+            values, realised = sparsify(dense)
+            key = f"sparse_n{count}"
+            sha256, file_path = write_input(directory, f"input_{key}.f32", values)
+            provenance[key] = {
+                "input_family": "sparse",
+                "input_key": key,
+                "count": count,
+                "filename": file_path.name,
+                "generator": "numpy.random.default_rng",
+                "bit_generator": "PCG64",
+                "seed": seed,
+                "dense_source": "the dense input of the same seed and count",
+                "mask_seed": SPARSE_MASK_SEED,
+                "zero_fraction_target": SPARSE_ZERO_FRACTION,
+                "zero_fraction_realised": realised,
+                "zero_value": "+0.0",
+                "sha256": sha256,
+                "_path": str(file_path),
+            }
+        return provenance
+    if family == "model":
+        for tensor in select_model_tensors(model_tensors, model_limit):
+            key = f"model_{tensor.name}"
+            sha256, file_path = write_input(
+                directory, f"input_{key}.f32", model_tensor_values(tensor, seed)
+            )
+            provenance[key] = {
+                "input_family": "model",
+                "input_key": key,
+                "count": tensor.count,
+                "filename": file_path.name,
+                "generator": "numpy.random.default_rng",
+                "bit_generator": "PCG64",
+                "seed": model_tensor_seed(tensor, seed),
+                "model": MODEL_NAME,
+                "tensor_name": tensor.name,
+                "tensor_shape": list(tensor.shape),
+                "tensor_kind": tensor.kind,
+                "std": model_tensor_std(tensor),
+                "sha256": sha256,
+                "_path": str(file_path),
+            }
+        return provenance
+    raise ValueError(f"unknown input family {family!r}; choose from {INPUT_FAMILIES}")
 
 
 def generate_msvc_vectorization_report(
@@ -1273,11 +1357,9 @@ def compute_stage_medians(runs: Sequence[dict[str, Any]]) -> dict[str, float] | 
     return medians
 
 
-def case_order(
-    counts: Sequence[int], bit_widths: Sequence[int], seed: int
-) -> list[tuple[int, int]]:
-    """Every (count, bits) case in a seeded random order."""
-    cases = [(count, bits) for count in counts for bits in bit_widths]
+def case_order(keys: Sequence[Any], bit_widths: Sequence[int], seed: int) -> list[tuple[Any, int]]:
+    """Every (input, bits) case in a seeded random order; dense inputs are keyed by count."""
+    cases = [(key, bits) for key in keys for bits in bit_widths]
     permutation = np.random.default_rng(seed).permutation(len(cases))
     return [cases[i] for i in permutation]
 
@@ -1396,11 +1478,15 @@ def failed_row(
     *,
     transfer_policy: str,
     path_label: str,
+    input_family: str = "dense",
+    input_key: str = "",
 ) -> dict[str, Any]:
     row = dict.fromkeys(SUMMARY_FIELDS, "")
     row.update(
         {
             "count": count,
+            "input_family": input_family,
+            "input_key": input_key or f"n{count}",
             "bits": bits,
             "backend": backend,
             "boundary": boundary,
@@ -1449,6 +1535,8 @@ SUMMARY_FIELDS = [
     "direction_supported",
     "magnitude_supported",
     "claim_supported_rev2",
+    "input_family",
+    "input_key",
 ]
 
 
@@ -1476,7 +1564,15 @@ def run_benchmark_matrix(
     ignore_readiness: bool = False,
     boundaries: Sequence[str] = (),
     transfer_policies: Sequence[str] = ("pageable",),
+    input_family: str = "dense",
+    model_tensors: str = "distinct",
+    model_limit: int | None = None,
 ) -> Path:
+    if input_family not in INPUT_FAMILIES:
+        raise ValueError(f"unknown input family {input_family!r}; choose from {INPUT_FAMILIES}")
+    if input_family != "model" and (model_tensors != "distinct" or model_limit is not None):
+        raise ValueError("--model-tensors and --model-limit apply only to the model family")
+    select_model_tensors(model_tensors, model_limit)
     if trials < 1:
         raise ValueError("trials must be at least 1")
     if "cpu" not in backends:
@@ -1500,7 +1596,8 @@ def run_benchmark_matrix(
         elif pilot:
             target_dir = root / "results" / "pilots" / f"{now:%Y-%m-%dT%H%M%S}-{short_rev}"
         else:
-            target_dir = root / "results" / f"{date_str}-{short_rev}"
+            suffix = "" if input_family == "dense" else f"-{input_family}"
+            target_dir = root / "results" / f"{date_str}-{short_rev}{suffix}"
 
         if target_dir.exists() and not allow_existing:
             raise FileExistsError(
@@ -1578,6 +1675,9 @@ def run_benchmark_matrix(
             case_warmup_seconds=case_warmup_seconds,
             in_process_warmup_seconds=in_process_warmup_seconds,
             force_fail=force_fail,
+            input_family=input_family,
+            model_tensors=model_tensors,
+            model_limit=model_limit,
         )
 
 
@@ -1603,6 +1703,9 @@ def sweep_matrix(
     case_warmup_seconds: float,
     in_process_warmup_seconds: float,
     force_fail: bool,
+    input_family: str = "dense",
+    model_tensors: str = "distinct",
+    model_limit: int | None = None,
 ) -> Path:
     binary = find_binary(root)
     toolchain_prov = collect_hardware_and_toolchain(root)
@@ -1615,12 +1718,16 @@ def sweep_matrix(
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Inputs generation
-    input_meta = generate_inputs(counts, temp_dir / "inputs", seed=input_seed)
-    input_files: dict[int, Path] = {c: Path(meta["_path"]) for c, meta in input_meta.items()}
-    clean_input_meta: dict[int, dict[str, Any]] = {
-        c: {k: v for k, v in meta.items() if not k.startswith("_")}
-        for c, meta in input_meta.items()
+    input_meta = generate_family_inputs(
+        input_family, counts, temp_dir / "inputs", input_seed, model_tensors, model_limit
+    )
+    input_files: dict[str, Path] = {key: Path(meta["_path"]) for key, meta in input_meta.items()}
+    clean_input_meta: dict[str, dict[str, Any]] = {
+        key: {k: v for k, v in meta.items() if not k.startswith("_")}
+        for key, meta in input_meta.items()
     }
+    input_counts = {key: meta["count"] for key, meta in input_meta.items()}
+    dense = input_family == "dense"
 
     # 2. Vectorization report, compiled with the comparator's own flags
     vec_report_path = target_dir / "msvc_vectorization_report.txt"
@@ -1628,21 +1735,23 @@ def sweep_matrix(
 
     orders = trial_orders(paths, trials)
     order_labels = [[paths[i].label for i in order] for order in orders]
-    ordered_cases = case_order(counts, bit_widths, case_order_seed)
+    ordered_cases = case_order(list(input_meta), bit_widths, case_order_seed)
+    largest_input = max(input_meta, key=lambda key: input_counts[key])
 
     # Bring the GPU to steady clocks on the largest input before any timed process.
     gpu_warmup = None
     gpu_state_after_warmup = None
     if "cuda" in backends and gpu_warmup_seconds > 0:
-        gpu_warmup = warm_up_gpu(binary, input_files[max(counts)], gpu_warmup_seconds)
+        gpu_warmup = warm_up_gpu(binary, input_files[largest_input], gpu_warmup_seconds)
         gpu_state_after_warmup = query_gpu_state()
 
     # 3. Benchmark cases
     case_results: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
 
-    for execution_index, (count, bits) in enumerate(ordered_cases):
-        input_path = input_files[count]
+    for execution_index, (input_key, bits) in enumerate(ordered_cases):
+        input_path = input_files[input_key]
+        count = input_counts[input_key]
         payload_bytes = count if bits == 8 else (count + 1) // 2
 
         # Gate on correctness once, outside every timed process.
@@ -1664,8 +1773,10 @@ def sweep_matrix(
         for path in paths:
             cases.append(
                 {
-                    "case_id": f"case_{path.backend}_{path.key}_bits{bits}_n{count}",
+                    "case_id": f"case_{path.backend}_{path.key}_bits{bits}_{input_key}",
                     "count": count,
+                    "input_family": input_family,
+                    "input_key": input_key,
                     "bits": bits,
                     "backend": path.backend,
                     "timing_boundary": path.boundary,
@@ -1689,7 +1800,7 @@ def sweep_matrix(
                     },
                     "hardware": toolchain_prov["hardware"],
                     "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
-                    "input_provenance": clean_input_meta[count],
+                    "input_provenance": clean_input_meta[input_key],
                     "correctness": correctness_info,
                     "execution_index": execution_index,
                     "case_warmup": None,
@@ -1822,12 +1933,16 @@ def sweep_matrix(
                         trials,
                         transfer_policy=case["transfer_policy"],
                         path_label=case["path_label"],
+                        input_family=input_family,
+                        input_key=input_key,
                     )
                 )
                 continue
             summary_rows.append(
                 {
                     "count": count,
+                    "input_family": input_family,
+                    "input_key": input_key,
                     "bits": bits,
                     "backend": case["backend"],
                     "boundary": case["timing_boundary"],
@@ -1862,8 +1977,23 @@ def sweep_matrix(
     gpu_state_end = query_gpu_state() if "cuda" in backends else None
 
     path_rank = {path.label: i for i, path in enumerate(paths)}
-    summary_rows.sort(key=lambda r: (r["count"], r["bits"], path_rank[r["path_label"]]))
-    case_results.sort(key=lambda c: (c["count"], c["bits"], path_rank[c["path_label"]]))
+    input_rank = {key: i for i, key in enumerate(input_meta)}
+    summary_rows.sort(
+        key=lambda r: (
+            r["count"],
+            input_rank[r["input_key"]],
+            r["bits"],
+            path_rank[r["path_label"]],
+        )
+    )
+    case_results.sort(
+        key=lambda c: (
+            c["count"],
+            input_rank[c["input_key"]],
+            c["bits"],
+            path_rank[c["path_label"]],
+        )
+    )
 
     shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -1896,7 +2026,10 @@ def sweep_matrix(
             "end": gpu_state_end,
         },
         "matrix_parameters": {
-            "counts": list(counts),
+            "input_family": input_family,
+            "counts": list(counts) if input_family != "model" else list(input_counts.values()),
+            "model_tensors": model_tensors if input_family == "model" else None,
+            "model_limit": model_limit,
             "bit_widths": list(bit_widths),
             "backends": list(backends),
             "warmup": warmups,
@@ -1913,7 +2046,12 @@ def sweep_matrix(
             "trial_design": trial_design(len(paths)),
             "trial_orders": order_labels,
             "case_order_seed": case_order_seed,
-            "case_order": [{"count": c, "bits": b} for c, b in ordered_cases],
+            "case_order": [
+                {"count": input_counts[k], "bits": b}
+                if dense
+                else {"input": k, "count": input_counts[k], "bits": b}
+                for k, b in ordered_cases
+            ],
             "invocation_scheme": (
                 "every trial reuses base invocation 0; identifiers per repetition are "
                 "copied from each mco2 bench configuration"
@@ -1951,7 +2089,10 @@ def sweep_matrix(
             },
         },
         "run_conditions": run_conditions,
-        "inputs": clean_input_meta,
+        # Dense inputs stay keyed by count, as in revision 3.
+        "inputs": {
+            (meta["count"] if dense else key): meta for key, meta in clean_input_meta.items()
+        },
         "summary_csv": csv_path.name,
         "msvc_vectorization_report": vec_report_path.name,
         "cases": [c["case_id"] for c in case_results],
@@ -2041,6 +2182,24 @@ def main() -> None:
         help="Host transfer policies for transfer boundaries; pinned needs pageable",
     )
     parser.add_argument(
+        "--input-family",
+        choices=INPUT_FAMILIES,
+        default="dense",
+        help="Input family: dense normal, sparse (90%% zeros), or model-shaped tensors",
+    )
+    parser.add_argument(
+        "--model-tensors",
+        choices=MODEL_TENSOR_SETS,
+        default="distinct",
+        help="Model family: one tensor per distinct shape and kind, or all tensors",
+    )
+    parser.add_argument(
+        "--model-limit",
+        type=int,
+        default=None,
+        help="Model family: keep only the first N selected tensors",
+    )
+    parser.add_argument(
         "--force-fail", action="store_true", help="Force correctness failure for tests"
     )
     parser.add_argument(
@@ -2091,6 +2250,9 @@ def main() -> None:
             ignore_readiness=args.ignore_readiness,
             boundaries=args.boundaries,
             transfer_policies=args.transfer_policies,
+            input_family=args.input_family,
+            model_tensors=args.model_tensors,
+            model_limit=args.model_limit,
         )
         print(f"Benchmark completed successfully. Snapshot written to: {snapshot_dir}")
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:

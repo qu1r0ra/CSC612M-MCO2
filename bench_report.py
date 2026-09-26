@@ -70,6 +70,7 @@ def index_cases(cases: list[dict[str, Any]]) -> dict[tuple[int, int, str], dict[
 
     Publication extension paths (gpu-origin, pinned) share a timing boundary with a
     revision 3 path or have none here, so they stay out of F1-F4 and the crossovers.
+    Sparse and model-shaped inputs are separate families and stay out as well.
     """
     return {
         (c["count"], c["bits"], c["timing_boundary"]): c
@@ -78,6 +79,7 @@ def index_cases(cases: list[dict[str, Any]]) -> dict[tuple[int, int, str], dict[
         and c["statistics"] is not None
         and c["timing_boundary"] in PATHS
         and c.get("transfer_policy") != "pinned"
+        and c.get("input_family", "dense") == "dense"
     }
 
 

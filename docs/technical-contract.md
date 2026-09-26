@@ -9,7 +9,7 @@ The code and tests define current behavior. This contract freezes the 8-bit and 
 
 The week-13 course submission requires every item in this contract except these later extensions:
 
-- The full empirical-expectation suite in correctness layer 3; the course requires only a small unbiasedness check across independent seeds.
+- The full empirical-expectation suite in correctness layer 3; the course requires only the 1,024-element subset.
 
 The benchmark protocol records its own course scope.
 
@@ -149,3 +149,13 @@ The stream constructor rejects any tensor or invocation identifier above `2^32-1
    - Exact equality $|\bar{y}_i - x_i| = 0$ must hold whenever $p_i \in \{0, 1\}$.
    - Edge case coverage: signed zero (preserving $+0$ decode), large magnitudes without intermediate overflow via max-rescaling, saturation boundaries ($|x| \ge \text{scale}$), lengths not multiples of 4 or 256, and odd payload lengths.
    - Scale overflow policy: if the FP32 L2 norm overflows, the tool exits nonzero with distinct error message `FP32 L2 scale overflow`. The scale is never saturated.
+   - **Full expectation suite (paper extension)**, `unbiasedness.py`, spec [qu1r0ra/CSC612M-MCO2-Paper#21](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/21):
+     - Inputs: the course-subset vector (1,024 elements, design scale 2.0 overridden by the computed L2 scale), a dense $2^{14}$ vector, the sparse $2^{14}$ vector, and the model tensor `layer1.0.conv1.weight` (36,864 elements), all from the benchmark protocol's input families. Every input runs at 4 and 8 bits on both backends, $T = 4,096$ seeds (`seed = 1..4096`, `tensor_id = 0`, `invocation_id = 0`), with the computed FP32 L2 scale.
+     - `mco2 expect --input X.f32 --output S.f64 --seeds T [--seed-start 1] [--bits 4|8] [--backend cpu|cuda]` compresses and decodes the input once per seed and writes the per-element FP64 sums of the decoded values, then their sums of squares, as little-endian FP64. Its JSON line records the scale bits. The CPU and CUDA outputs must be byte-identical.
+     - Target: the rule compares the mean with the expectation of the implemented quantizer, not with $x_i$. In FP32, $a_i = \min((|x_i|/	ext{scale}) \cdot s, s)$, $l_i = \lfloor a_i 
+  floor$, $p_i = a_i - l_i$. The codec rounds up when the 32-bit word is below $\lfloor 	ext{fl}_{32}(p_i \cdot 2^{32}) 
+  floor$, so the realised probability is $q_i = \lfloor 	ext{fl}_{32}(p_i \cdot 2^{32}) 
+  floor / 2^{32}$. With $	ext{dec}(k) = 	ext{fl}_{32}(	ext{fl}_{32}(k/s) \cdot 	ext{scale})$, signed like $x_i$: $E_i = (1-q_i)\,	ext{dec}(l_i) + q_i\,	ext{dec}(l_i+1)$ and $\Delta_i = |	ext{dec}(l_i+1) - 	ext{dec}(l_i)|$.
+     - Acceptance rule: where $q_i > 0$, $|ar{y}_i - E_i| \le 5 \cdot \Delta_i \cdot \sqrt{q_i(1-q_i)/T}$; where $q_i = 0$, $ar{y}_i = 	ext{dec}(l_i)$ exactly. The suite fails if any element fails or the backends differ.
+     - Reported, not gated: the pooled ratio of observed to expected variance, and the largest $|E_i - x_i|$ in steps of $	ext{scale}/s$ (FP32 rounding of $a_i$ and of the decoded levels).
+     - Output: `just unbiasedness` writes `results/<date>-<short_rev>-unbiasedness/` with `unbiasedness.json` and `f_unbiasedness.png` (per bit width, mean error against $x/	ext{step}$ with the 5σ envelope, and the histogram of error over bound). It refuses an existing directory or a dirty tree unless `--allow-existing` or `--allow-dirty` is passed; `evidence` is false for a dirty tree, fewer seeds, or one backend.
