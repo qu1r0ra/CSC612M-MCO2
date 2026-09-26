@@ -156,26 +156,31 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 
 ## Benchmark matrix and frozen snapshot
 
-The benchmark driver measures in-process throughput with `mco2 bench` for the C comparator, CUDA resident, and CUDA host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (102 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of six trials with balanced path order. Each timed process first runs about one second of untimed repetitions of its path (protocol revision 2); `--warmup-seconds 0` restores the run 1 behaviour of snapshot `results/2026-09-25-674bd5b`. The driver refuses a dirty working tree; commit first, or pass `--allow-dirty` for a non-evidence run. The course snapshot `results/2026-09-25-59c8967` was produced by revision `59c8967`, whose driver ran the four course sizes in ascending order without a warm-up; reproduce it from that revision.
+The benchmark driver measures in-process throughput with `mco2 bench` for the C comparator and the CUDA resident, resident-graph, and host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (102 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of 24 trials, one per ordering of the four paths. Each timed process first runs about one second of untimed repetitions of its path. The driver excludes physical core 0 from its own affinity before starting any process (protocol revision 3); children inherit the mask.
+
+An evidence sweep refuses to start unless the readiness check passes: a reboot within 30 minutes, no app windows outside the allowlist, no running `mco2`, a clean git tree, and no GPU clock-event reason other than `GpuIdle`. `--ignore-readiness` runs anyway and marks the snapshot non-evidence; a dirty tree needs `--allow-dirty` as well. Earlier snapshots came from earlier revisions of the driver; reproduce each from its recorded revision. The course snapshot `results/2026-09-25-59c8967` was produced by revision `59c8967`, whose driver ran the four course sizes in ascending order without a warm-up.
 
 ### Running the benchmark matrix
 
 ```powershell
-# Build the CUDA executable and run the 102-case size sweep (about 45 minutes)
+# Pilot: four sizes, both bit widths, into results/pilots/ (never evidence)
+just bench-matrix --pilot
+
+# Build the CUDA executable and run the 102-case size sweep (about 3.2 hours)
 just bench-matrix
 
 # Course sizes only, with the sweep's warm-up and random case order
 just bench-matrix --counts 1024 16384 262144 4194304
 
-# Render F1-F3 and report.md (crossover, T1) into a snapshot folder
+# Render F1-F4 and report.md (crossover, T1) into a snapshot or pilot folder
 just figures results/<date>-<short_rev>
 ```
 
 ### Inspecting results and provenance
 
 Snapshots are stored in `results/<date>-<short_rev>/`:
-- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policy (`pageable`), GPU state before and after the warm-up and after the run, the case order and its seed, trial orders, the statistics method and claim rule, and input hashes.
-- `summary.csv`: Per-case pooled median and IQR, trial-median range and spread ratio, speedup vs the C comparator with its range and verdict, and the `boundary_inversion`, `unstable`, and `claim_supported` flags.
+- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policy (`pageable`), GPU state before and after the warm-up and after the run, the case order and its seed, trial orders, the statistics method and claim rule, input hashes, and from revision 3 the affinity mask, the readiness facts, the power plan and HAGS state, and `evidence` with its `non_evidence_reasons`.
+- `summary.csv`: Per-case pooled median and IQR, trial-median range, `spread_ratio` and `spread_p90_p10`, `speedup_vs_c` with its range, bootstrap CI and verdict, and the `stable`, `unstable_rev2`, `boundary_inversion`, `direction_supported`, `magnitude_supported`, and `claim_supported_rev2` flags. Snapshots before revision 3 carry `unstable` and `claim_supported` instead.
 - `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`, and for host-origin `h2d_ms`, `d2h_ms`) with each trial's path order and invocation identifiers, the case's `execution_index`, pooled samples, statistics, `stage_medians_ms`, configuration, and correctness validation results.
 - `msvc_vectorization_report.txt`: MSVC `/Qvec-report:2` diagnostics from recompiling the comparator sources with the exact benchmarked host flags; the command is at the top of the file.
 
