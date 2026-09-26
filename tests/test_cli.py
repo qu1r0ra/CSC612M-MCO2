@@ -560,6 +560,7 @@ def test_cpu_bench_reports_raw_samples_and_base_record(tmp_path, bits: int):
         "repetition_invocation_ids": [23, 24, 25],
         "warmup_invocation_ids": [26, 27],
         "boundary": "host-host",
+        "transfer_policy": "none",
         "block_size": 256,
         "grid_size": 0,
         "prescribed_scale": None,
@@ -592,6 +593,9 @@ def test_cpu_bench_reports_raw_samples_and_base_record(tmp_path, bits: int):
     [
         ("--boundary", "resident"),
         ("--boundary", "resident-graph"),
+        ("--boundary", "host-origin"),
+        ("--transfer-policy", "pinned"),
+        ("--transfer-policy", "pageable"),
         ("--block-size", "128"),
         ("--grid-size", "3"),
     ],

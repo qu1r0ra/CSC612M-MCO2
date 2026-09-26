@@ -41,3 +41,32 @@ def test_cpu_only_executable_rejects_cuda_backend(tmp_path):
     assert result.returncode != 0
     assert "built without CUDA support" in result.stderr
     assert not output_path.exists()
+
+
+@pytest.mark.parametrize("backend", ["cpu", "cuda"])
+def test_cpu_only_executable_rejects_gpu_origin_bench(tmp_path, backend):
+    input_path = tmp_path / "input.f32"
+    input_path.write_bytes(np.asarray([1.0], dtype="<f4").tobytes())
+
+    result = subprocess.run(
+        [
+            str(BINARY),
+            "bench",
+            "--input",
+            str(input_path),
+            "--seed",
+            "1",
+            "--backend",
+            backend,
+            "--boundary",
+            "gpu-origin",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "built without CUDA support" in result.stderr
+    assert result.stdout == ""

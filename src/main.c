@@ -33,7 +33,8 @@ static void usage(FILE *stream)
             "      [--output RECORD | --record-output RECORD]\n"
             "      [--backend cpu|cuda] [--bits 4|8] [--tensor-id UINT32]\n"
             "      [--invocation-id UINT32] [--scale FP32] [--words WORDS.u32]\n"
-            "      [--boundary resident|resident-graph|host-origin] [--warmup UINT32 (default 10)]\n"
+            "      [--boundary resident|resident-graph|host-origin|gpu-origin]\n"
+            "      [--transfer-policy pageable|pinned] [--warmup UINT32 (default 10)]\n"
             "      [--reps UINT32 (default 30)]\n"
             "      [--block-size UINT32] [--grid-size UINT32] [--timings]\n"
             "  mco2 decompress --input RECORD --output OUTPUT.f32\n"
@@ -425,7 +426,8 @@ typedef enum {
     BENCH_SAMPLE_K2_TIME,
     BENCH_SAMPLE_K3_TIME,
     BENCH_SAMPLE_H2D_TIME,
-    BENCH_SAMPLE_D2H_TIME
+    BENCH_SAMPLE_D2H_TIME,
+    BENCH_SAMPLE_CPU_TIME
 } mco2_bench_timing_field;
 
 static void print_double_array(const mco2_bench_sample *samples,
@@ -455,6 +457,9 @@ static void print_double_array(const mco2_bench_sample *samples,
         case BENCH_SAMPLE_D2H_TIME:
             value = samples[i].d2h_ms;
             break;
+        case BENCH_SAMPLE_CPU_TIME:
+            value = samples[i].cpu_ms;
+            break;
         default:
             value = 0.0;
             break;
@@ -483,7 +488,8 @@ static void print_invocation_ids(uint64_t base_invocation_id,
 }
 
 static void print_bench_json(
-    const char *backend, const char *boundary, uint8_t bit_width,
+    const char *backend, const char *boundary, const char *transfer_policy,
+    uint8_t bit_width,
     size_t count, uint64_t seed, uint64_t tensor_id,
     uint64_t invocation_id, uint64_t warmups, uint64_t reps,
     int prescribed_scale_seen, float prescribed_scale, int block_size,
@@ -503,8 +509,9 @@ static void print_bench_json(
     print_invocation_ids(invocation_id, reps, 0, id_step);
     printf(",\"warmup_invocation_ids\":");
     print_invocation_ids(invocation_id, warmups, reps, id_step);
-    printf(",\"boundary\":\"%s\",\"block_size\":%d,\"grid_size\":%d,"
-           "\"prescribed_scale\":", boundary, block_size, grid_size);
+    printf(",\"boundary\":\"%s\",\"transfer_policy\":\"%s\","
+           "\"block_size\":%d,\"grid_size\":%d,\"prescribed_scale\":",
+           boundary, transfer_policy, block_size, grid_size);
     if (prescribed_scale_seen)
         printf("%.9g", (double)prescribed_scale);
     else
@@ -522,21 +529,108 @@ static void print_bench_json(
             if (strcmp(boundary, "host-origin") == 0) {
                 printf(",\"h2d_ms\":");
                 print_double_array(samples, reps, BENCH_SAMPLE_H2D_TIME);
+            }
+            if (strcmp(boundary, "host-origin") == 0 ||
+                strcmp(boundary, "gpu-origin") == 0) {
                 printf(",\"d2h_ms\":");
                 print_double_array(samples, reps, BENCH_SAMPLE_D2H_TIME);
             }
         } else {
             printf(",\"capture_and_instantiate_ms\":%.6f", capture_ms);
         }
+    } else if (strcmp(boundary, "gpu-origin") == 0) {
+        printf(",\"d2h_ms\":");
+        print_double_array(samples, reps, BENCH_SAMPLE_D2H_TIME);
+        printf(",\"cpu_ms\":");
+        print_double_array(samples, reps, BENCH_SAMPLE_CPU_TIME);
     }
     printf(",\"header_bytes\":%d,\"payload_bytes\":%llu}\n",
            MCO2_Q8_HEADER_SIZE, (unsigned long long)payload_bytes);
 }
 
+#ifdef MCO2_ENABLE_CUDA
+/*
+ * GPU-origin CPU path: the input starts on the device. Each run times one full
+ * D2H into the landing buffer (d2h_ms), then CPU compression from it (cpu_ms).
+ */
+static mco2_q8_status bench_cpu_gpu_origin(
+    uint8_t bits, const float *values, size_t count, uint64_t seed,
+    uint64_t tensor_id, uint64_t invocation_id, int scale_seen,
+    float prescribed_scale, const uint32_t *prescribed_words,
+    uint32_t *generated_words, float *scale_partials,
+    size_t scale_partial_count, mco2_cuda_transfer_policy transfer_policy,
+    uint64_t warmups, uint64_t reps, uint8_t *record, const char *output_path,
+    size_t record_size, mco2_bench_sample *samples)
+{
+    mco2_cuda_staging *staging = NULL;
+    bench_clock_frequency clock_frequency;
+    const float *landing;
+    double d2h_ms;
+    mco2_q8_status status;
+
+    status = mco2_cuda_staging_create(values, count, transfer_policy, &staging);
+    if (status != MCO2_Q8_OK)
+        return status;
+    status = mco2_cuda_staging_download(staging, &landing, &d2h_ms);
+    if (status == MCO2_Q8_OK)
+        status = bench_cpu_compress_one(
+            bits, landing, count, seed, tensor_id, invocation_id, scale_seen,
+            prescribed_scale, prescribed_words, generated_words,
+            scale_partials, scale_partial_count, record);
+    if (status != MCO2_Q8_OK)
+        goto done;
+    if (output_path != NULL && !write_file(output_path, record, record_size)) {
+        status = MCO2_Q8_ERR_IO;
+        goto done;
+    }
+    if (!bench_clock_init(&clock_frequency)) {
+        status = MCO2_Q8_ERR_CLOCK;
+        goto done;
+    }
+    for (uint64_t run = 0; run < warmups + reps; run++) {
+        double start_ms, cpu_start_ms, stop_ms;
+        uint64_t run_offset = run < warmups ? reps + run : run - warmups;
+        if (!bench_clock_now_ms(&clock_frequency, &start_ms)) {
+            status = MCO2_Q8_ERR_CLOCK;
+            goto done;
+        }
+        status = mco2_cuda_staging_download(staging, &landing, &d2h_ms);
+        if (status != MCO2_Q8_OK)
+            goto done;
+        if (!bench_clock_now_ms(&clock_frequency, &cpu_start_ms)) {
+            status = MCO2_Q8_ERR_CLOCK;
+            goto done;
+        }
+        status = bench_cpu_compress_one(
+            bits, landing, count, seed, tensor_id, invocation_id + run_offset,
+            scale_seen, prescribed_scale, prescribed_words, generated_words,
+            scale_partials, scale_partial_count, record);
+        if (status != MCO2_Q8_OK)
+            goto done;
+        if (!bench_clock_now_ms(&clock_frequency, &stop_ms)) {
+            status = MCO2_Q8_ERR_CLOCK;
+            goto done;
+        }
+        if (run >= warmups) {
+            mco2_bench_sample *sample = &samples[run - warmups];
+            sample->wall_ms = stop_ms - start_ms;
+            sample->d2h_ms = d2h_ms;
+            sample->cpu_ms = stop_ms - cpu_start_ms;
+        }
+    }
+    status = MCO2_Q8_OK;
+
+done:
+    mco2_cuda_staging_destroy(staging);
+    return status;
+}
+#endif
+
 static mco2_q8_status bench_file(int argc, char **argv)
 {
     const char *input_path = NULL, *output_path = NULL, *words_path = NULL;
     const char *backend = "cpu", *boundary_name = "host-origin";
+    const char *transfer_policy_name = "pageable";
     double capture_ms = 0.0;
     uint64_t seed = 0, tensor_id = 0, invocation_id = 0;
     uint64_t bits = MCO2_Q8_BITS, block_size = 256, grid_size = 0;
@@ -545,7 +639,8 @@ static mco2_q8_status bench_file(int argc, char **argv)
 #ifdef MCO2_ENABLE_CUDA
     float scale;
 #endif
-    int seed_seen = 0, scale_seen = 0, boundary_seen = 0;
+    int seed_seen = 0, scale_seen = 0, boundary_seen = 0, policy_seen = 0;
+    int transfers;
     int block_size_seen = 0, grid_size_seen = 0, i;
     uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
     float *values = NULL, *scale_partials = NULL;
@@ -596,10 +691,16 @@ static mco2_q8_status bench_file(int argc, char **argv)
         } else if (strcmp(option, "--boundary") == 0) {
             if (strcmp(value, "resident") != 0 &&
                 strcmp(value, "resident-graph") != 0 &&
-                strcmp(value, "host-origin") != 0)
+                strcmp(value, "host-origin") != 0 &&
+                strcmp(value, "gpu-origin") != 0)
                 return MCO2_Q8_ERR_ARGUMENT;
             boundary_name = value;
             boundary_seen = 1;
+        } else if (strcmp(option, "--transfer-policy") == 0) {
+            if (strcmp(value, "pageable") != 0 && strcmp(value, "pinned") != 0)
+                return MCO2_Q8_ERR_ARGUMENT;
+            transfer_policy_name = value;
+            policy_seen = 1;
         } else if (strcmp(option, "--warmup") == 0) {
             if (!parse_u64(value, &warmups))
                 return MCO2_Q8_ERR_ARGUMENT;
@@ -625,13 +726,21 @@ static mco2_q8_status bench_file(int argc, char **argv)
         return MCO2_Q8_ERR_ARGUMENT;
     if (bits != MCO2_Q4_BITS && bits != MCO2_Q8_BITS)
         return MCO2_Q8_ERR_BIT_WIDTH;
-    if ((block_size_seen || grid_size_seen || boundary_seen) &&
-        strcmp(backend, "cpu") == 0)
+    /* The CPU backend accepts only the GPU-origin boundary; host-host is its default. */
+    if (strcmp(backend, "cpu") == 0 &&
+        (block_size_seen || grid_size_seen ||
+         (boundary_seen && strcmp(boundary_name, "gpu-origin") != 0)))
         return MCO2_Q8_ERR_ARGUMENT;
-    if (strcmp(backend, "cuda") == 0 && !boundary_seen)
-        boundary_name = "host-origin";
+    if (strcmp(backend, "cpu") == 0 && !boundary_seen)
+        boundary_name = "host-host";
+    transfers = strcmp(boundary_name, "host-origin") == 0 ||
+                strcmp(boundary_name, "gpu-origin") == 0;
+    if (policy_seen && !transfers)
+        return MCO2_Q8_ERR_ARGUMENT;
+    if (!transfers)
+        transfer_policy_name = "none";
 #ifndef MCO2_ENABLE_CUDA
-    if (strcmp(backend, "cuda") == 0)
+    if (strcmp(backend, "cuda") == 0 || strcmp(boundary_name, "gpu-origin") == 0)
         return MCO2_Q8_ERR_CUDA_UNAVAILABLE;
 #endif
     if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX ||
@@ -704,7 +813,20 @@ static mco2_q8_status bench_file(int argc, char **argv)
         goto done;
     }
 
-    if (strcmp(backend, "cpu") == 0) {
+    if (strcmp(backend, "cpu") == 0 && strcmp(boundary_name, "gpu-origin") == 0) {
+#ifdef MCO2_ENABLE_CUDA
+        status = bench_cpu_gpu_origin(
+            (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
+            scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
+            generated_words, scale_partials, scale_partial_count,
+            strcmp(transfer_policy_name, "pinned") == 0
+                ? MCO2_CUDA_TRANSFER_PINNED
+                : MCO2_CUDA_TRANSFER_PAGEABLE,
+            warmups, reps, record, output_path, record_size, samples);
+        if (status != MCO2_Q8_OK)
+            goto done;
+#endif
+    } else if (strcmp(backend, "cpu") == 0) {
         status = bench_cpu_compress_one(
             (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
             scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
@@ -752,7 +874,12 @@ static mco2_q8_status bench_file(int argc, char **argv)
                 ? MCO2_CUDA_BENCH_RESIDENT
                 : strcmp(boundary_name, "resident-graph") == 0
                     ? MCO2_CUDA_BENCH_RESIDENT_GRAPH
-                    : MCO2_CUDA_BENCH_HOST_ORIGIN,
+                    : strcmp(boundary_name, "gpu-origin") == 0
+                        ? MCO2_CUDA_BENCH_GPU_ORIGIN
+                        : MCO2_CUDA_BENCH_HOST_ORIGIN,
+            strcmp(transfer_policy_name, "pinned") == 0
+                ? MCO2_CUDA_TRANSFER_PINNED
+                : MCO2_CUDA_TRANSFER_PAGEABLE,
             warmups, reps, base_payload, &scale, samples, &capture_ms);
         if (status != MCO2_Q8_OK)
             goto done;
@@ -767,7 +894,7 @@ static mco2_q8_status bench_file(int argc, char **argv)
 #endif
     }
 
-    print_bench_json(backend, strcmp(backend, "cpu") == 0 ? "host-host" : boundary_name,
+    print_bench_json(backend, boundary_name, transfer_policy_name,
                      (uint8_t)bits, count, seed, tensor_id, invocation_id,
                      warmups, reps, scale_seen, prescribed_scale,
                      (int)block_size, (int)grid_size, payload_bytes, samples,
