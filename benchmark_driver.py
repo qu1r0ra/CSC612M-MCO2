@@ -97,10 +97,10 @@ BOOTSTRAP_RULE = (
 # and 1), which ran about 30% slower in the issue #30 diagnosis.
 EXCLUDED_LOGICAL_CPUS = (0, 1)
 
-# Readiness: a sweep starts on a freshly rebooted, quiet machine.
+# Readiness: a sweep starts on a freshly rebooted, quiet machine. Besides these
+# Windows shell hosts, only the processes that launched the sweep may own windows.
 MAX_UPTIME_SECONDS = 30 * 60
 WINDOW_ALLOWLIST = (
-    "claude",
     "explorer",
     "TextInputHost",
     "ShellExperienceHost",
@@ -879,6 +879,27 @@ def list_app_windows() -> list[dict[str, str]]:
     return windows
 
 
+def list_launcher_processes() -> list[str]:
+    """Process names from this driver up its parent chain, innermost first."""
+    if os.name != "nt":
+        return []
+    script = (
+        "$byId = @{}; Get-CimInstance Win32_Process | "
+        "ForEach-Object { $byId[[int]$_.ProcessId] = $_ }; "
+        f"$id = {os.getpid()}; $seen = @{{}}; "
+        "while ($byId.ContainsKey($id) -and -not $seen.ContainsKey($id)) { "
+        "$seen[$id] = 1; $p = $byId[$id]; "
+        "[IO.Path]::GetFileNameWithoutExtension($p.Name); $id = [int]$p.ParentProcessId }"
+    )
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
 def list_processes(name: str) -> list[int]:
     if os.name == "nt":
         script = f"(Get-Process -Name '{name}' -ErrorAction SilentlyContinue).Id"
@@ -924,6 +945,7 @@ def probe_readiness_facts(root: Path) -> dict[str, Any]:
     return {
         "uptime_seconds": uptime_seconds(),
         "app_windows": list_app_windows(),
+        "launcher_processes": list_launcher_processes(),
         "mco2_pids": list_processes("mco2"),
         "git_dirty_files": collect_git_provenance(root)["dirty_files"],
         "gpu_clock_event_reasons": gpu_state.get("clocks_event_reasons.active"),
@@ -942,7 +964,7 @@ def check_readiness(
         failures.append(
             f"uptime {uptime / 60:.0f} min exceeds {MAX_UPTIME_SECONDS // 60} min; reboot first"
         )
-    allowed = {name.lower() for name in allowlist}
+    allowed = {name.lower() for name in [*allowlist, *facts["launcher_processes"]]}
     for window in facts["app_windows"]:
         if window["process"].lower() not in allowed:
             failures.append(f"open app window: {window['process']} ({window['title']})")

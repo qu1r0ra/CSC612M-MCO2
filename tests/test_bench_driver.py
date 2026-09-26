@@ -551,9 +551,10 @@ def test_boundary_inversion_covers_every_resident_path():
 READY_FACTS = {
     "uptime_seconds": 600.0,
     "app_windows": [
-        {"process": "claude", "title": "Claude"},
+        {"process": "WindowsTerminal", "title": "Terminal"},
         {"process": "TextInputHost", "title": "Windows Input Experience"},
     ],
+    "launcher_processes": ["python", "uv", "just", "pwsh", "WindowsTerminal", "explorer"],
     "mco2_pids": [],
     "git_dirty_files": [],
     "gpu_clock_event_reasons": "0x0000000000000001",
@@ -566,6 +567,15 @@ def test_readiness_passes_on_a_quiet_fresh_machine():
     assert check_readiness(READY_FACTS) == []
 
 
+def test_readiness_passes_with_only_shell_windows_and_no_launcher_chain():
+    shell_only = {
+        **READY_FACTS,
+        "app_windows": [{"process": "TextInputHost", "title": "Windows Input Experience"}],
+        "launcher_processes": [],
+    }
+    assert check_readiness(shell_only) == []
+
+
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
@@ -574,6 +584,8 @@ def test_readiness_passes_on_a_quiet_fresh_machine():
             {"app_windows": [*READY_FACTS["app_windows"], {"process": "firefox", "title": "x"}]},
             "open app window: firefox",
         ),
+        # The terminal window passes only because the terminal launched the sweep.
+        ({"launcher_processes": []}, "open app window: WindowsTerminal"),
         ({"mco2_pids": [4242]}, "mco2 already running (pid 4242)"),
         ({"git_dirty_files": [" M benchmark_driver.py"]}, "dirty git tree"),
         ({"gpu_clock_event_reasons": "0x0000000000000024"}, "SwPowerCap, SwThermalSlowdown"),

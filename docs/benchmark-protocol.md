@@ -85,7 +85,7 @@ Findings:
 - Ruled out as the main cause: display and application contention (pausing the animated wallpaper and closing heavy applications changed nothing), SM clock ramping (with the SM clock held at 2,392 MHz, slow processes still inflated all stages at the same clock as fast ones), more measured repetitions (300), high process priority, and a 3 s idle gap before each process.
 - Warm-up does not fully remove the slow processes. At `2^14` at most one group in six stayed within 1.25 under any condition, so a small-size resident claim remains unlikely.
 
-The user applied the clock lock (`nvidia-smi -lgc 2400,2400`) only for that diagnosis run and reset it (`nvidia-smi -rgc`) before the revision 2 pilot, whose manifest shows 2,947 MHz SM under load. The memory clock was never locked. The agent changed no GPU, power, or system setting.
+The user applied the clock lock (`nvidia-smi -lgc 2400,2400`) only for that diagnosis run and reset it (`nvidia-smi -rgc`) before the revision 2 pilot, whose manifest shows 2,947 MHz SM under load. The memory clock was never locked. No other GPU, power, or system setting was changed.
 
 #### Change
 
@@ -160,7 +160,7 @@ The evidence is in [`results/trace-2026-09-26-issue-30/`](../results/trace-2026-
 - **Excluding core 0 removes the tail.** At `2^14`, the spread across processes fell to 1.21× on the quiet desktop and 1.22× on the busy one, with no outliers.
 - **Unreproduced:** the slow launch levels seen in the traced run (spans 3–6× the fastest), which followed a long session, did not come back after a reboot, with or without heavy apps open. Their cause is unresolved.
 
-The agent changed no GPU clock, power plan, HAGS, or other system setting for this diagnosis.
+No GPU clock, power plan, HAGS, or other system setting was changed for this diagnosis.
 
 #### Changes
 
@@ -176,7 +176,7 @@ The agent changed no GPU clock, power plan, HAGS, or other system setting for th
 - **Direction-based crossover.** The crossover rule is unchanged except that it uses `direction_supported` on both sides in place of `claim_supported`. The report also gives the crossover under the revision 2 claim, for comparison.
 - **Readiness check.** An evidence sweep refuses to start unless:
   - uptime is at most 30 minutes (a fresh reboot);
-  - no app window is open outside `WINDOW_ALLOWLIST` in `benchmark_driver.py` (the Claude app and Windows shell hosts);
+  - no application window is open other than the Windows shell (`WINDOW_ALLOWLIST` in `benchmark_driver.py`) and the session that launched the sweep (the driver's parent processes, recorded as `launcher_processes`);
   - no `mco2` process is running;
   - the git tree is clean;
   - the GPU reports no clock-event reason other than `GpuIdle` (idle is not throttling).
@@ -184,7 +184,7 @@ The agent changed no GPU clock, power plan, HAGS, or other system setting for th
 - **Boundary inversion against every resident path.** A cell is inverted when host-origin is faster than `resident` or `resident-graph`.
 - **Pilot.** `--pilot` runs the sweep's code path at `2^10`, `2^14`, `2^20` and `2^26`, both bit widths, into `results/pilots/`. The only difference from a sweep is that the readiness check is recorded, not enforced. A pilot is never evidence.
 
-Unchanged: the grid, 30 measured repetitions, the time-based in-process warm-up (1 s), the 20 s and 3 s GPU warm-ups, the randomized case order and its seed, the pooled statistics, the conservative verdict, and the correctness gates. GPU clocks, power, and desktop settings stay at their defaults; the user, not the agent, reboots and closes apps before the sweep.
+Unchanged: the grid, 30 measured repetitions, the time-based in-process warm-up (1 s), the 20 s and 3 s GPU warm-ups, the randomized case order and its seed, the pooled statistics, the conservative verdict, and the correctness gates. GPU clocks, power, and desktop settings stay at their defaults; the user reboots and closes apps before the sweep.
 
 #### Pilot rule
 
@@ -194,13 +194,17 @@ Fixes after the pilot at `3b578d2` (`results/pilots/2026-09-26T100830-3b578d2`, 
 
 - `just figures` failed on F2 and F4 because it drew each 95% CI as error bars relative to the point speedup. The point is a ratio of pooled medians and the CI comes from trial medians, so the point can lie outside its CI (`2^14`, 8-bit, `resident-graph`: 17.471 against [17.456, 17.460]). Each CI is now drawn as a segment between its own bounds. Test: `test_render_report_draws_a_ci_that_excludes_the_point`.
 
+#### Implementation note
+
+Issue #37 changed how the readiness check allows the session that launched the sweep. `WINDOW_ALLOWLIST` used to name that session's application; it now holds only Windows shell hosts. A window also passes when its process is one of the driver's parent processes, which the manifest records as `launcher_processes` among the readiness facts. The manifest stays at version 3.0. The rule's intent, a freshly rebooted and quiet machine, is unchanged, and a sweep launched from the same desktop session as the revision 3 sweep passes under both forms, so this is not a new revision. The grid, thresholds, claim rules, and every other readiness condition are unchanged.
+
 #### Pre-registered outcome
 
 Revision 3's result is final for resident stability: whatever it supports is what the paper claims, and no revision 4 is made for stability. The paper reports, per path and bit width, which direction claims and which magnitude claims hold, the graph-vs-resident finding, both crossovers, and the graph capture cost. It reports the diagnosis and the core-0 finding either way, and discloses the unexplained 3–6× levels as a limitation.
 
 ### Sweep result (revision 3)
 
-Snapshot `results/2026-09-26-a1d2439` comes from clean revision `a1d2439`, the merged tree after the pilot fix. The readiness check passed and was enforced, with no override, 5 minutes after a fresh reboot; only the Claude app and the Windows input host were open. The manifest records `evidence: true` and affinity mask `0xffc`. All 136 cases passed the correctness gates. The sweep ran from 11:34 to 14:22 UTC (about 2 h 48 min). The T1 table and crossover lines are in [its `report.md`](../results/2026-09-26-a1d2439/report.md), and the figures are [F1](../results/2026-09-26-a1d2439/f1_time_vs_elements.png), [F2](../results/2026-09-26-a1d2439/f2_speedup_vs_elements.png), [F3](../results/2026-09-26-a1d2439/f3_stage_breakdown.png) and [F4](../results/2026-09-26-a1d2439/f4_graph_vs_resident.png). The GPU reported no active clock-event reason at any of three readings:
+Snapshot `results/2026-09-26-a1d2439` comes from clean revision `a1d2439`, the merged tree after the pilot fix. The readiness check passed and was enforced, with no override, 5 minutes after a fresh reboot. The manifest records `evidence: true` and affinity mask `0xffc`. All 136 cases passed the correctness gates. The sweep ran from 11:34 to 14:22 UTC (about 2 h 48 min). The T1 table and crossover lines are in [its `report.md`](../results/2026-09-26-a1d2439/report.md), and the figures are [F1](../results/2026-09-26-a1d2439/f1_time_vs_elements.png), [F2](../results/2026-09-26-a1d2439/f2_speedup_vs_elements.png), [F3](../results/2026-09-26-a1d2439/f3_stage_breakdown.png) and [F4](../results/2026-09-26-a1d2439/f4_graph_vs_resident.png). The GPU reported no active clock-event reason at any of three readings:
 
 - start: P8 at 405 MHz SM (idle);
 - after the warm-up: P1 at 2,955 MHz;
