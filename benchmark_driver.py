@@ -50,9 +50,9 @@ GPU_WARMUP_REPS = 100
 DEFAULT_IN_PROCESS_WARMUP_SECONDS = 1.0
 WARMUP_PROBE_REPS = 3
 STAGE_KEYS = ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms")
-# Six trials run every ordering of the three paths once, balancing both the
+# Twenty-four trials run every ordering of the four paths once, balancing both the
 # position of each path and the path that precedes it.
-DEFAULT_TRIALS = 6
+DEFAULT_TRIALS = 24
 
 # Claim rules, fixed before any snapshot is generated (protocol revision 3).
 # A direction claim (faster or slower) needs a conservative verdict and no
@@ -839,6 +839,32 @@ def compare_to_comparator(cpu_stats: dict[str, Any], cuda_stats: dict[str, Any])
     }
 
 
+def compare_to_resident(
+    resident_stats: dict[str, Any], graph_stats: dict[str, Any]
+) -> dict[str, Any]:
+    """Point speedup of resident-graph over plain resident, range, and bootstrap CI."""
+    point = resident_stats["median_ms"] / graph_stats["median_ms"]
+    low = resident_stats["trial_median_min_ms"] / graph_stats["trial_median_max_ms"]
+    high = resident_stats["trial_median_max_ms"] / graph_stats["trial_median_min_ms"]
+    if low > 1.0:
+        verdict = "faster"
+    elif high < 1.0:
+        verdict = "slower"
+    else:
+        verdict = "inconclusive"
+    ci_low, ci_high = bootstrap_speedup_ci(
+        resident_stats["trial_medians_ms"], graph_stats["trial_medians_ms"]
+    )
+    return {
+        "speedup_vs_resident": point,
+        "speedup_low": low,
+        "speedup_high": high,
+        "speedup_ci_low": ci_low,
+        "speedup_ci_high": ci_high,
+        "verdict": verdict,
+    }
+
+
 def claim_support(
     verdict: str, inversion: bool, baseline: dict[str, Any], candidate: dict[str, Any]
 ) -> dict[str, bool]:
@@ -1373,6 +1399,7 @@ def sweep_matrix(
     paths: list[tuple[str, str, list[str]]] = [("cpu", "comparator", [])]
     if "cuda" in backends:
         paths.append(("cuda", "resident", ["--boundary", "resident"]))
+        paths.append(("cuda", "resident-graph", ["--boundary", "resident-graph"]))
         paths.append(("cuda", "host-origin", ["--boundary", "host-origin"]))
     orders = trial_orders(paths, trials)
     order_labels = [[f"{paths[i][0]}-{paths[i][1]}" for i in order] for order in orders]
@@ -1515,6 +1542,9 @@ def sweep_matrix(
                         ),
                         "samples_ms": payload.get("samples_ms", []),
                     }
+                    for key in ("capture_ms", "capture_and_instantiate_ms"):
+                        if key in payload:
+                            run[key] = payload[key]
                     for key in STAGE_KEYS:
                         if key in payload:
                             run[key] = payload[key]
@@ -1576,6 +1606,29 @@ def sweep_matrix(
             stats.update(compare_to_comparator(cpu_stats, stats))
             stats["boundary_inversion"] = inversion
             stats.update(claim_support(stats["verdict"], inversion, cpu_stats, stats))
+
+        resident_case = next((c for c in cases if c["timing_boundary"] == "resident"), None)
+        graph_case = next((c for c in cases if c["timing_boundary"] == "resident-graph"), None)
+        if resident_case is not None and graph_case is not None:
+            res_stats = resident_case.get("statistics")
+            graph_stats = graph_case.get("statistics")
+            if res_stats is not None and graph_stats is not None:
+                vs_res = compare_to_resident(res_stats, graph_stats)
+                vs_res_claims = claim_support(vs_res["verdict"], inversion, res_stats, graph_stats)
+                graph_vs_res = {
+                    "speedup_vs_resident": vs_res["speedup_vs_resident"],
+                    "speedup_low": vs_res["speedup_low"],
+                    "speedup_high": vs_res["speedup_high"],
+                    "speedup_ci_low": vs_res["speedup_ci_low"],
+                    "speedup_ci_high": vs_res["speedup_ci_high"],
+                    "verdict": vs_res["verdict"],
+                    "boundary_inversion": inversion,
+                    "direction_supported": vs_res_claims["direction_supported"],
+                    "magnitude_supported": vs_res_claims["magnitude_supported"],
+                    "claim_supported_rev2": vs_res_claims["claim_supported_rev2"],
+                }
+                graph_stats["vs_resident"] = graph_vs_res
+                graph_case["vs_resident"] = graph_vs_res
 
         for case in cases:
             (target_dir / f"{case['case_id']}.json").write_text(

@@ -591,6 +591,7 @@ def test_cpu_bench_reports_raw_samples_and_base_record(tmp_path, bits: int):
     "extra",
     [
         ("--boundary", "resident"),
+        ("--boundary", "resident-graph"),
         ("--block-size", "128"),
         ("--grid-size", "3"),
     ],
