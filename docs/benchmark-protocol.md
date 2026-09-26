@@ -104,6 +104,48 @@ The warm-up raises the chance that a case passes but does not guarantee it. In t
 
 If no path and bit width resolves a crossover under the unchanged rules, the paper reports that the resident path cannot be measured stably between processes on this machine, and makes host-origin claims only. That outcome is decided here, before the run.
 
+### Sweep result (revision 2)
+
+Snapshot `results/2026-09-26-2c190af` comes from clean revision `2c190af`. All 102 cases passed the correctness gates, and the sweep took 2,707 s (about 45 minutes). The T1 table and crossover lines are in [its `report.md`](../results/2026-09-26-2c190af/report.md), and the figures are [F1](../results/2026-09-26-2c190af/f1_time_vs_elements.png), [F2](../results/2026-09-26-2c190af/f2_speedup_vs_elements.png) and [F3](../results/2026-09-26-2c190af/f3_stage_breakdown.png). The manifest records the GPU state at three points, with no active clock-event reasons at any of them:
+
+- start: P3 at 870 MHz SM (idle);
+- after the warm-up: P1 at 2,940 MHz;
+- end: P8 at 517 MHz.
+
+No clock lock was in effect.
+
+- **Crossover:** not resolved for any path or bit width, and no slowdown has claim support. The smallest supported faster sizes are:
+
+  | Path | 4-bit | 8-bit |
+  | --- | --- | --- |
+  | Resident | `2^14` | `2^19` |
+  | Host-origin | `2^17` | `2^19` |
+
+- **Outcome:** the rule stated before the run applies. The paper reports that the resident path cannot be measured stably between processes on this machine, and it makes host-origin claims only.
+- **Supported claims:** host-origin is faster at 4-bit from `2^17` up (7.7–32.5×) and at 8-bit from `2^19` up (17.1–29.5×). That is 18 cells, all `faster`.
+- **Resident, descriptive only (no claim):** whether a size passes the spread limit does not follow from the size.
+  - At 4-bit, resident passes at `2^13` and `2^14`, fails from `2^15` to `2^20` (1.28–2.50), and passes again from `2^21`.
+  - At 8-bit, resident fails at `2^18` (2.63), one size below its first pass.
+  - Resident passes the spread limit with claim support in 15 of 34 cells (2 in run 1). The resident speedups in those cells, 61–321× at `2^19` and above, carry no claim.
+- **Effect of the warm-up:** resident trials whose kernel median exceeds 1.5× the case minimum fell from 79 of 204 in run 1 to 10 of 204. Unstable cells fell from 32 to 18 of 34 for resident and from 24 to 15 of 34 for host-origin.
+- **Remaining instability is still on the device side:** in the 18 unstable resident cells, the spread of per-trial K1+K2+K3 medians tracks the wall-time spread.
+  - The 9 failures above 2 come from the remaining slow trials. Their kernel spreads are 2.27–2.91.
+  - Only 5 of the 18 marginal failures have a kernel spread within 1.25.
+  - The warm-up makes the slowdown rarer. It does not remove it.
+
+Known limitations, in addition to those of run 1:
+
+- **Comparator instability:** the comparator is flagged unstable at 4 of 34 cells. This removes claim support there regardless of the CUDA path.
+
+  | Size | Bits | Spread |
+  | --- | --- | --- |
+  | `2^12` | 8 | 1.26 |
+  | `2^13` | 4 | 1.45 |
+  | `2^14` | 8 | 1.28 |
+  | `2^15` | 8 | 1.29 |
+
+- **Diagnosis coverage:** the cause of the remaining slow processes was not identified. The diagnosis ruled out display contention, SM clock ramping, repetition count, process priority, and idle gaps, but it did not test other WDDM scheduling behaviour or memory clock behaviour.
+
 ## Comparison backends
 
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.
