@@ -60,6 +60,50 @@ Known limitations of the sweep:
 
 Run 1 stays the pre-registered result. A revised protocol that targets resident stability must be recorded before its own run and produces a separate snapshot.
 
+### Revision 2 (resident stability)
+
+This revision was fixed before its sweep ran. Run 1 stays the pre-registered result; revision 2 is a separate snapshot.
+
+#### Diagnosis
+
+`scripts/diag_resident.py` runs the resident path, 8-bit, at `2^14` and `2^20` as 36 separate processes for each condition, with conditions interleaved in a shuffled order. It logs `nvidia-smi` clocks and power state every 50 ms. A process counts as slow when its kernel-event median exceeds 1.5× the fastest process of that size. The spread column groups consecutive processes in sixes, as one case's six trials would be, and counts the groups within the 1.25 limit. The evidence is in `results/diag-2026-09-26-issue-26/`; its inputs are regenerated from the fixed seed and not committed.
+
+| Run | Condition | Slow processes `2^14` | Slow processes `2^20` | Groups within 1.25, `2^14` / `2^20` |
+| --- | --- | --- | --- | --- |
+| desktop as used | base (10 warmups, 30 reps) | 56% | 44% | 0/6 / 1/6 |
+| desktop as used | 1 s in-process warm-up | 17% | 3% | 1/6 / 5/6 |
+| quiet desktop | base | 44% | 53% | 0/6 / 0/6 |
+| quiet desktop | 1 s in-process warm-up | 3% | 8% | 1/6 / 4/6 |
+| quiet desktop | 3 s in-process warm-up | 11% | 3% | 1/6 / 2/6 |
+| SM clock locked at 2,400 MHz | base | 28% | 39% | 1/6 / 0/6 |
+| SM clock locked at 2,400 MHz | 1 s in-process warm-up | 6% | 11% | 0/6 / 2/6 |
+
+Findings:
+
+- The slowdown belongs to the timed process, not to the GPU state between processes. Slow processes inflate all three kernel stages (at `2^14` under the clock lock, K1 about 2.4×, K2 3.7×, K3 4.7×). They are scattered in time and do not follow any particular preceding process. Run 1's out-of-process warm-ups (20 s at the start, 3 s per case) run in other processes and do not carry into the timed one.
+- Untimed repetitions inside the timed process, sized to about 1 s, cut the slow fraction from 40–55% to 3–17%. 3 s did no better than 1 s.
+- Ruled out as the main cause: display and application contention (pausing the animated wallpaper and closing heavy applications changed nothing), SM clock ramping (with the SM clock held at 2,392 MHz, slow processes still inflated all stages at the same clock as fast ones), more measured repetitions (300), high process priority, and a 3 s idle gap before each process.
+- Warm-up does not fully remove the slow processes. At `2^14` at most one group in six stayed within 1.25 under any condition, so a small-size resident claim remains unlikely.
+
+The user applied the clock lock (`nvidia-smi -lgc 2400,2400`) only for that diagnosis run and reset it (`nvidia-smi -rgc`) before the revision 2 pilot, whose manifest shows 2,947 MHz SM under load. The memory clock was never locked. The agent changed no GPU, power, or system setting.
+
+#### Change
+
+The one change from run 1 is a time-based in-process warm-up, applied to every path, the C comparator included, so each path gets the same treatment:
+
+- After a case's correctness gate and its 3 s GPU warm-up, the driver runs one untimed probe process per path with the base 10 warmups and 30 repetitions.
+- Each path's timed processes then use `max(10, ceil(1000 / probe median ms))` warm-up repetitions, so every timed process first runs about one second of untimed work inside the same process. Paths whose repetitions take longer than 100 ms keep 10.
+- Each case JSON records the target, the probe median, and the resulting count under `in_process_warmup`; its `warmup` field and the summary `warmup` column hold the per-path count. The manifest (version 2.2) records the target and the rule. Warm-up invocation identifiers are stored as `{first, last, count}` because the counts reach 10^4–10^5.
+- `just bench-matrix` uses this by default; `--warmup-seconds 0` restores the run 1 behaviour.
+
+Unchanged: the grid, 30 measured repetitions, 6 trials with balanced path order, the randomized case order and its seed, the 20 s and 3 s GPU warm-ups, the statistics, the 1.25 spread threshold, the claim rule, and the crossover rule. GPU clocks, power, and desktop settings stay at their defaults.
+
+#### Expected outcome
+
+The warm-up raises the chance that a case passes but does not guarantee it. In the diagnosis, a `2^20` group of six passed about three times in four with the warm-up; a crossover needs two adjacent sizes to pass together, for both the CUDA path and the comparator. A pilot on four 8-bit sizes, from an uncommitted tree and not evidence, matched this: resident failed the spread limit at `2^14` (2.68) and `2^20` (2.21), host-origin passed at `2^20` (1.17) and fell to 1.30–1.35 at `2^10` and `2^14` (2–5.8 in run 1), and the comparator failed at `2^14` (1.38). No parameter changed after the pilot.
+
+If no path and bit width resolves a crossover under the unchanged rules, the paper reports that the resident path cannot be measured stably between processes on this machine, and makes host-origin claims only. That outcome is decided here, before the run.
+
 ## Comparison backends
 
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.

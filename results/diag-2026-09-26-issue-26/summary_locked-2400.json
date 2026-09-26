@@ -1,0 +1,151 @@
+{
+  "label": "locked-2400",
+  "created_utc": "2026-09-26T04:53:07.298853+00:00",
+  "git": {
+    "code_revision": "d26039c9ceec3094ae30c4fe078287ca33b65c77",
+    "code_revision_short": "d26039c",
+    "git_dirty": true,
+    "dirty_files": [
+      "?? results/diag-2026-09-26-issue-26/",
+      "?? scripts/diag_resident.py"
+    ]
+  },
+  "bits": 8,
+  "counts": [
+    16384,
+    1048576
+  ],
+  "processes_per_condition": 36,
+  "initial_warm_up": {
+    "seconds_requested": 20.0,
+    "seconds_elapsed": 20.0,
+    "workload": "cuda resident, 8-bit, input_n1048576, 100 reps per process",
+    "processes": 133
+  },
+  "gpu_state_end": {
+    "pstate": "P0",
+    "clocks.sm": "2392 MHz",
+    "clocks.mem": "14201 MHz",
+    "clocks.max.sm": "3090 MHz",
+    "temperature.gpu": "51",
+    "power.draw": "23.96 W",
+    "clocks_event_reasons.active": "0x0000000000000000",
+    "captured_at_utc": "2026-09-26T04:53:07.418267+00:00"
+  },
+  "gpu_log_samples": 1369,
+  "slow_ratio": 1.5,
+  "results": {
+    "n16384/baseline": {
+      "processes": 36,
+      "wall_median_ms": 0.1476,
+      "slow_fraction": 0.28,
+      "kernel_ratio_median": 1.17,
+      "kernel_ratio_max": 2.78,
+      "spread_ratio_groups_of_6": [
+        2.32,
+        1.12,
+        2.42,
+        2.58,
+        1.29,
+        2.45
+      ],
+      "groups_within_1_25": 1,
+      "slow_over_fast_k1": 2.46,
+      "slow_over_fast_k2": 3.75,
+      "slow_over_fast_k3": 4.73,
+      "slow_first10_over_last10": 0.96,
+      "sm_min_mhz_slow_vs_fast": [
+        2392.0,
+        2392.0
+      ],
+      "mem_min_mhz_slow_vs_fast": [
+        14001.0,
+        14001.0
+      ]
+    },
+    "n16384/long_warmup": {
+      "processes": 36,
+      "wall_median_ms": 0.1427,
+      "slow_fraction": 0.06,
+      "kernel_ratio_median": 1.13,
+      "kernel_ratio_max": 2.74,
+      "spread_ratio_groups_of_6": [
+        1.47,
+        2.53,
+        1.38,
+        1.36,
+        1.35,
+        1.38
+      ],
+      "groups_within_1_25": 0,
+      "slow_over_fast_k1": 2.43,
+      "slow_over_fast_k2": 3.66,
+      "slow_over_fast_k3": 4.75,
+      "slow_first10_over_last10": 1.09,
+      "sm_min_mhz_slow_vs_fast": [
+        2392.0,
+        2392.0
+      ],
+      "mem_min_mhz_slow_vs_fast": [
+        14001.0,
+        14001.0
+      ]
+    },
+    "n1048576/baseline": {
+      "processes": 36,
+      "wall_median_ms": 0.2288,
+      "slow_fraction": 0.39,
+      "kernel_ratio_median": 1.25,
+      "kernel_ratio_max": 2.1,
+      "spread_ratio_groups_of_6": [
+        1.88,
+        2.13,
+        2.01,
+        2.21,
+        1.89,
+        2.13
+      ],
+      "groups_within_1_25": 0,
+      "slow_over_fast_k1": 1.57,
+      "slow_over_fast_k2": 1.62,
+      "slow_over_fast_k3": 1.59,
+      "slow_first10_over_last10": 0.94,
+      "sm_min_mhz_slow_vs_fast": [
+        2392.0,
+        2392.0
+      ],
+      "mem_min_mhz_slow_vs_fast": [
+        14001.0,
+        14001.0
+      ]
+    },
+    "n1048576/long_warmup": {
+      "processes": 36,
+      "wall_median_ms": 0.2188,
+      "slow_fraction": 0.11,
+      "kernel_ratio_median": 1.19,
+      "kernel_ratio_max": 2.13,
+      "spread_ratio_groups_of_6": [
+        1.14,
+        1.05,
+        2.0,
+        1.39,
+        1.94,
+        1.96
+      ],
+      "groups_within_1_25": 2,
+      "slow_over_fast_k1": 1.7,
+      "slow_over_fast_k2": 1.94,
+      "slow_over_fast_k3": 1.1,
+      "slow_first10_over_last10": 1.02,
+      "sm_min_mhz_slow_vs_fast": [
+        2392.0,
+        2392.0
+      ],
+      "mem_min_mhz_slow_vs_fast": [
+        14001.0,
+        14001.0
+      ]
+    }
+  }
+}

@@ -12,6 +12,7 @@ import csv
 import hashlib
 import itertools
 import json
+import math
 import os
 import platform
 import shutil
@@ -41,6 +42,11 @@ DEFAULT_CASE_ORDER_SEED = 612
 DEFAULT_GPU_WARMUP_SECONDS = 20.0
 DEFAULT_CASE_WARMUP_SECONDS = 3.0
 GPU_WARMUP_REPS = 100
+# Sweep protocol revision 2: every timed process of every path first runs untimed
+# repetitions for at least this long, in the same process. Warm-up in separate
+# processes does not carry over to the timed one (issue #26 diagnosis).
+DEFAULT_IN_PROCESS_WARMUP_SECONDS = 1.0
+WARMUP_PROBE_REPS = 3
 STAGE_KEYS = ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms")
 # Six trials run every ordering of the three paths once, balancing both the
 # position of each path and the path that precedes it.
@@ -842,6 +848,22 @@ def run_bench_process(
     return json.loads(proc.stdout), None
 
 
+def in_process_warmups(minimum: int, seconds: float, rep_ms: float) -> int:
+    """Warm-up count that covers `seconds` at `rep_ms` per repetition, never below `minimum`."""
+    if seconds <= 0 or rep_ms <= 0:
+        return minimum
+    return max(minimum, math.ceil(seconds * 1000.0 / rep_ms))
+
+
+def compact_invocation_ids(ids: Sequence[int] | None) -> dict[str, int] | list[int] | None:
+    """Store a contiguous identifier run as its bounds; revision 2 warm-ups reach 10^4-10^5."""
+    if not ids:
+        return None if ids is None else []
+    if list(ids) != list(range(ids[0], ids[0] + len(ids))):
+        return list(ids)
+    return {"first": ids[0], "last": ids[-1], "count": len(ids)}
+
+
 def failed_row(
     count: int, bits: int, backend: str, boundary: str, warmups: int, reps: int, trials: int
 ) -> dict[str, Any]:
@@ -900,6 +922,7 @@ def run_benchmark_matrix(
     case_order_seed: int = DEFAULT_CASE_ORDER_SEED,
     gpu_warmup_seconds: float = DEFAULT_GPU_WARMUP_SECONDS,
     case_warmup_seconds: float = DEFAULT_CASE_WARMUP_SECONDS,
+    in_process_warmup_seconds: float = DEFAULT_IN_PROCESS_WARMUP_SECONDS,
     force_fail: bool = False,
     allow_existing: bool = False,
     allow_dirty: bool = False,
@@ -1006,6 +1029,7 @@ def run_benchmark_matrix(
                     "tensor_id": 0,
                     "invocation_id": 0,
                     "warmup": warmups,
+                    "in_process_warmup": None,
                     "reps": reps,
                     "trials": trials,
                     "header_bytes": HEADER_STRUCT.size,
@@ -1038,6 +1062,33 @@ def run_benchmark_matrix(
             for case in cases:
                 case["case_warmup"] = case_warmup
 
+        if passed and in_process_warmup_seconds > 0:
+            # Revision 2: size each path's in-process warm-up from an untimed probe
+            # so every timed process first runs about the same wall time untimed.
+            for case, (backend, _, extra_args) in zip(cases, paths, strict=True):
+                payload, error = run_bench_process(
+                    binary,
+                    input_path,
+                    bits=bits,
+                    backend=backend,
+                    extra_args=extra_args,
+                    seed=compression_seed,
+                    warmups=warmups,
+                    reps=reps,
+                )
+                if payload is None:
+                    case["correctness"] = {"status": "failed", "error_message": error}
+                    continue
+                probe_ms = float(np.median(payload.get("samples_ms", [])))
+                case["warmup"] = in_process_warmups(warmups, in_process_warmup_seconds, probe_ms)
+                case["in_process_warmup"] = {
+                    "target_seconds": in_process_warmup_seconds,
+                    "probe_warmup": warmups,
+                    "probe_reps": reps,
+                    "probe_median_ms": probe_ms,
+                    "warmup": case["warmup"],
+                }
+
         if passed:
             # Each trial runs every path as its own process, in a rotated order.
             # Every trial reuses the same invocation identifiers, so trials are
@@ -1055,7 +1106,7 @@ def run_benchmark_matrix(
                         backend=backend,
                         extra_args=extra_args,
                         seed=compression_seed,
-                        warmups=warmups,
+                        warmups=case["warmup"],
                         reps=reps,
                     )
                     if payload is None:
@@ -1067,7 +1118,9 @@ def run_benchmark_matrix(
                         "position": position,
                         "order": order_labels[trial_index],
                         "repetition_invocation_ids": configuration.get("repetition_invocation_ids"),
-                        "warmup_invocation_ids": configuration.get("warmup_invocation_ids"),
+                        "warmup_invocation_ids": compact_invocation_ids(
+                            configuration.get("warmup_invocation_ids")
+                        ),
                         "samples_ms": payload.get("samples_ms", []),
                     }
                     for key in STAGE_KEYS:
@@ -1150,7 +1203,7 @@ def run_benchmark_matrix(
                         bits,
                         case["backend"],
                         case["timing_boundary"],
-                        warmups,
+                        case["warmup"],
                         reps,
                         trials,
                     )
@@ -1164,7 +1217,7 @@ def run_benchmark_matrix(
                     "backend": case["backend"],
                     "boundary": case["timing_boundary"],
                     "correctness": "passed",
-                    "warmup": warmups,
+                    "warmup": case["warmup"],
                     "reps": reps,
                     "trials": trials,
                     "median_ms": f"{stats['median_ms']:.6f}",
@@ -1207,7 +1260,7 @@ def run_benchmark_matrix(
 
     # 5. Run manifest
     manifest_data = {
-        "manifest_version": "2.1",
+        "manifest_version": "2.2",
         "date": date_str,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,
@@ -1231,6 +1284,13 @@ def run_benchmark_matrix(
             "bit_widths": list(bit_widths),
             "backends": list(backends),
             "warmup": warmups,
+            "in_process_warmup_seconds": in_process_warmup_seconds,
+            "in_process_warmup_rule": (
+                "per path: max(warmup, ceil(target_seconds * 1000 / probe median ms)), "
+                "probe = one untimed mco2 bench process with the base warmup and reps"
+                if in_process_warmup_seconds > 0
+                else "disabled; every path uses the base warmup"
+            ),
             "reps": reps,
             "trials": trials,
             "trial_orders": order_labels,
@@ -1314,6 +1374,15 @@ def main() -> None:
         help="Untimed CUDA work before each case's timed processes (0 disables)",
     )
     parser.add_argument(
+        "--warmup-seconds",
+        type=float,
+        default=DEFAULT_IN_PROCESS_WARMUP_SECONDS,
+        help=(
+            "Minimum untimed in-process warm-up per timed process, for every path; "
+            "--warmup is the floor (0 disables)"
+        ),
+    )
+    parser.add_argument(
         "--backends",
         type=str,
         nargs="+",
@@ -1350,6 +1419,7 @@ def main() -> None:
             case_order_seed=args.case_order_seed,
             gpu_warmup_seconds=args.gpu_warmup_seconds,
             case_warmup_seconds=args.case_warmup_seconds,
+            in_process_warmup_seconds=args.warmup_seconds,
             force_fail=args.force_fail,
             allow_existing=args.allow_existing,
             allow_dirty=args.allow_dirty,

@@ -11,8 +11,10 @@ from benchmark_driver import (
     DEFAULT_TRIALS,
     SUMMARY_FIELDS,
     case_order,
+    compact_invocation_ids,
     compare_to_comparator,
     compute_case_statistics,
+    in_process_warmups,
     run_benchmark_matrix,
     trial_orders,
 )
@@ -36,6 +38,7 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
         warmups=1,
         reps=2,
         trials=2,
+        in_process_warmup_seconds=0,
         allow_existing=True,
         allow_dirty=True,
     )
@@ -45,11 +48,13 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "2.1"
+    assert manifest["manifest_version"] == "2.2"
     assert manifest["transfer_policy"] == "pageable"
     assert len(manifest["cases"]) == 2  # 1 size * 2 bit widths * 1 CPU path
     assert manifest["all_cases_passed"] is True
     assert manifest["gpu_state"]["warmup"] is None
+    assert manifest["matrix_parameters"]["in_process_warmup_seconds"] == 0
+    assert "disabled" in manifest["matrix_parameters"]["in_process_warmup_rule"]
 
     csv_path = snapshot_dir / manifest["summary_csv"]
     assert csv_path.is_file()
@@ -77,6 +82,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         case_order_seed=7,
         gpu_warmup_seconds=0.5,
         case_warmup_seconds=0.2,
+        in_process_warmup_seconds=0.01,
         allow_existing=True,
         allow_dirty=True,
     )
@@ -87,7 +93,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "2.1"
+    assert manifest["manifest_version"] == "2.2"
     assert "date" in manifest
     assert "created_at_utc" in manifest
     assert "git_provenance" in manifest
@@ -123,6 +129,8 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         (2048, 8),
     ]
     assert params["trials"] == 2
+    assert params["warmup"] == 1
+    assert params["in_process_warmup_seconds"] == 0.01
     assert len(params["trial_orders"]) == 2
     assert params["trial_orders"][0] != params["trial_orders"][1]
     method = manifest["statistics_method"]
@@ -155,6 +163,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert manifest["all_cases_passed"] is True
 
     # 2. Case JSONs
+    warmup_by_case = {}
     for case_id in manifest["cases"]:
         case_file = snapshot_dir / f"{case_id}.json"
         assert case_file.is_file()
@@ -172,12 +181,23 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         assert case_data["backend"] in ("cpu", "cuda")
         assert case_data["timing_boundary"] in ("comparator", "resident", "host-origin")
         assert case_data["transfer_policy"] == "pageable"
-        assert case_data["warmup"] == 1
+        probe = case_data["in_process_warmup"]
+        assert probe["target_seconds"] == 0.01
+        assert probe["probe_warmup"] == 1
+        assert probe["probe_reps"] == 2
+        assert probe["probe_median_ms"] >= 0
+        assert case_data["warmup"] == probe["warmup"] >= 1
+        warmup_by_case[(case_data["count"], case_data["bits"], case_data["timing_boundary"])] = (
+            case_data["warmup"]
+        )
         assert case_data["reps"] == 2
         assert case_data["trials"] == 2
         assert case_data["repetition_invocation_ids"] == [0, 1]
-        assert case_data["warmup_invocation_ids"] == [2]
-        assert len(case_data["warmup_invocation_ids"]) == 1
+        assert case_data["warmup_invocation_ids"] == {
+            "first": 2,
+            "last": 1 + case_data["warmup"],
+            "count": case_data["warmup"],
+        }
         assert case_data["header_bytes"] == 20
         count = case_data["count"]
         assert case_data["payload_bytes"] == (count if case_data["bits"] == 8 else count // 2)
@@ -252,6 +272,8 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         assert float(row["median_ms"]) >= 0
         assert float(row["iqr_ms"]) >= 0
         assert float(row["speedup_vs_c"]) >= 0
+        key = (int(row["count"]), int(row["bits"]), row["boundary"])
+        assert int(row["warmup"]) == warmup_by_case[key]
 
 
 @CUDA_SKIP
@@ -315,6 +337,22 @@ def test_driver_refuses_to_overwrite_existing_snapshot(tmp_path):
             allow_existing=False,
             allow_dirty=True,
         )
+
+
+def test_in_process_warmups_cover_the_target_time():
+    assert in_process_warmups(10, 1.0, 0.05) == 20000
+    assert in_process_warmups(10, 1.0, 0.3) == 3334
+    # Slow repetitions never drop below the base warm-up.
+    assert in_process_warmups(10, 1.0, 500.0) == 10
+    assert in_process_warmups(10, 0.0, 0.05) == 10
+    assert in_process_warmups(10, 1.0, 0.0) == 10
+
+
+def test_compact_invocation_ids_keeps_bounds_of_contiguous_runs():
+    assert compact_invocation_ids([2, 3, 4]) == {"first": 2, "last": 4, "count": 3}
+    assert compact_invocation_ids([5, 7]) == [5, 7]
+    assert compact_invocation_ids([]) == []
+    assert compact_invocation_ids(None) is None
 
 
 def test_default_counts_are_the_power_of_two_sweep():
