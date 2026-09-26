@@ -33,7 +33,7 @@ static void usage(FILE *stream)
             "      [--output RECORD | --record-output RECORD]\n"
             "      [--backend cpu|cuda] [--bits 4|8] [--tensor-id UINT32]\n"
             "      [--invocation-id UINT32] [--scale FP32] [--words WORDS.u32]\n"
-            "      [--boundary resident|host-origin] [--warmup UINT32 (default 10)]\n"
+            "      [--boundary resident|resident-graph|host-origin] [--warmup UINT32 (default 10)]\n"
             "      [--reps UINT32 (default 30)]\n"
             "      [--block-size UINT32] [--grid-size UINT32] [--timings]\n"
             "  mco2 decompress --input RECORD --output OUTPUT.f32\n"
@@ -484,7 +484,8 @@ static void print_bench_json(
     size_t count, uint64_t seed, uint64_t tensor_id,
     uint64_t invocation_id, uint64_t warmups, uint64_t reps,
     int prescribed_scale_seen, float prescribed_scale, int block_size,
-    int grid_size, size_t payload_bytes, const mco2_bench_sample *samples)
+    int grid_size, size_t payload_bytes, const mco2_bench_sample *samples,
+    double capture_ms)
 {
     printf("{\"configuration\":{\"backend\":\"%s\",\"bits\":%u,"
            "\"count\":%llu,\"seed\":%llu,\"tensor_id\":%llu,"
@@ -506,17 +507,22 @@ static void print_bench_json(
     printf("},\"samples_ms\":");
     print_double_array(samples, reps, BENCH_SAMPLE_WALL_TIME);
     if (strcmp(backend, "cuda") == 0) {
-        printf(",\"k1_ms\":");
-        print_double_array(samples, reps, BENCH_SAMPLE_K1_TIME);
-        printf(",\"k2_ms\":");
-        print_double_array(samples, reps, BENCH_SAMPLE_K2_TIME);
-        printf(",\"k3_ms\":");
-        print_double_array(samples, reps, BENCH_SAMPLE_K3_TIME);
-        if (strcmp(boundary, "host-origin") == 0) {
-            printf(",\"h2d_ms\":");
-            print_double_array(samples, reps, BENCH_SAMPLE_H2D_TIME);
-            printf(",\"d2h_ms\":");
-            print_double_array(samples, reps, BENCH_SAMPLE_D2H_TIME);
+        if (strcmp(boundary, "resident-graph") != 0) {
+            printf(",\"k1_ms\":");
+            print_double_array(samples, reps, BENCH_SAMPLE_K1_TIME);
+            printf(",\"k2_ms\":");
+            print_double_array(samples, reps, BENCH_SAMPLE_K2_TIME);
+            printf(",\"k3_ms\":");
+            print_double_array(samples, reps, BENCH_SAMPLE_K3_TIME);
+            if (strcmp(boundary, "host-origin") == 0) {
+                printf(",\"h2d_ms\":");
+                print_double_array(samples, reps, BENCH_SAMPLE_H2D_TIME);
+                printf(",\"d2h_ms\":");
+                print_double_array(samples, reps, BENCH_SAMPLE_D2H_TIME);
+            }
+        } else {
+            printf(",\"capture_ms\":%.6f,\"capture_and_instantiate_ms\":%.6f",
+                   capture_ms, capture_ms);
         }
     }
     printf(",\"header_bytes\":%d,\"payload_bytes\":%llu}\n",
@@ -527,6 +533,7 @@ static mco2_q8_status bench_file(int argc, char **argv)
 {
     const char *input_path = NULL, *output_path = NULL, *words_path = NULL;
     const char *backend = "cpu", *boundary_name = "host-origin";
+    double capture_ms = 0.0;
     uint64_t seed = 0, tensor_id = 0, invocation_id = 0;
     uint64_t bits = MCO2_Q8_BITS, block_size = 256, grid_size = 0;
     uint64_t warmups = 10, reps = 30, total_runs;
@@ -584,6 +591,7 @@ static mco2_q8_status bench_file(int argc, char **argv)
             backend = value;
         } else if (strcmp(option, "--boundary") == 0) {
             if (strcmp(value, "resident") != 0 &&
+                strcmp(value, "resident-graph") != 0 &&
                 strcmp(value, "host-origin") != 0)
                 return MCO2_Q8_ERR_ARGUMENT;
             boundary_name = value;
@@ -738,8 +746,10 @@ static mco2_q8_status bench_file(int argc, char **argv)
             (int)block_size, (int)grid_size,
             strcmp(boundary_name, "resident") == 0
                 ? MCO2_CUDA_BENCH_RESIDENT
-                : MCO2_CUDA_BENCH_HOST_ORIGIN,
-            warmups, reps, base_payload, &scale, samples);
+                : strcmp(boundary_name, "resident-graph") == 0
+                    ? MCO2_CUDA_BENCH_RESIDENT_GRAPH
+                    : MCO2_CUDA_BENCH_HOST_ORIGIN,
+            warmups, reps, base_payload, &scale, samples, &capture_ms);
         if (status != MCO2_Q8_OK)
             goto done;
         status = mco2_q8_header_encode((uint8_t)bits, (uint64_t)count,
@@ -756,7 +766,8 @@ static mco2_q8_status bench_file(int argc, char **argv)
     print_bench_json(backend, strcmp(backend, "cpu") == 0 ? "host-host" : boundary_name,
                      (uint8_t)bits, count, seed, tensor_id, invocation_id,
                      warmups, reps, scale_seen, prescribed_scale,
-                     (int)block_size, (int)grid_size, payload_bytes, samples);
+                     (int)block_size, (int)grid_size, payload_bytes, samples,
+                     capture_ms);
     status = MCO2_Q8_OK;
 
 done:

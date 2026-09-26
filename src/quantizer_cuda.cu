@@ -1051,7 +1051,8 @@ mco2_q8_status mco2_cuda_bench(
     int prescribed_scale_seen, float prescribed_scale,
     const uint32_t *prescribed_words, int block_size, int grid_size,
     mco2_cuda_bench_boundary boundary, uint64_t warmups, uint64_t reps,
-    uint8_t *base_payload, float *base_scale, mco2_bench_sample *samples)
+    uint8_t *base_payload, float *base_scale, mco2_bench_sample *samples,
+    double *capture_ms)
 {
     mco2_cuda_bench_context context = {};
     mco2_q8_status result = MCO2_Q8_ERR_CUDA;
@@ -1060,6 +1061,8 @@ mco2_q8_status mco2_cuda_bench(
     uint64_t total_runs, block_count, padded_count = 1, index;
     size_t payload_bytes;
 
+    if (capture_ms != NULL)
+        *capture_ms = 0.0;
     if (bit_width != MCO2_Q4_BITS && bit_width != MCO2_Q8_BITS)
         return MCO2_Q8_ERR_BIT_WIDTH;
     if ((count != 0 && (values == NULL || base_payload == NULL)) ||
@@ -1069,7 +1072,8 @@ mco2_q8_status mco2_cuda_bench(
     if (block_size <= 0 || block_size > MCO2_CUDA_MAX_BLOCK_SIZE ||
         grid_size < 0 || grid_size > MCO2_CUDA_MAX_GRID_SIZE ||
         (boundary != MCO2_CUDA_BENCH_RESIDENT &&
-         boundary != MCO2_CUDA_BENCH_HOST_ORIGIN))
+         boundary != MCO2_CUDA_BENCH_HOST_ORIGIN &&
+         boundary != MCO2_CUDA_BENCH_RESIDENT_GRAPH))
         return MCO2_Q8_ERR_ARGUMENT;
     if (prescribed_scale_seen &&
         (!std::isfinite(prescribed_scale) || prescribed_scale < 0.0f))
@@ -1175,7 +1179,8 @@ mco2_q8_status mco2_cuda_bench(
             if (error != cudaSuccess)
                 goto done;
         }
-        if (boundary == MCO2_CUDA_BENCH_RESIDENT) {
+        if (boundary == MCO2_CUDA_BENCH_RESIDENT ||
+            boundary == MCO2_CUDA_BENCH_RESIDENT_GRAPH) {
             error = cudaMemcpyAsync(context.device_values, values,
                                     count * sizeof(float),
                                     cudaMemcpyHostToDevice, context.stream);
@@ -1189,6 +1194,58 @@ mco2_q8_status mco2_cuda_bench(
 
     if (count == 0) {
         *base_scale = 0.0f;
+        if (boundary == MCO2_CUDA_BENCH_RESIDENT_GRAPH) {
+            cudaGraph_t empty_graph = NULL;
+            cudaGraphExec_t empty_graph_exec = NULL;
+            const auto cap_start = std::chrono::steady_clock::now();
+            error = cudaStreamBeginCapture(context.stream, cudaStreamCaptureModeGlobal);
+            if (error != cudaSuccess) {
+                result = MCO2_Q8_ERR_CUDA;
+                goto done;
+            }
+            error = cudaStreamEndCapture(context.stream, &empty_graph);
+            if (error != cudaSuccess) {
+                result = MCO2_Q8_ERR_CUDA;
+                goto done;
+            }
+            error = cudaGraphInstantiate(&empty_graph_exec, empty_graph, 0);
+            (void)cudaGraphDestroy(empty_graph);
+            if (error != cudaSuccess) {
+                result = MCO2_Q8_ERR_CUDA;
+                goto done;
+            }
+            const auto cap_stop = std::chrono::steady_clock::now();
+            if (capture_ms != NULL)
+                *capture_ms = std::chrono::duration<double, std::milli>(cap_stop - cap_start).count();
+            for (index = 0; index < warmups + reps; index++) {
+                mco2_bench_sample *sample = index < warmups ? NULL : &samples[index - warmups];
+                const auto start = std::chrono::steady_clock::now();
+                error = cudaGraphLaunch(empty_graph_exec, context.stream);
+                if (error != cudaSuccess) {
+                    (void)cudaGraphExecDestroy(empty_graph_exec);
+                    result = MCO2_Q8_ERR_CUDA;
+                    goto done;
+                }
+                error = cudaStreamSynchronize(context.stream);
+                if (error != cudaSuccess) {
+                    (void)cudaGraphExecDestroy(empty_graph_exec);
+                    result = MCO2_Q8_ERR_CUDA;
+                    goto done;
+                }
+                if (sample != NULL) {
+                    const auto stop = std::chrono::steady_clock::now();
+                    sample->wall_ms = std::chrono::duration<double, std::milli>(stop - start).count();
+                    sample->k1_ms = 0.0;
+                    sample->k2_ms = 0.0;
+                    sample->k3_ms = 0.0;
+                    sample->h2d_ms = 0.0;
+                    sample->d2h_ms = 0.0;
+                }
+            }
+            (void)cudaGraphExecDestroy(empty_graph_exec);
+            result = MCO2_Q8_OK;
+            goto done;
+        }
         for (index = 0; index < warmups + reps; index++) {
             mco2_bench_sample *sample = index < warmups ? NULL : &samples[index - warmups];
             const auto start = std::chrono::steady_clock::now();
@@ -1214,12 +1271,116 @@ mco2_q8_status mco2_cuda_bench(
     result = run_bench_pipeline(
         &context, bit_width, values, count, seed, tensor_id, base_invocation_id,
         prescribed_scale_seen, prescribed_words != NULL, block_size, grid_size,
-        boundary, 1, 1, NULL);
+        boundary == MCO2_CUDA_BENCH_HOST_ORIGIN ? MCO2_CUDA_BENCH_HOST_ORIGIN : MCO2_CUDA_BENCH_RESIDENT,
+        1, 1, NULL);
     if (result != MCO2_Q8_OK)
         goto done;
     if (payload_bytes != 0)
         memcpy(base_payload, context.host_payload, payload_bytes);
     *base_scale = context.host_scale;
+
+    if (boundary == MCO2_CUDA_BENCH_RESIDENT_GRAPH) {
+        cudaGraph_t graph = NULL;
+        cudaGraphExec_t graph_exec = NULL;
+        mco2_rng_stream stream_state;
+        if (mco2_rng_stream_init(&stream_state, seed, tensor_id, base_invocation_id) != MCO2_Q8_OK) {
+            result = MCO2_Q8_ERR_ID_OVERFLOW;
+            goto done;
+        }
+
+        const auto cap_start = std::chrono::steady_clock::now();
+        error = cudaStreamBeginCapture(context.stream, cudaStreamCaptureModeGlobal);
+        if (error != cudaSuccess) {
+            result = MCO2_Q8_ERR_CUDA;
+            goto done;
+        }
+
+        error = cudaMemsetAsync(context.device_validation_flags, 0,
+                                sizeof(uint32_t), context.stream);
+        if (error != cudaSuccess) {
+            (void)cudaStreamEndCapture(context.stream, &graph);
+            result = MCO2_Q8_ERR_CUDA;
+            goto done;
+        }
+
+        error = (cudaError_t)mco2_cuda_launch_k1(
+            context.device_values, count, context.device_max_partials,
+            context.device_invalid_partials, context.device_sums_a,
+            context.device_sums_b, block_count, padded_count,
+            prescribed_scale_seen ? context.device_k1_scale : context.device_scale,
+            context.device_status, grid_size, context.stream);
+        if (error != cudaSuccess) {
+            (void)cudaStreamEndCapture(context.stream, &graph);
+            result = MCO2_Q8_ERR_CUDA;
+            goto done;
+        }
+
+        error = (cudaError_t)mco2_cuda_launch_k2(
+            bit_width, context.device_values, count, context.device_scale,
+            context.device_words, prescribed_words != NULL, stream_state,
+            context.device_codes, context.device_validation_flags,
+            block_size, grid_size, context.stream);
+        if (error != cudaSuccess) {
+            (void)cudaStreamEndCapture(context.stream, &graph);
+            result = MCO2_Q8_ERR_CUDA;
+            goto done;
+        }
+
+        error = (cudaError_t)mco2_cuda_launch_k3(
+            bit_width, context.device_codes, count, context.device_payload,
+            block_size, grid_size, context.stream);
+        if (error != cudaSuccess) {
+            (void)cudaStreamEndCapture(context.stream, &graph);
+            result = MCO2_Q8_ERR_CUDA;
+            goto done;
+        }
+
+        error = cudaStreamEndCapture(context.stream, &graph);
+        if (error != cudaSuccess) {
+            result = MCO2_Q8_ERR_CUDA;
+            goto done;
+        }
+
+        error = cudaGraphInstantiate(&graph_exec, graph, 0);
+        (void)cudaGraphDestroy(graph);
+        if (error != cudaSuccess) {
+            result = MCO2_Q8_ERR_CUDA;
+            goto done;
+        }
+
+        const auto cap_stop = std::chrono::steady_clock::now();
+        if (capture_ms != NULL)
+            *capture_ms = std::chrono::duration<double, std::milli>(cap_stop - cap_start).count();
+
+        for (index = 0; index < total_runs; index++) {
+            mco2_bench_sample *sample = index < warmups ? NULL : &samples[index - warmups];
+            const auto wall_start = std::chrono::steady_clock::now();
+            error = cudaGraphLaunch(graph_exec, context.stream);
+            if (error != cudaSuccess) {
+                (void)cudaGraphExecDestroy(graph_exec);
+                result = MCO2_Q8_ERR_CUDA;
+                goto done;
+            }
+            error = cudaStreamSynchronize(context.stream);
+            if (error != cudaSuccess) {
+                (void)cudaGraphExecDestroy(graph_exec);
+                result = MCO2_Q8_ERR_CUDA;
+                goto done;
+            }
+            if (sample != NULL) {
+                const auto wall_stop = std::chrono::steady_clock::now();
+                sample->wall_ms = std::chrono::duration<double, std::milli>(wall_stop - wall_start).count();
+                sample->k1_ms = 0.0;
+                sample->k2_ms = 0.0;
+                sample->k3_ms = 0.0;
+                sample->h2d_ms = 0.0;
+                sample->d2h_ms = 0.0;
+            }
+        }
+        (void)cudaGraphExecDestroy(graph_exec);
+        result = MCO2_Q8_OK;
+        goto done;
+    }
 
     for (index = 0; index < total_runs; index++) {
         mco2_bench_sample *sample = index < warmups ? NULL : &samples[index - warmups];

@@ -60,7 +60,7 @@ def _compress(
 
 
 @pytest.mark.parametrize("bits", [4, 8])
-@pytest.mark.parametrize("boundary", ["resident", "host-origin"])
+@pytest.mark.parametrize("boundary", ["resident", "resident-graph", "host-origin"])
 def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, boundary):
     values = np.random.default_rng(1515).normal(size=257).astype(np.float32)
     input_path = tmp_path / "bench-input.f32"
@@ -100,20 +100,52 @@ def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, bounda
     assert payload["configuration"]["reps"] == 2
     assert payload["configuration"]["repetition_invocation_ids"] == [41, 42]
     assert payload["configuration"]["warmup_invocation_ids"] == [43]
-    copy_keys = ("h2d_ms", "d2h_ms") if boundary == "host-origin" else ()
-    for key in ("samples_ms", "k1_ms", "k2_ms", "k3_ms", *copy_keys):
-        assert len(payload[key]) == 2
-        assert all(sample >= 0 for sample in payload[key])
-    if boundary == "host-origin":
-        assert all(sample > 0 for sample in payload["h2d_ms"])
-        assert all(sample > 0 for sample in payload["d2h_ms"])
-        for index, wall in enumerate(payload["samples_ms"]):
-            stages = sum(payload[k][index] for k in ("k1_ms", "k2_ms", "k3_ms", *copy_keys))
-            assert stages <= wall
+
+    assert len(payload["samples_ms"]) == 2
+    assert all(sample >= 0 for sample in payload["samples_ms"])
+
+    if boundary == "resident-graph":
+        assert "capture_ms" in payload and payload["capture_ms"] >= 0
+        assert (
+            "capture_and_instantiate_ms" in payload and payload["capture_and_instantiate_ms"] >= 0
+        )
+        for stage_key in ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms"):
+            assert stage_key not in payload
     else:
-        assert "h2d_ms" not in payload and "d2h_ms" not in payload
+        assert "capture_ms" not in payload
+        assert "capture_and_instantiate_ms" not in payload
+        copy_keys = ("h2d_ms", "d2h_ms") if boundary == "host-origin" else ()
+        for key in ("k1_ms", "k2_ms", "k3_ms", *copy_keys):
+            assert len(payload[key]) == 2
+            assert all(sample >= 0 for sample in payload[key])
+        if boundary == "host-origin":
+            assert all(sample > 0 for sample in payload["h2d_ms"])
+            assert all(sample > 0 for sample in payload["d2h_ms"])
+            for index, wall in enumerate(payload["samples_ms"]):
+                stages = sum(payload[k][index] for k in ("k1_ms", "k2_ms", "k3_ms", *copy_keys))
+                assert stages <= wall
+        else:
+            assert "h2d_ms" not in payload and "d2h_ms" not in payload
+
     assert payload["header_bytes"] == HEADER.size
     assert payload["payload_bytes"] == (len(values) + (bits == 4)) // (2 if bits == 4 else 1)
+
+    cpu_result, cpu_record = _compress(
+        tmp_path,
+        values,
+        backend="cpu",
+        seed=615,
+        extra=(
+            "--bits",
+            str(bits),
+            "--tensor-id",
+            "31",
+            "--invocation-id",
+            "41",
+        ),
+    )
+    assert cpu_result.returncode == 0, cpu_result.stderr
+    assert record_path.read_bytes() == cpu_record
 
     cuda_result, cuda_record = _compress(
         tmp_path,
@@ -128,6 +160,62 @@ def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, bounda
             "--invocation-id",
             "41",
         ),
+    )
+    assert cuda_result.returncode == 0, cuda_result.stderr
+    assert record_path.read_bytes() == cuda_record
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+def test_cuda_bench_resident_graph_empty_input(tmp_path, bits):
+    values = np.asarray([], dtype=np.float32)
+    input_path = tmp_path / "empty-input.f32"
+    record_path = tmp_path / "empty-bench-record.msq"
+    _write_values(input_path, values)
+
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(record_path),
+        "--seed",
+        "615",
+        "--backend",
+        "cuda",
+        "--boundary",
+        "resident-graph",
+        "--bits",
+        str(bits),
+        "--warmup",
+        "1",
+        "--reps",
+        "2",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["configuration"]["boundary"] == "resident-graph"
+    assert len(payload["samples_ms"]) == 2
+    assert payload["capture_ms"] >= 0
+    assert payload["payload_bytes"] == 0
+    assert payload["header_bytes"] == HEADER.size
+
+    cpu_result, cpu_record = _compress(
+        tmp_path,
+        values,
+        backend="cpu",
+        seed=615,
+        extra=("--bits", str(bits)),
+    )
+    assert cpu_result.returncode == 0, cpu_result.stderr
+    assert record_path.read_bytes() == cpu_record
+
+    cuda_result, cuda_record = _compress(
+        tmp_path,
+        values,
+        backend="cuda",
+        seed=615,
+        extra=("--bits", str(bits)),
     )
     assert cuda_result.returncode == 0, cuda_result.stderr
     assert record_path.read_bytes() == cuda_record

@@ -1,6 +1,6 @@
 import json
 
-from bench_report import FIGURES, find_crossovers, index_cases, render_report
+from bench_report import FIGURES, STAGE_PATHS, find_crossovers, index_cases, render_report
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -29,6 +29,18 @@ def make_case(
                 "claim_supported_rev2": supported if rev2 is None else rev2,
             }
         )
+        if boundary == "resident-graph":
+            stats["vs_resident"] = {
+                "speedup_vs_resident": 1.1,
+                "speedup_low": 1.05,
+                "speedup_high": 1.15,
+                "speedup_ci_low": 1.06,
+                "speedup_ci_high": 1.14,
+                "verdict": "faster",
+                "direction_supported": True,
+                "magnitude_supported": True,
+                "claim_supported_rev2": True,
+            }
     else:
         stats.update(
             {
@@ -39,12 +51,15 @@ def make_case(
             }
         )
     run = {"samples_ms": [median, median]}
-    if backend == "cuda" and stages:
+    if boundary == "resident-graph":
+        run["capture_ms"] = 0.5
+        run["capture_and_instantiate_ms"] = 0.5
+    elif backend == "cuda" and stages:
         run.update({"k1_ms": [0.5 * median] * 2, "k2_ms": [0.1 * median] * 2})
         run["k3_ms"] = [0.1 * median] * 2
         if boundary == "host-origin":
             run.update({"h2d_ms": [0.1 * median] * 2, "d2h_ms": [0.05 * median] * 2})
-    return {
+    case = {
         "case_id": f"case_{backend}_{boundary}_bits{bits}_n{count}",
         "count": count,
         "bits": bits,
@@ -54,6 +69,9 @@ def make_case(
         "statistics": stats,
         "trial_runs": [run, run],
     }
+    if boundary == "resident-graph":
+        case["vs_resident"] = stats["vs_resident"]
+    return case
 
 
 def write_snapshot(root, cases):
@@ -76,6 +94,17 @@ def sweep_cases():
             cases.append(make_case(count, bits, "comparator", 1.0, None, None))
             verdict = "slower" if ratio > 1 else "faster"
             cases.append(make_case(count, bits, "resident", ratio, verdict, True))
+            cases.append(
+                make_case(
+                    count,
+                    bits,
+                    "resident-graph",
+                    ratio * 0.9,
+                    "slower" if (ratio * 0.9) > 1 else "faster",
+                    True,
+                    stages=False,
+                )
+            )
             # Host-origin at 2^12 keeps its direction but loses magnitude and the rev 2 claim.
             cases.append(
                 make_case(
@@ -107,7 +136,9 @@ def test_render_report_writes_figures_and_table(tmp_path):
         assert len(data) > 10_000
     report = (out / "report.md").read_text(encoding="utf-8")
     assert "abc1234" in report
-    assert report.count("| 2^") == 12  # one row per size, bit width and CUDA path
+    assert report.count("| 2^") == 18  # one row per size, bit width and CUDA path
+    assert "CUDA resident-graph" in report
+    assert "resident-graph" not in STAGE_PATHS
     header = next(line for line in report.splitlines() if line.startswith("| Elements"))
     for column in ("95% CI", "Direction", "Magnitude", "Rev 2"):
         assert column in header
@@ -116,6 +147,7 @@ def test_render_report_writes_figures_and_table(tmp_path):
         in report
     )
     assert "CUDA resident, 4-bit: resolved between 2^10 and 2^12" in report
+    assert "CUDA resident-graph, 4-bit: resolved between 2^10 and 2^12" in report
     assert "### Revision 2 crossover" in report
     # Direction alone resolves host-origin; the rev 2 rule does not.
     assert result["crossovers"][(8, "host-origin")]["status"] == "resolved"

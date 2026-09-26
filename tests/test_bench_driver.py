@@ -158,6 +158,17 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert params["in_process_warmup_seconds"] == 0.01
     assert len(params["trial_orders"]) == 2
     assert params["trial_orders"][0] != params["trial_orders"][1]
+    # Check that DEFAULT_TRIALS generates all 24 distinct orderings for the 4 paths
+    all_orders = trial_orders(
+        [
+            ("cpu", "comparator", []),
+            ("cuda", "resident", []),
+            ("cuda", "resident-graph", []),
+            ("cuda", "host-origin", []),
+        ],
+        DEFAULT_TRIALS,
+    )
+    assert len({tuple(o) for o in all_orders}) == 24
     method = manifest["statistics_method"]
     assert method["spread_threshold"] == 1.25
     assert "linear" in method["quantile_method"]
@@ -183,8 +194,8 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert str(ROOT.resolve()) not in vec_report
 
     # Cases
-    # 2 sizes * 2 bits (4, 8) * 3 paths (cpu, cuda-resident, cuda-host-origin) = 12 cases
-    assert len(manifest["cases"]) == 12
+    # 2 sizes * 2 bits (4, 8) * 4 paths (cpu, cuda-resident, cuda-resident-graph, cuda-host-origin) = 16 cases
+    assert len(manifest["cases"]) == 16
     assert manifest["all_cases_passed"] is True
 
     # 2. Case JSONs
@@ -204,7 +215,12 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
             "bits": case_data["bits"],
         }
         assert case_data["backend"] in ("cpu", "cuda")
-        assert case_data["timing_boundary"] in ("comparator", "resident", "host-origin")
+        assert case_data["timing_boundary"] in (
+            "comparator",
+            "resident",
+            "resident-graph",
+            "host-origin",
+        )
         assert case_data["transfer_policy"] == "pageable"
         probe = case_data["in_process_warmup"]
         assert probe["target_seconds"] == 0.01
@@ -240,7 +256,14 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         for run in runs:
             assert len(run["samples_ms"]) == 2
             assert run["repetition_invocation_ids"] == [0, 1]
-            if case_data["backend"] == "cuda":
+            if case_data["timing_boundary"] == "resident-graph":
+                assert "capture_ms" in run and run["capture_ms"] >= 0
+                assert (
+                    "capture_and_instantiate_ms" in run and run["capture_and_instantiate_ms"] >= 0
+                )
+                for k in ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms"):
+                    assert k not in run
+            elif case_data["backend"] == "cuda":
                 for k in ("k1_ms", "k2_ms", "k3_ms"):
                     assert len(run[k]) == 2
                     assert all(s >= 0 for s in run[k])
@@ -252,7 +275,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
                 assert "h2d_ms" not in run and "d2h_ms" not in run
 
         stages = case_data["stage_medians_ms"]
-        if case_data["backend"] == "cpu":
+        if case_data["backend"] == "cpu" or case_data["timing_boundary"] == "resident-graph":
             assert stages is None
         else:
             expected = {"k1_ms", "k2_ms", "k3_ms", "other_ms"}
@@ -279,6 +302,17 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
             assert isinstance(stats["claim_supported_rev2"], bool)
             assert stats["direction_supported"] or not stats["magnitude_supported"]
 
+        if case_data["timing_boundary"] == "resident-graph":
+            assert "vs_resident" in case_data
+            assert "vs_resident" in stats
+            vs_res = case_data["vs_resident"]
+            assert vs_res["speedup_vs_resident"] > 0
+            assert vs_res["speedup_low"] <= vs_res["speedup_vs_resident"] <= vs_res["speedup_high"]
+            assert vs_res["speedup_ci_low"] <= vs_res["speedup_ci_high"]
+            assert vs_res["verdict"] in ("faster", "slower", "inconclusive")
+            assert isinstance(vs_res["direction_supported"], bool)
+            assert isinstance(vs_res["magnitude_supported"], bool)
+
     # 3. Summary CSV
     csv_path = snapshot_dir / manifest["summary_csv"]
     assert csv_path.is_file()
@@ -286,9 +320,14 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         reader = csv.DictReader(f)
         rows = list(reader)
 
-    assert len(rows) == 12
+    assert len(rows) == 16
     assert reader.fieldnames == SUMMARY_FIELDS
-    order = ["cpu-comparator", "cuda-resident", "cuda-host-origin"]
+    order = [
+        "cpu-comparator",
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cuda-host-origin",
+    ]
     keys = [
         (int(r["count"]), int(r["bits"]), order.index(f"{r['backend']}-{r['boundary']}"))
         for r in rows
@@ -342,7 +381,7 @@ def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
     with (snapshot_dir / "summary.csv").open(encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
-    assert len(rows) == 3  # 1 size * 1 bit width * 3 paths
+    assert len(rows) == 4  # 1 size * 1 bit width * 4 paths
     for row in rows:
         assert row["correctness"] == "failed"
         assert row["median_ms"] == ""
@@ -413,12 +452,17 @@ def test_driver_refuses_dirty_tree(tmp_path):
 
 
 def test_trial_orders_cover_every_permutation_once():
-    paths = [("cpu", "comparator", []), ("cuda", "resident", []), ("cuda", "host-origin", [])]
+    paths = [
+        ("cpu", "comparator", []),
+        ("cuda", "resident", []),
+        ("cuda", "resident-graph", []),
+        ("cuda", "host-origin", []),
+    ]
     orders = trial_orders(paths, DEFAULT_TRIALS)
-    assert DEFAULT_TRIALS == 6
-    assert len({tuple(order) for order in orders}) == 6
-    for position in range(3):
-        assert sorted(order[position] for order in orders) == [0, 0, 1, 1, 2, 2]
+    assert DEFAULT_TRIALS == 24
+    assert len({tuple(order) for order in orders}) == 24
+    for position in range(4):
+        assert sorted(order[position] for order in orders) == sorted([0, 1, 2, 3] * 6)
 
 
 def test_speedup_verdicts_use_trial_median_ranges():

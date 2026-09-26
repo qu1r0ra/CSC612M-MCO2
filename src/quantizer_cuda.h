@@ -29,7 +29,8 @@ typedef struct {
 
 typedef enum {
     MCO2_CUDA_BENCH_RESIDENT = 0,
-    MCO2_CUDA_BENCH_HOST_ORIGIN = 1
+    MCO2_CUDA_BENCH_HOST_ORIGIN = 1,
+    MCO2_CUDA_BENCH_RESIDENT_GRAPH = 2
 } mco2_cuda_bench_boundary;
 
 #ifdef __cplusplus
@@ -112,7 +113,8 @@ mco2_q8_status mco2_cuda_bench(
     int prescribed_scale_seen, float prescribed_scale,
     const uint32_t *prescribed_words, int block_size, int grid_size,
     mco2_cuda_bench_boundary boundary, uint64_t warmups, uint64_t reps,
-    uint8_t *base_payload, float *base_scale, mco2_bench_sample *samples);
+    uint8_t *base_payload, float *base_scale, mco2_bench_sample *samples,
+    double *capture_ms);
 
 #ifdef __cplusplus
 }

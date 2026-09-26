@@ -22,15 +22,22 @@ import numpy as np
 
 from benchmark_driver import compute_stage_medians
 
-PATHS = ("comparator", "resident", "host-origin")
-CUDA_PATHS = ("resident", "host-origin")
+PATHS = ("comparator", "resident", "resident-graph", "host-origin")
+CUDA_PATHS = ("resident", "resident-graph", "host-origin")
+STAGE_PATHS = ("resident", "host-origin")
 LABELS = {
     "comparator": "C comparator",
     "resident": "CUDA resident",
+    "resident-graph": "CUDA resident-graph",
     "host-origin": "CUDA host-origin",
 }
-COLORS = {"comparator": "#555555", "resident": "#0072B2", "host-origin": "#E69F00"}
-MARKERS = {"comparator": "s", "resident": "o", "host-origin": "^"}
+COLORS = {
+    "comparator": "#555555",
+    "resident": "#0072B2",
+    "resident-graph": "#009E73",
+    "host-origin": "#E69F00",
+}
+MARKERS = {"comparator": "s", "resident": "o", "resident-graph": "D", "host-origin": "^"}
 STAGE_COUNTS = (1 << 14, 1 << 18, 1 << 22, 1 << 26)
 STAGES = (
     ("k1_ms", "scale (K1)", "#0072B2"),
@@ -44,6 +51,7 @@ FIGURES = {
     "f1": "f1_time_vs_elements.png",
     "f2": "f2_speedup_vs_elements.png",
     "f3": "f3_stage_breakdown.png",
+    "f4": "f4_graph_vs_resident.png",
 }
 REPORT = "report.md"
 
@@ -244,7 +252,7 @@ def plot_stages(indexed, stage_counts, bit_widths, out: Path) -> None:
     )
     width = 0.38
     for ax, bits in zip(axes[0], bit_widths, strict=True):
-        for offset, path in zip((-width / 2, width / 2), CUDA_PATHS, strict=True):
+        for offset, path in zip((-width / 2, width / 2), STAGE_PATHS, strict=True):
             for i, count in enumerate(stage_counts):
                 case = indexed.get((count, bits, path))
                 medians = stage_medians(case) if case is not None else None
@@ -295,6 +303,104 @@ def plot_stages(indexed, stage_counts, bit_widths, out: Path) -> None:
     plt.close(fig)
 
 
+def plot_graph_vs_resident(indexed, counts, bit_widths, out: Path) -> None:
+    fig, axes = plt.subplots(
+        1, len(bit_widths), figsize=(5.5 * len(bit_widths), 4.2), sharey=True, squeeze=False
+    )
+    has_any = False
+    for ax, bits in zip(axes[0], bit_widths, strict=True):
+        ax.axhline(1.0, color="black", linewidth=0.8, linestyle="--")
+        rows = [
+            indexed[(n, bits, "resident-graph")]
+            for n in counts
+            if (n, bits, "resident-graph") in indexed
+        ]
+        rows = [
+            r
+            for r in rows
+            if (r.get("vs_resident") and "speedup_vs_resident" in r["vs_resident"])
+            or (
+                r.get("statistics")
+                and r["statistics"].get("vs_resident")
+                and "speedup_vs_resident" in r["statistics"]["vs_resident"]
+            )
+        ]
+        if not rows:
+            ax.set_xscale("log", base=2)
+            ax.set_title(f"{bits}-bit")
+            ax.set_xlabel("elements")
+            ax.grid(True, which="major", alpha=0.3)
+            continue
+        has_any = True
+        x = np.array([r["count"] for r in rows])
+        vs_res_list = [r.get("vs_resident") or r["statistics"]["vs_resident"] for r in rows]
+        y = np.array([v["speedup_vs_resident"] for v in vs_res_list])
+        bounds = np.array(
+            [
+                (
+                    (v["speedup_ci_low"], v["speedup_ci_high"])
+                    if "speedup_ci_low" in v
+                    else (v["speedup_low"], v["speedup_high"])
+                )
+                for v in vs_res_list
+            ]
+        )
+        err = np.array([y - bounds[:, 0], bounds[:, 1] - y])
+        ax.errorbar(
+            x,
+            y,
+            yerr=err,
+            color=COLORS["resident-graph"],
+            linewidth=1,
+            capsize=2,
+            label=LABELS["resident-graph"],
+        )
+        direction = np.array([direction_supported(v) for v in vs_res_list])
+        magnitude = np.array([bool(magnitude_supported(v)) for v in vs_res_list])
+        ax.scatter(
+            x[magnitude],
+            y[magnitude],
+            marker=MARKERS["resident-graph"],
+            color=COLORS["resident-graph"],
+            zorder=3,
+        )
+        only = direction & ~magnitude
+        ax.scatter(
+            x[only],
+            y[only],
+            marker=MARKERS["resident-graph"],
+            facecolors="white",
+            edgecolors=COLORS["resident-graph"],
+            zorder=3,
+        )
+        ax.scatter(
+            x[~direction],
+            y[~direction],
+            marker=MARKERS["resident-graph"],
+            facecolors="white",
+            edgecolors=COLORS["resident-graph"],
+            alpha=0.35,
+            zorder=3,
+        )
+        ax.set_xscale("log", base=2)
+        ax.set_yscale("log")
+        ax.set_title(f"{bits}-bit")
+        ax.set_xlabel("elements")
+        ax.grid(True, which="major", alpha=0.3)
+    axes[0][0].set_ylabel("speedup vs plain resident")
+    if has_any:
+        axes[0][0].legend(loc="upper left", fontsize=8)
+    else:
+        fig.text(0.5, 0.5, "no resident-graph comparison in this snapshot", ha="center")
+    fig.suptitle(
+        "F4. CUDA Graph speedup vs plain resident, 95% bootstrap CI "
+        "(filled: magnitude; hollow: direction only; faded: neither)"
+    )
+    fig.tight_layout()
+    fig.savefig(out, dpi=200)
+    plt.close(fig)
+
+
 def fmt_ms(value: float) -> str:
     return f"{value:.4g}"
 
@@ -303,7 +409,9 @@ def yes_no(value: bool | None) -> str:
     return "—" if value is None else ("yes" if value else "no")
 
 
-def t1_table(indexed, counts, bit_widths) -> list[str]:
+def t1_table(
+    indexed, counts, bit_widths, cuda_paths: tuple[str, ...] | list[str] = CUDA_PATHS
+) -> list[str]:
     lines = [
         (
             "| Elements | Bits | Path | C (ms) | CUDA (ms) | Speedup | Trial range | 95% CI | "
@@ -315,7 +423,7 @@ def t1_table(indexed, counts, bit_widths) -> list[str]:
         for bits in bit_widths:
             cpu = indexed.get((count, bits, "comparator"))
             c_ms = fmt_ms(cpu["statistics"]["median_ms"]) if cpu else "failed"
-            for path in CUDA_PATHS:
+            for path in cuda_paths:
                 cells = [power_label(count), str(bits), LABELS[path], c_ms]
                 case = indexed.get((count, bits, path))
                 if case is None or "verdict" not in case["statistics"]:
@@ -382,16 +490,23 @@ def render_report(
     plot_time(indexed, counts, bit_widths, out / FIGURES["f1"])
     plot_speedup(indexed, counts, bit_widths, out / FIGURES["f2"])
     plot_stages(indexed, chosen, bit_widths, out / FIGURES["f3"])
+    plot_graph_vs_resident(indexed, counts, bit_widths, out / FIGURES["f4"])
+
+    present_cuda_paths = [
+        p for p in CUDA_PATHS if any(c.get("timing_boundary") == p for c in cases)
+    ]
+    if not present_cuda_paths:
+        present_cuda_paths = list(CUDA_PATHS)
 
     crossovers = {
         (bits, path): find_crossovers(indexed, counts, bits, path)
         for bits in bit_widths
-        for path in CUDA_PATHS
+        for path in present_cuda_paths
     }
     crossovers_rev2 = {
         (bits, path): find_crossovers(indexed, counts, bits, path, rev2_supported)
         for bits in bit_widths
-        for path in CUDA_PATHS
+        for path in present_cuda_paths
     }
     revision = manifest["git_provenance"]["code_revision_short"]
     report = [
@@ -423,7 +538,7 @@ def render_report(
             "the manifest; — marks a field the snapshot predates."
         ),
         "",
-        *t1_table(indexed, counts, bit_widths),
+        *t1_table(indexed, counts, bit_widths, cuda_paths=present_cuda_paths),
         "",
         "## Figures",
         "",
