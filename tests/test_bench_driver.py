@@ -822,6 +822,31 @@ def test_cpu_gpu_origin_faster_than_the_comparator_is_an_inversion():
     assert stats["cuda-host-origin"]["boundary_inversion"] is False
 
 
+def test_inverted_pageable_twin_vetoes_the_pinning_comparison():
+    paths = build_paths(["cpu", "cuda"], ["gpu-origin"], ["pageable", "pinned"])
+    medians = {
+        "cpu-comparator": 10.0,
+        "cuda-resident": 1.0,
+        "cuda-resident-graph": 0.8,
+        "cuda-host-origin": 4.0,
+        "cuda-host-origin-pinned": 3.0,
+        "cpu-gpu-origin": 12.0,
+        # Faster than resident: an inversion in the pageable group only.
+        "cuda-gpu-origin": 0.5,
+        "cpu-gpu-origin-pinned": 11.0,
+        "cuda-gpu-origin-pinned": 1.5,
+    }
+    cases = [{"statistics": fake_stats(medians[path.label])} for path in paths]
+    compare_case_group(cases, paths)
+    stats = {path.label: case["statistics"] for path, case in zip(paths, cases, strict=True)}
+    assert stats["cuda-gpu-origin"]["boundary_inversion"] is True
+    assert stats["cuda-gpu-origin-pinned"]["boundary_inversion"] is False
+    assert stats["cuda-gpu-origin-pinned"]["direction_supported"] is True
+    vs_pageable = stats["cuda-gpu-origin-pinned"]["vs_pageable"]
+    assert vs_pageable["boundary_inversion"] is True
+    assert vs_pageable["direction_supported"] is False
+
+
 READY_FACTS = {
     "uptime_seconds": 600.0,
     "app_windows": [

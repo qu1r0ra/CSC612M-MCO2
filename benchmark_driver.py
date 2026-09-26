@@ -970,6 +970,14 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         "pinned": boundary_inversion(cuda_medians, "-pinned"),
     }
 
+    def path_inversion(path: BenchPath) -> bool:
+        group = "pinned" if path.policy == "pinned" else "pageable"
+        if path.backend == "cpu":
+            return cpu_inversion[group]
+        if path.boundary == "gpu-origin":
+            return cuda_inversion[group] or cpu_inversion[group]
+        return cuda_inversion[group]
+
     for path in paths:
         stats = stats_by_label[path.label]
         if stats is None:
@@ -991,13 +999,7 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
                 }
             )
             continue
-        group = "pinned" if path.policy == "pinned" else "pageable"
-        if path.backend == "cpu":
-            inversion = cpu_inversion[group]
-        elif path.boundary == "gpu-origin":
-            inversion = cuda_inversion[group] or cpu_inversion[group]
-        else:
-            inversion = cuda_inversion[group]
+        inversion = path_inversion(path)
         base_label = baseline_label(path)
         base_stats = stats_by_label.get(base_label)
         if base_stats is None:
@@ -1008,13 +1010,16 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         stats.update(claim_support(stats["verdict"], inversion, base_stats, stats))
 
         if path.policy == "pinned":
-            twin = stats_by_label.get(BenchPath(path.backend, path.boundary, "pageable").label)
+            twin_path = BenchPath(path.backend, path.boundary, "pageable")
+            twin = stats_by_label.get(twin_path.label)
             if twin is not None:
+                # Either side's inversion vetoes the pinning comparison.
+                pair_inversion = inversion or path_inversion(twin_path)
                 vs_pageable = compare_speedup(twin, stats, "speedup_vs_pageable")
                 stats["vs_pageable"] = {
                     **vs_pageable,
-                    "boundary_inversion": inversion,
-                    **claim_support(vs_pageable["verdict"], inversion, twin, stats),
+                    "boundary_inversion": pair_inversion,
+                    **claim_support(vs_pageable["verdict"], pair_inversion, twin, stats),
                 }
         if path.backend == "cuda" and path.boundary == "gpu-origin" and comparator is not None:
             # Descriptive only: the two sides start from different data locations.
