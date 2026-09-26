@@ -582,123 +582,52 @@ def verify_correctness(
                 "error_message": f"CUDA compress failed: {res_cuda_comp.stderr.strip()}",
             }
 
-        # CUDA bench resident --record-output
-        res_cuda_res = subprocess.run(
-            [
-                str(binary),
-                "bench",
-                "--input",
-                str(input_path),
-                "--record-output",
-                str(cuda_bench_res_path),
-                "--seed",
-                str(seed),
-                "--bits",
-                str(bits),
-                "--tensor-id",
-                str(tensor_id),
-                "--invocation-id",
-                str(invocation_id),
-                "--backend",
-                "cuda",
-                "--boundary",
-                "resident",
-                "--warmup",
-                "0",
-                "--reps",
-                "1",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if res_cuda_res.returncode != 0:
-            return False, {
-                "status": "failed",
-                "error_message": f"CUDA resident bench record failed: {res_cuda_res.stderr.strip()}",
-            }
-
-        # CUDA bench resident-graph --record-output
-        res_cuda_graph = subprocess.run(
-            [
-                str(binary),
-                "bench",
-                "--input",
-                str(input_path),
-                "--record-output",
-                str(cuda_bench_graph_path),
-                "--seed",
-                str(seed),
-                "--bits",
-                str(bits),
-                "--tensor-id",
-                str(tensor_id),
-                "--invocation-id",
-                str(invocation_id),
-                "--backend",
-                "cuda",
-                "--boundary",
-                "resident-graph",
-                "--warmup",
-                "0",
-                "--reps",
-                "1",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if res_cuda_graph.returncode != 0:
-            return False, {
-                "status": "failed",
-                "error_message": f"CUDA resident-graph bench record failed: {res_cuda_graph.stderr.strip()}",
-            }
-
-        # CUDA bench host-origin --record-output
-        res_cuda_ho = subprocess.run(
-            [
-                str(binary),
-                "bench",
-                "--input",
-                str(input_path),
-                "--record-output",
-                str(cuda_bench_ho_path),
-                "--seed",
-                str(seed),
-                "--bits",
-                str(bits),
-                "--tensor-id",
-                str(tensor_id),
-                "--invocation-id",
-                str(invocation_id),
-                "--backend",
-                "cuda",
-                "--boundary",
-                "host-origin",
-                "--warmup",
-                "0",
-                "--reps",
-                "1",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if res_cuda_ho.returncode != 0:
-            return False, {
-                "status": "failed",
-                "error_message": f"CUDA host-origin bench record failed: {res_cuda_ho.stderr.strip()}",
-            }
+        cuda_bench_paths = {
+            "resident": cuda_bench_res_path,
+            "resident-graph": cuda_bench_graph_path,
+            "host-origin": cuda_bench_ho_path,
+        }
+        for boundary, record_path in cuda_bench_paths.items():
+            res_cuda_bench = subprocess.run(
+                [
+                    str(binary),
+                    "bench",
+                    "--input",
+                    str(input_path),
+                    "--record-output",
+                    str(record_path),
+                    "--seed",
+                    str(seed),
+                    "--bits",
+                    str(bits),
+                    "--tensor-id",
+                    str(tensor_id),
+                    "--invocation-id",
+                    str(invocation_id),
+                    "--backend",
+                    "cuda",
+                    "--boundary",
+                    boundary,
+                    "--warmup",
+                    "0",
+                    "--reps",
+                    "1",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if res_cuda_bench.returncode != 0:
+                return False, {
+                    "status": "failed",
+                    "error_message": (
+                        f"CUDA {boundary} bench record failed: {res_cuda_bench.stderr.strip()}"
+                    ),
+                }
 
         cuda_comp_bytes = cuda_comp_path.read_bytes()
-        cuda_res_bytes = cuda_bench_res_path.read_bytes()
-        cuda_graph_bytes = cuda_bench_graph_path.read_bytes()
-        cuda_ho_bytes = cuda_bench_ho_path.read_bytes()
-
-        byte_identical_to_compress = (
-            cuda_res_bytes == cuda_comp_bytes
-            and cuda_graph_bytes == cuda_comp_bytes
-            and cuda_ho_bytes == cuda_comp_bytes
+        byte_identical_to_compress = all(
+            path.read_bytes() == cuda_comp_bytes for path in cuda_bench_paths.values()
         )
         cpu_cuda_byte_identical = cpu_comp_bytes == cuda_comp_bytes
 
@@ -855,11 +784,12 @@ def bootstrap_speedup_ci(
     return float(low), float(high)
 
 
-def compare_to_comparator(cpu_stats: dict[str, Any], cuda_stats: dict[str, Any]) -> dict[str, Any]:
+def compare_speedup(
+    baseline: dict[str, Any], candidate: dict[str, Any], point_key: str
+) -> dict[str, Any]:
     """Point speedup from pooled medians, a conservative range, and a bootstrap CI."""
-    point = cpu_stats["median_ms"] / cuda_stats["median_ms"]
-    low = cpu_stats["trial_median_min_ms"] / cuda_stats["trial_median_max_ms"]
-    high = cpu_stats["trial_median_max_ms"] / cuda_stats["trial_median_min_ms"]
+    low = baseline["trial_median_min_ms"] / candidate["trial_median_max_ms"]
+    high = baseline["trial_median_max_ms"] / candidate["trial_median_min_ms"]
     if low > 1.0:
         verdict = "faster"
     elif high < 1.0:
@@ -867,42 +797,27 @@ def compare_to_comparator(cpu_stats: dict[str, Any], cuda_stats: dict[str, Any])
     else:
         verdict = "inconclusive"
     ci_low, ci_high = bootstrap_speedup_ci(
-        cpu_stats["trial_medians_ms"], cuda_stats["trial_medians_ms"]
+        baseline["trial_medians_ms"], candidate["trial_medians_ms"]
     )
     return {
-        "speedup_vs_cpu": point,
+        point_key: baseline["median_ms"] / candidate["median_ms"],
         "speedup_low": low,
         "speedup_high": high,
         "speedup_ci_low": ci_low,
         "speedup_ci_high": ci_high,
         "verdict": verdict,
     }
+
+
+def compare_to_comparator(cpu_stats: dict[str, Any], cuda_stats: dict[str, Any]) -> dict[str, Any]:
+    return compare_speedup(cpu_stats, cuda_stats, "speedup_vs_cpu")
 
 
 def compare_to_resident(
     resident_stats: dict[str, Any], graph_stats: dict[str, Any]
 ) -> dict[str, Any]:
-    """Point speedup of resident-graph over plain resident, range, and bootstrap CI."""
-    point = resident_stats["median_ms"] / graph_stats["median_ms"]
-    low = resident_stats["trial_median_min_ms"] / graph_stats["trial_median_max_ms"]
-    high = resident_stats["trial_median_max_ms"] / graph_stats["trial_median_min_ms"]
-    if low > 1.0:
-        verdict = "faster"
-    elif high < 1.0:
-        verdict = "slower"
-    else:
-        verdict = "inconclusive"
-    ci_low, ci_high = bootstrap_speedup_ci(
-        resident_stats["trial_medians_ms"], graph_stats["trial_medians_ms"]
-    )
-    return {
-        "speedup_vs_resident": point,
-        "speedup_low": low,
-        "speedup_high": high,
-        "speedup_ci_low": ci_low,
-        "speedup_ci_high": ci_high,
-        "verdict": verdict,
-    }
+    """Resident-graph measured against plain resident under the comparator rules."""
+    return compare_speedup(resident_stats, graph_stats, "speedup_vs_resident")
 
 
 def claim_support(
@@ -1210,9 +1125,14 @@ def in_process_warmups(minimum: int, seconds: float, rep_ms: float) -> int:
 
 
 def compact_invocation_ids(ids: Sequence[int] | None) -> dict[str, int] | list[int] | None:
-    """Store a contiguous identifier run as its bounds; revision 2 warm-ups reach 10^4-10^5."""
+    """Store a contiguous or repeated identifier run compactly; warm-ups reach 10^4-10^5.
+
+    Resident-graph replays one invocation, so its identifiers repeat.
+    """
     if not ids:
         return None if ids is None else []
+    if len(ids) > 1 and all(i == ids[0] for i in ids):
+        return {"repeated": ids[0], "count": len(ids)}
     if list(ids) != list(range(ids[0], ids[0] + len(ids))):
         return list(ids)
     return {"first": ids[0], "last": ids[-1], "count": len(ids)}
@@ -1582,9 +1502,8 @@ def sweep_matrix(
                         ),
                         "samples_ms": payload.get("samples_ms", []),
                     }
-                    for key in ("capture_ms", "capture_and_instantiate_ms"):
-                        if key in payload:
-                            run[key] = payload[key]
+                    if "capture_and_instantiate_ms" in payload:
+                        run["capture_and_instantiate_ms"] = payload["capture_and_instantiate_ms"]
                     for key in STAGE_KEYS:
                         if key in payload:
                             run[key] = payload[key]
@@ -1654,21 +1573,11 @@ def sweep_matrix(
             graph_stats = graph_case.get("statistics")
             if res_stats is not None and graph_stats is not None:
                 vs_res = compare_to_resident(res_stats, graph_stats)
-                vs_res_claims = claim_support(vs_res["verdict"], inversion, res_stats, graph_stats)
-                graph_vs_res = {
-                    "speedup_vs_resident": vs_res["speedup_vs_resident"],
-                    "speedup_low": vs_res["speedup_low"],
-                    "speedup_high": vs_res["speedup_high"],
-                    "speedup_ci_low": vs_res["speedup_ci_low"],
-                    "speedup_ci_high": vs_res["speedup_ci_high"],
-                    "verdict": vs_res["verdict"],
+                graph_stats["vs_resident"] = {
+                    **vs_res,
                     "boundary_inversion": inversion,
-                    "direction_supported": vs_res_claims["direction_supported"],
-                    "magnitude_supported": vs_res_claims["magnitude_supported"],
-                    "claim_supported_rev2": vs_res_claims["claim_supported_rev2"],
+                    **claim_support(vs_res["verdict"], inversion, res_stats, graph_stats),
                 }
-                graph_stats["vs_resident"] = graph_vs_res
-                graph_case["vs_resident"] = graph_vs_res
 
         for case in cases:
             (target_dir / f"{case['case_id']}.json").write_text(

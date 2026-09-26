@@ -52,7 +52,6 @@ def make_case(
         )
     run = {"samples_ms": [median, median]}
     if boundary == "resident-graph":
-        run["capture_ms"] = 0.5
         run["capture_and_instantiate_ms"] = 0.5
     elif backend == "cuda" and stages:
         run.update({"k1_ms": [0.5 * median] * 2, "k2_ms": [0.1 * median] * 2})
@@ -69,8 +68,6 @@ def make_case(
         "statistics": stats,
         "trial_runs": [run, run],
     }
-    if boundary == "resident-graph":
-        case["vs_resident"] = stats["vs_resident"]
     return case
 
 

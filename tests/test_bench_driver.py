@@ -233,12 +233,19 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         )
         assert case_data["reps"] == 2
         assert case_data["trials"] == 2
-        assert case_data["repetition_invocation_ids"] == [0, 1]
-        assert case_data["warmup_invocation_ids"] == {
-            "first": 2,
-            "last": 1 + case_data["warmup"],
-            "count": case_data["warmup"],
-        }
+        if case_data["timing_boundary"] == "resident-graph":
+            # The captured graph replays the base invocation on every run.
+            assert case_data["repetition_invocation_ids"] == [0, 0]
+            assert case_data["warmup_invocation_ids"] == compact_invocation_ids(
+                [0] * case_data["warmup"]
+            )
+        else:
+            assert case_data["repetition_invocation_ids"] == [0, 1]
+            assert case_data["warmup_invocation_ids"] == {
+                "first": 2,
+                "last": 1 + case_data["warmup"],
+                "count": case_data["warmup"],
+            }
         assert case_data["header_bytes"] == 20
         count = case_data["count"]
         assert case_data["payload_bytes"] == (count if case_data["bits"] == 8 else count // 2)
@@ -255,12 +262,9 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         assert [run["trial"] for run in runs] == [0, 1]
         for run in runs:
             assert len(run["samples_ms"]) == 2
-            assert run["repetition_invocation_ids"] == [0, 1]
+            assert run["repetition_invocation_ids"] == case_data["repetition_invocation_ids"]
             if case_data["timing_boundary"] == "resident-graph":
-                assert "capture_ms" in run and run["capture_ms"] >= 0
-                assert (
-                    "capture_and_instantiate_ms" in run and run["capture_and_instantiate_ms"] >= 0
-                )
+                assert run["capture_and_instantiate_ms"] >= 0
                 for k in ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms"):
                     assert k not in run
             elif case_data["backend"] == "cuda":
@@ -303,9 +307,9 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
             assert stats["direction_supported"] or not stats["magnitude_supported"]
 
         if case_data["timing_boundary"] == "resident-graph":
-            assert "vs_resident" in case_data
+            assert "vs_resident" in case_data["statistics"]
             assert "vs_resident" in stats
-            vs_res = case_data["vs_resident"]
+            vs_res = case_data["statistics"]["vs_resident"]
             assert vs_res["speedup_vs_resident"] > 0
             assert vs_res["speedup_low"] <= vs_res["speedup_vs_resident"] <= vs_res["speedup_high"]
             assert vs_res["speedup_ci_low"] <= vs_res["speedup_ci_high"]
@@ -422,6 +426,7 @@ def test_in_process_warmups_cover_the_target_time():
 def test_compact_invocation_ids_keeps_bounds_of_contiguous_runs():
     assert compact_invocation_ids([2, 3, 4]) == {"first": 2, "last": 4, "count": 3}
     assert compact_invocation_ids([5, 7]) == [5, 7]
+    assert compact_invocation_ids([4, 4, 4]) == {"repeated": 4, "count": 3}
     assert compact_invocation_ids([]) == []
     assert compact_invocation_ids(None) is None
 
