@@ -466,15 +466,18 @@ static void print_double_array(const mco2_bench_sample *samples,
     putchar(']');
 }
 
+/* A step of 0 prints the base identifier for every run (resident-graph). */
 static void print_invocation_ids(uint64_t base_invocation_id,
-                                 uint64_t count, uint64_t offset)
+                                 uint64_t count, uint64_t offset,
+                                 uint64_t step)
 {
     uint64_t i;
     putchar('[');
     for (i = 0; i < count; i++) {
         if (i != 0)
             putchar(',');
-        printf("%llu", (unsigned long long)(base_invocation_id + offset + i));
+        printf("%llu",
+               (unsigned long long)(base_invocation_id + (offset + i) * step));
     }
     putchar(']');
 }
@@ -487,6 +490,8 @@ static void print_bench_json(
     int grid_size, size_t payload_bytes, const mco2_bench_sample *samples,
     double capture_ms)
 {
+    const uint64_t id_step = strcmp(boundary, "resident-graph") == 0 ? 0 : 1;
+
     printf("{\"configuration\":{\"backend\":\"%s\",\"bits\":%u,"
            "\"count\":%llu,\"seed\":%llu,\"tensor_id\":%llu,"
            "\"invocation_id\":%llu,\"warmup\":%llu,\"reps\":%llu,"
@@ -495,9 +500,9 @@ static void print_bench_json(
            (unsigned long long)seed, (unsigned long long)tensor_id,
            (unsigned long long)invocation_id, (unsigned long long)warmups,
            (unsigned long long)reps);
-    print_invocation_ids(invocation_id, reps, 0);
+    print_invocation_ids(invocation_id, reps, 0, id_step);
     printf(",\"warmup_invocation_ids\":");
-    print_invocation_ids(invocation_id, warmups, reps);
+    print_invocation_ids(invocation_id, warmups, reps, id_step);
     printf(",\"boundary\":\"%s\",\"block_size\":%d,\"grid_size\":%d,"
            "\"prescribed_scale\":", boundary, block_size, grid_size);
     if (prescribed_scale_seen)
@@ -521,8 +526,7 @@ static void print_bench_json(
                 print_double_array(samples, reps, BENCH_SAMPLE_D2H_TIME);
             }
         } else {
-            printf(",\"capture_ms\":%.6f,\"capture_and_instantiate_ms\":%.6f",
-                   capture_ms, capture_ms);
+            printf(",\"capture_and_instantiate_ms\":%.6f", capture_ms);
         }
     }
     printf(",\"header_bytes\":%d,\"payload_bytes\":%llu}\n",

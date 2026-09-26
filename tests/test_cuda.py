@@ -98,21 +98,23 @@ def test_cuda_bench_reports_stage_samples_and_base_record(tmp_path, bits, bounda
     assert payload["configuration"]["bits"] == bits
     assert payload["configuration"]["warmup"] == 1
     assert payload["configuration"]["reps"] == 2
-    assert payload["configuration"]["repetition_invocation_ids"] == [41, 42]
-    assert payload["configuration"]["warmup_invocation_ids"] == [43]
+    if boundary == "resident-graph":
+        # The captured graph replays the base invocation on every run.
+        assert payload["configuration"]["repetition_invocation_ids"] == [41, 41]
+        assert payload["configuration"]["warmup_invocation_ids"] == [41]
+    else:
+        assert payload["configuration"]["repetition_invocation_ids"] == [41, 42]
+        assert payload["configuration"]["warmup_invocation_ids"] == [43]
 
     assert len(payload["samples_ms"]) == 2
     assert all(sample >= 0 for sample in payload["samples_ms"])
 
     if boundary == "resident-graph":
-        assert "capture_ms" in payload and payload["capture_ms"] >= 0
-        assert (
-            "capture_and_instantiate_ms" in payload and payload["capture_and_instantiate_ms"] >= 0
-        )
+        assert "capture_ms" not in payload
+        assert payload["capture_and_instantiate_ms"] > 0
         for stage_key in ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms"):
             assert stage_key not in payload
     else:
-        assert "capture_ms" not in payload
         assert "capture_and_instantiate_ms" not in payload
         copy_keys = ("h2d_ms", "d2h_ms") if boundary == "host-origin" else ()
         for key in ("k1_ms", "k2_ms", "k3_ms", *copy_keys):
@@ -196,7 +198,7 @@ def test_cuda_bench_resident_graph_empty_input(tmp_path, bits):
     payload = json.loads(result.stdout)
     assert payload["configuration"]["boundary"] == "resident-graph"
     assert len(payload["samples_ms"]) == 2
-    assert payload["capture_ms"] >= 0
+    assert payload["capture_and_instantiate_ms"] > 0
     assert payload["payload_bytes"] == 0
     assert payload["header_bytes"] == HEADER.size
 

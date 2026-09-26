@@ -315,16 +315,7 @@ def plot_graph_vs_resident(indexed, counts, bit_widths, out: Path) -> None:
             for n in counts
             if (n, bits, "resident-graph") in indexed
         ]
-        rows = [
-            r
-            for r in rows
-            if (r.get("vs_resident") and "speedup_vs_resident" in r["vs_resident"])
-            or (
-                r.get("statistics")
-                and r["statistics"].get("vs_resident")
-                and "speedup_vs_resident" in r["statistics"]["vs_resident"]
-            )
-        ]
+        rows = [r for r in rows if (r.get("statistics") or {}).get("vs_resident")]
         if not rows:
             ax.set_xscale("log", base=2)
             ax.set_title(f"{bits}-bit")
@@ -333,7 +324,7 @@ def plot_graph_vs_resident(indexed, counts, bit_widths, out: Path) -> None:
             continue
         has_any = True
         x = np.array([r["count"] for r in rows])
-        vs_res_list = [r.get("vs_resident") or r["statistics"]["vs_resident"] for r in rows]
+        vs_res_list = [r["statistics"]["vs_resident"] for r in rows]
         y = np.array([v["speedup_vs_resident"] for v in vs_res_list])
         bounds = np.array(
             [
