@@ -1,0 +1,92 @@
+Command: cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Isrc /Ithird_party/random123/include /Qvec-report:2 /c src\main.c src\codec.c src\quantizer.c src\rng_cpu.c /Fo:results/2026-09-26-2c190af/_temp/vec_obj/
+Exit code: 0
+
+main.c
+codec.c
+quantizer.c
+rng_cpu.c
+Generating Code...
+
+--- Analyzing function: mco2_bernoulli_cpu
+src\rng_cpu.c(25) : info C5002: loop not vectorized due to reason '1101'
+
+--- Analyzing function: mco2_rng_words_cpu
+src\rng_cpu.c(13) : info C5002: loop not vectorized due to reason '1305'
+
+--- Analyzing function: mco2_q8_validate_input
+src\quantizer.c(14) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: mco2_q8_scale_workspace_elements
+src\quantizer.c(54) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: reduce_block
+src\quantizer.c(38) : info C5002: loop not vectorized due to reason '502'
+src\quantizer.c(33) : info C5002: loop not vectorized due to reason '1200'
+src\quantizer.c(39) : info C5002: loop not vectorized due to reason '1203'
+
+--- Analyzing function: mco2_encode_payload
+src\quantizer.c(14) : info C5002: loop not vectorized due to reason '506'
+src\quantizer.c(162) : info C5002: loop not vectorized due to reason '506'
+src\quantizer.c(172) : info C5002: loop not vectorized due to reason '506'
+src\quantizer.c(181) : info C5002: loop not vectorized due to reason '1103'
+src\quantizer.c(190) : info C5002: loop not vectorized due to reason '1200'
+src\quantizer.c(207) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: mco2_q8_compute_scale_with_workspace
+src\quantizer.c(75) : info C5002: loop not vectorized due to reason '506'
+src\quantizer.c(54) : info C5002: loop not vectorized due to reason '506'
+src\quantizer.c(38) : info C5002: loop not vectorized due to reason '502'
+src\quantizer.c(101) : info C5002: loop not vectorized due to reason '502'
+src\quantizer.c(33) : info C5002: loop not vectorized due to reason '1200'
+src\quantizer.c(39) : info C5002: loop not vectorized due to reason '1203'
+src\quantizer.c(99) : info C5002: loop not vectorized due to reason '1106'
+src\quantizer.c(102) : info C5002: loop not vectorized due to reason '1203'
+
+--- Analyzing function: mco2_q8_compute_scale
+src\quantizer.c(54) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: read_u64_le
+src\codec.c(21) : info C5002: loop not vectorized due to reason '1103'
+
+--- Analyzing function: write_u64_le
+src\codec.c(13) : info C5002: loop not vectorized due to reason '1103'
+
+--- Analyzing function: mco2_q8_header_encode
+src\codec.c(13) : info C5002: loop not vectorized due to reason '1103'
+
+--- Analyzing function: mco2_q8_decode_record
+src\codec.c(151) : info C5002: loop not vectorized due to reason '506'
+src\codec.c(174) : info C5002: loop not vectorized due to reason '506'
+src\codec.c(21) : info C5002: loop not vectorized due to reason '1103'
+
+--- Analyzing function: print_invocation_ids
+src\main.c(474) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: print_double_array
+src\main.c(437) : info C5002: loop not vectorized due to reason '503'
+
+--- Analyzing function: decompress_file
+src\main.c(783) : info C5002: loop not vectorized due to reason '506'
+src\main.c(811) : info C5002: loop not vectorized due to reason '501'
+
+--- Analyzing function: print_bench_json
+src\main.c(437) : info C5002: loop not vectorized due to reason '503'
+src\main.c(437) : info C5002: loop not vectorized due to reason '503'
+src\main.c(437) : info C5002: loop not vectorized due to reason '503'
+src\main.c(437) : info C5002: loop not vectorized due to reason '503'
+src\main.c(437) : info C5002: loop not vectorized due to reason '503'
+src\main.c(437) : info C5002: loop not vectorized due to reason '503'
+src\main.c(474) : info C5002: loop not vectorized due to reason '1200'
+src\main.c(474) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: compress_file
+src\main.c(145) : info C5002: loop not vectorized due to reason '506'
+src\main.c(228) : info C5002: loop not vectorized due to reason '1300'
+src\main.c(253) : info C5002: loop not vectorized due to reason '1300'
+src\main.c(316) : info C5002: loop not vectorized due to reason '1300'
+
+--- Analyzing function: bench_file
+src\main.c(548) : info C5002: loop not vectorized due to reason '506'
+src\main.c(710) : info C5002: loop not vectorized due to reason '506'
+src\main.c(670) : info C5002: loop not vectorized due to reason '1300'
+src\main.c(684) : info C5002: loop not vectorized due to reason '1300'
