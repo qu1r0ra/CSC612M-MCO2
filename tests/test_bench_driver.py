@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import benchmark_driver
 from benchmark_driver import (
     BOOTSTRAP_SEED,
     DEFAULT_COUNTS,
@@ -528,6 +529,7 @@ def test_readiness_passes_on_a_quiet_fresh_machine():
         ({"git_dirty_files": [" M benchmark_driver.py"]}, "dirty git tree"),
         ({"gpu_clock_event_reasons": "0x0000000000000024"}, "SwPowerCap, SwThermalSlowdown"),
         ({"gpu_clock_event_reasons": None}, "clock-event reasons unavailable"),
+        ({"gpu_clock_event_reasons": "[N/A]"}, "clock-event reasons unavailable"),
     ],
 )
 def test_readiness_names_each_failure(change, reason):
@@ -542,9 +544,11 @@ def test_pilot_is_four_sizes_from_the_sweep_grid():
 
 
 def test_affinity_mask_excludes_core_zero():
-    assert affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, 12) == 0b1111_1111_1100
+    assert affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, 0b1111_1111_1111) == 0b1111_1111_1100
+    # Built from the current mask, so CPUs the process never had stay excluded.
+    assert affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, 0b1010_1111) == 0b1010_1100
     with pytest.raises(RuntimeError, match="no logical CPU"):
-        affinity_mask_excluding((0, 1), 2)
+        affinity_mask_excluding((0, 1), 0b11)
 
 
 def run_cpu_snapshot(out, **kwargs):
@@ -588,4 +592,17 @@ def test_pilot_records_readiness_without_enforcing_it(tmp_path):
     assert conditions["pilot"] is True
     assert conditions["evidence"] is False
     assert conditions["readiness"]["passed"] is False
+    assert conditions["readiness"]["overridden"] is False
+    assert conditions["readiness"]["enforced"] is False
     assert "pilot run" in conditions["non_evidence_reasons"]
+
+
+def test_failed_sweep_restores_the_affinity_mask(tmp_path, monkeypatch):
+    def missing_binary(root):
+        raise FileNotFoundError("no binary")
+
+    monkeypatch.setattr(benchmark_driver, "find_binary", missing_binary)
+    before = get_process_affinity()
+    with pytest.raises(FileNotFoundError):
+        run_cpu_snapshot(tmp_path / "out", readiness_facts=READY_FACTS)
+    assert get_process_affinity() == before

@@ -8,6 +8,7 @@ creation as specified by the course technical contract and benchmark protocol.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import ctypes
 import hashlib
@@ -21,7 +22,7 @@ import struct
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -969,19 +970,22 @@ def check_readiness(
         failures.append(f"mco2 already running (pid {pids})")
     if facts["git_dirty_files"]:
         failures.append("dirty git tree: " + "; ".join(facts["git_dirty_files"]))
-    reasons = facts["gpu_clock_event_reasons"]
+    try:
+        reasons = int(facts["gpu_clock_event_reasons"], 16)
+    except (TypeError, ValueError):
+        reasons = None
     if reasons is None:
         failures.append("GPU clock-event reasons unavailable")
     else:
-        active = int(reasons, 16) & ~BENIGN_CLOCK_EVENTS
+        active = reasons & ~BENIGN_CLOCK_EVENTS
         if active:
             names = [name for bit, name in CLOCK_EVENT_REASONS.items() if active & bit]
             failures.append(f"GPU clock-event reasons active: {', '.join(names) or hex(active)}")
     return failures
 
 
-def affinity_mask_excluding(excluded: Sequence[int], cpu_count: int) -> int:
-    mask = (1 << cpu_count) - 1
+def affinity_mask_excluding(excluded: Sequence[int], current_mask: int) -> int:
+    mask = current_mask
     for cpu in excluded:
         mask &= ~(1 << cpu)
     if mask == 0:
@@ -989,18 +993,27 @@ def affinity_mask_excluding(excluded: Sequence[int], cpu_count: int) -> int:
     return mask
 
 
+def _kernel32() -> Any:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.GetProcessAffinityMask.argtypes = (
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_size_t),
+    )
+    kernel32.SetProcessAffinityMask.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
+    return kernel32
+
+
 def get_process_affinity() -> int:
     if os.name == "nt":
-        kernel32 = ctypes.windll.kernel32
-        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32 = _kernel32()
         process_mask = ctypes.c_size_t()
         system_mask = ctypes.c_size_t()
         if not kernel32.GetProcessAffinityMask(
-            ctypes.c_void_p(kernel32.GetCurrentProcess()),
-            ctypes.byref(process_mask),
-            ctypes.byref(system_mask),
+            kernel32.GetCurrentProcess(), ctypes.byref(process_mask), ctypes.byref(system_mask)
         ):
-            raise OSError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error())
         return process_mask.value
     return sum(1 << cpu for cpu in os.sched_getaffinity(0))
 
@@ -1008,12 +1021,21 @@ def get_process_affinity() -> int:
 def set_process_affinity(mask: int) -> None:
     """Restrict this process; every child it starts inherits the mask."""
     if os.name == "nt":
-        kernel32 = ctypes.windll.kernel32
-        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
-        if not kernel32.SetProcessAffinityMask(ctypes.c_void_p(kernel32.GetCurrentProcess()), mask):
-            raise OSError(ctypes.get_last_error())
+        kernel32 = _kernel32()
+        if not kernel32.SetProcessAffinityMask(kernel32.GetCurrentProcess(), mask):
+            raise ctypes.WinError(ctypes.get_last_error())
         return
     os.sched_setaffinity(0, {cpu for cpu in range(mask.bit_length()) if mask >> cpu & 1})
+
+
+@contextlib.contextmanager
+def process_affinity(mask: int) -> Iterator[None]:
+    previous = get_process_affinity()
+    set_process_affinity(mask)
+    try:
+        yield
+    finally:
+        set_process_affinity(previous)
 
 
 def compute_stage_medians(runs: Sequence[dict[str, Any]]) -> dict[str, float] | None:
@@ -1211,72 +1233,78 @@ def run_benchmark_matrix(
     if "cpu" not in backends:
         raise ValueError("the CPU comparator is required; include 'cpu' in backends")
 
-    git_prov = collect_git_provenance(root)
+    # Revision 3: every probe and benchmark process runs off physical core 0.
+    previous_mask = get_process_affinity()
+    mask = affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, previous_mask)
+    with process_affinity(mask):
+        git_prov = collect_git_provenance(root)
 
-    # Determine snapshot directory name
-    now = datetime.now(UTC)
-    date_str = now.strftime("%Y-%m-%d")
-    short_rev = git_prov["code_revision_short"]
-    if output_dir is not None:
-        target_dir = output_dir
-    elif pilot:
-        target_dir = root / "results" / "pilots" / f"{now:%Y-%m-%dT%H%M%S}-{short_rev}"
-    else:
-        target_dir = root / "results" / f"{date_str}-{short_rev}"
+        # Determine snapshot directory name
+        now = datetime.now(UTC)
+        date_str = now.strftime("%Y-%m-%d")
+        short_rev = git_prov["code_revision_short"]
+        if output_dir is not None:
+            target_dir = output_dir
+        elif pilot:
+            target_dir = root / "results" / "pilots" / f"{now:%Y-%m-%dT%H%M%S}-{short_rev}"
+        else:
+            target_dir = root / "results" / f"{date_str}-{short_rev}"
 
-    if target_dir.exists() and not allow_existing:
-        raise FileExistsError(
-            f"Snapshot directory already exists: {target_dir}. "
-            "Snapshots are frozen and never overwritten. "
-            "Pass --allow-existing or an explicit --output-dir if intentional."
-        )
+        if target_dir.exists() and not allow_existing:
+            raise FileExistsError(
+                f"Snapshot directory already exists: {target_dir}. "
+                "Snapshots are frozen and never overwritten. "
+                "Pass --allow-existing or an explicit --output-dir if intentional."
+            )
 
-    if git_prov["git_dirty"] and not allow_dirty:
-        raise RuntimeError(
-            "Working tree is dirty; a snapshot must be traceable to a committed revision. "
-            "Commit or remove these changes, or pass --allow-dirty for a non-evidence run: "
-            + "; ".join(git_prov["dirty_files"])
-        )
+        if git_prov["git_dirty"] and not allow_dirty:
+            raise RuntimeError(
+                "Working tree is dirty; a snapshot must be traceable to a committed revision. "
+                "Commit or remove these changes, or pass --allow-dirty for a non-evidence run: "
+                + "; ".join(git_prov["dirty_files"])
+            )
 
-    # Revision 3: judge the machine before any process starts. A pilot is
-    # non-evidence by design, so it records the check without enforcing it.
-    facts = probe_readiness_facts(root) if readiness_facts is None else readiness_facts
-    failures = check_readiness(facts)
-    if failures and not (ignore_readiness or pilot):
-        raise RuntimeError(
-            "Machine is not ready for an evidence sweep; fix these or pass --ignore-readiness "
-            "for a non-evidence run: " + " | ".join(failures)
-        )
-    non_evidence_reasons = []
-    if pilot:
-        non_evidence_reasons.append("pilot run")
-    if failures:
-        non_evidence_reasons.append("readiness check failed and was overridden")
-    if git_prov["git_dirty"]:
-        non_evidence_reasons.append("dirty git tree")
-    run_conditions = {
-        "evidence": not non_evidence_reasons,
-        "non_evidence_reasons": non_evidence_reasons,
-        "pilot": pilot,
-        "readiness": {
-            "passed": not failures,
-            "failures": failures,
-            "overridden": bool(failures),
-            "facts": facts,
-            "max_uptime_seconds": MAX_UPTIME_SECONDS,
-            "window_allowlist": list(WINDOW_ALLOWLIST),
-        },
-    }
+        # Revision 3: judge the machine before any benchmark process starts. A pilot is
+        # non-evidence by design, so it records the check without enforcing it.
+        facts = probe_readiness_facts(root) if readiness_facts is None else readiness_facts
+        failures = check_readiness(facts)
+        if failures and not (ignore_readiness or pilot):
+            raise RuntimeError(
+                "Machine is not ready for an evidence sweep; fix these or pass --ignore-readiness "
+                "for a non-evidence run: " + " | ".join(failures)
+            )
+        non_evidence_reasons = []
+        if pilot:
+            non_evidence_reasons.append("pilot run")
+        if failures:
+            non_evidence_reasons.append(
+                "readiness check failed and was overridden"
+                if ignore_readiness
+                else "readiness check failed (pilot; not enforced)"
+            )
+        if git_prov["git_dirty"]:
+            non_evidence_reasons.append("dirty git tree")
+        run_conditions = {
+            "evidence": not non_evidence_reasons,
+            "non_evidence_reasons": non_evidence_reasons,
+            "pilot": pilot,
+            "readiness": {
+                "passed": not failures,
+                "failures": failures,
+                "overridden": bool(failures) and ignore_readiness,
+                "enforced": not pilot,
+                "facts": facts,
+                "max_uptime_seconds": MAX_UPTIME_SECONDS,
+                "window_allowlist": list(WINDOW_ALLOWLIST),
+            },
+        }
 
-    previous_affinity = get_process_affinity()
-    mask = affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, os.cpu_count() or 1)
-    set_process_affinity(mask)
-    run_conditions["affinity"] = {
-        "excluded_logical_cpus": list(EXCLUDED_LOGICAL_CPUS),
-        "mask": hex(mask),
-        "applied_to": "driver process before any benchmark or probe process; inherited",
-    }
-    try:
+        run_conditions["affinity"] = {
+            "excluded_logical_cpus": list(EXCLUDED_LOGICAL_CPUS),
+            "mask": hex(mask),
+            "previous_mask": hex(previous_mask),
+            "applied_to": "driver process before any benchmark or probe process; inherited",
+        }
         return sweep_matrix(
             root=root,
             target_dir=target_dir,
@@ -1297,8 +1325,6 @@ def run_benchmark_matrix(
             in_process_warmup_seconds=in_process_warmup_seconds,
             force_fail=force_fail,
         )
-    finally:
-        set_process_affinity(previous_affinity)
 
 
 def sweep_matrix(
