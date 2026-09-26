@@ -14,7 +14,7 @@ Every benchmark and probe process runs off physical core 0. Each speedup reports
 
 ## Considered options
 
-- **Locking GPU clocks or changing the power plan.** Rejected: the variation is CPU-side and per process, an SM clock lock in the issue #26 diagnosis did not remove it, and these are system settings the user, not the agent, controls.
+- **Locking GPU clocks or changing the power plan.** Rejected: the variation is CPU-side and per process, an SM clock lock in the issue #26 diagnosis did not remove it, and these are system settings outside the benchmark's control, left as the user set them.
 - **Pinning each process to one core.** Rejected: processes pinned to any one of cores 1–5 ran at 0.141–0.146 ms, no better than the 0.139 ms of processes that only excluded core 0, so pinning adds a choice of core without narrowing the spread.
 - **Raising or dropping the stability threshold.** Rejected: that would tune the rule to the data. The threshold stays at 1.25; only the statistic it applies to changes.
 - **Gating claims on the bootstrap CI.** Rejected: the CI is reported for each speedup, but the conservative range already gives a direction without distributional assumptions.
