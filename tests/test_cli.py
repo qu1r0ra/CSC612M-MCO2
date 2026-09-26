@@ -695,6 +695,7 @@ def test_expect_sums_match_decoded_compress_records(tmp_path, bits):
         ("--seeds", "2", "--bits", "6"),
         ("--seeds", "2", "--backend", "gpu"),
         ("--bits", "8"),
+        ("--seeds", "2", "--seed-start", "18446744073709551615"),
     ],
 )
 def test_expect_rejects_invalid_arguments(tmp_path, extra):

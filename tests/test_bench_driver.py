@@ -1040,6 +1040,18 @@ def test_driver_rejects_model_options_outside_model_family(tmp_path):
             readiness_facts=READY_FACTS,
             allow_dirty=True,
         )
+    with pytest.raises(ValueError, match="model family"):
+        run_benchmark_matrix(
+            root=ROOT,
+            output_dir=tmp_path / "out",
+            counts=[1024],
+            bit_widths=[8],
+            backends=["cpu"],
+            input_family="dense",
+            model_tensors="distinct",
+            readiness_facts=READY_FACTS,
+            allow_dirty=True,
+        )
     with pytest.raises(ValueError, match="unknown input family"):
         run_benchmark_matrix(
             root=ROOT,

@@ -1059,12 +1059,13 @@ static mco2_q8_status expect_file(int argc, char **argv)
         goto done;
     }
     values = (float *)malloc(count * sizeof *values);
-    words = (uint32_t *)malloc(count * sizeof *words);
+    if (strcmp(backend, "cpu") == 0)
+        words = (uint32_t *)malloc(count * sizeof *words);
     record = (uint8_t *)malloc(MCO2_Q8_HEADER_SIZE + payload_size);
     sums = (double *)calloc(count, sizeof *sums);
     squares = (double *)calloc(count, sizeof *squares);
-    if (values == NULL || words == NULL || record == NULL || sums == NULL ||
-        squares == NULL) {
+    if (values == NULL || (strcmp(backend, "cpu") == 0 && words == NULL) ||
+        record == NULL || sums == NULL || squares == NULL) {
         status = MCO2_Q8_ERR_MEMORY;
         goto done;
     }

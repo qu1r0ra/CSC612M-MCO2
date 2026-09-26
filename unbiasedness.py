@@ -10,7 +10,9 @@ technical contract, reports the variance, and draws `f_unbiasedness.png`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -23,8 +25,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from benchmark_driver import DEFAULT_INPUT_SEED, collect_git_provenance, find_binary
+from benchmark_driver import collect_git_provenance, find_binary
 from input_families import (
+    DEFAULT_INPUT_SEED,
     MODEL_NAME,
     SPARSE_MASK_SEED,
     SPARSE_ZERO_FRACTION,
@@ -63,12 +66,16 @@ GATE_RULE = (
 
 
 def suite_inputs(seed: int = DEFAULT_INPUT_SEED) -> list[dict[str, Any]]:
-    """The four suite inputs with their provenance."""
+    """The four suite inputs with their provenance and SHA-256.
+
+    The dense vector is the first draw of the seed's generator, so it matches the
+    `n16384` input of a matrix run only when `--counts` starts at 16384.
+    """
     course, _ = course_vector()
     dense = dense_vectors([SUITE_COUNT], seed)[0]
     sparse, realised = sparsify(dense)
     tensor = model_tensor_by_name(SUITE_MODEL_TENSOR)
-    return [
+    items = [
         {
             "name": "course",
             "values": course,
@@ -83,7 +90,13 @@ def suite_inputs(seed: int = DEFAULT_INPUT_SEED) -> list[dict[str, Any]]:
         {
             "name": f"dense_n{SUITE_COUNT}",
             "values": dense,
-            "provenance": {"input_family": "dense", "seed": seed},
+            "provenance": {
+                "input_family": "dense",
+                "generator": "numpy.random.default_rng",
+                "bit_generator": "PCG64",
+                "seed": seed,
+                "draw": f"first normal draw of {SUITE_COUNT} values, cast to FP32",
+            },
         },
         {
             "name": f"sparse_n{SUITE_COUNT}",
@@ -108,6 +121,10 @@ def suite_inputs(seed: int = DEFAULT_INPUT_SEED) -> list[dict[str, Any]]:
             },
         },
     ]
+    for item in items:
+        data = item["values"].astype("<f4").tobytes()
+        item["provenance"]["sha256"] = hashlib.sha256(data).hexdigest()
+    return items
 
 
 def run_expect(
@@ -311,6 +328,8 @@ def main() -> None:
         help="Run from an uncommitted tree (records the dirty files; not for evidence)",
     )
     args = parser.parse_args()
+    if args.seeds < 1:
+        parser.error("--seeds must be at least 1")
     root = Path(__file__).resolve().parent
 
     git_prov = collect_git_provenance(root)
@@ -326,17 +345,18 @@ def main() -> None:
             + "; ".join(git_prov["dirty_files"])
         )
 
+    created = not target.exists()
+    work_dir = target / "_temp"
     try:
         binary = find_binary(root)
         target.mkdir(parents=True, exist_ok=True)
         results, plot_data = run_suite(
-            binary, target / "_temp", args.seeds, tuple(args.backends), args.input_seed
+            binary, work_dir, args.seeds, tuple(args.backends), args.input_seed
         )
     except (RuntimeError, OSError) as exc:
+        shutil.rmtree(target if created else work_dir, ignore_errors=True)
         sys.exit(f"Unbiasedness suite failed: {exc}")
-    for path in (target / "_temp").iterdir():
-        path.unlink()
-    (target / "_temp").rmdir()
+    shutil.rmtree(work_dir, ignore_errors=True)
 
     plot_unbiasedness(plot_data, args.seeds, target / FIGURE)
     reasons = []
@@ -365,7 +385,8 @@ def main() -> None:
     for r in results:
         print(
             f"{r['input']:>32} {r['bits']}-bit  max err/bound {r['max_error_over_bound']:.3f}  "
-            f"var ratio {r['variance_ratio_pooled']:.4f}  identical {r['backends_identical']}  "
+            f"var ratio {r['variance_ratio_pooled'] or 0.0:.4f}  "
+            f"identical {r['backends_identical']}  "
             f"{'pass' if r['passed'] else 'FAIL'}"
         )
     print(f"Results written to {target}")

@@ -31,6 +31,7 @@ from typing import Any
 import numpy as np
 
 from input_families import (
+    DEFAULT_INPUT_SEED,
     INPUT_FAMILIES,
     MODEL_NAME,
     MODEL_TENSOR_SETS,
@@ -50,7 +51,6 @@ DEFAULT_COUNTS = tuple(1 << exponent for exponent in range(10, 27))
 DEFAULT_BITS = (4, 8)
 DEFAULT_WARMUPS = 10
 DEFAULT_REPS = 30
-DEFAULT_INPUT_SEED = 2026
 DEFAULT_COMPRESSION_SEED = 42
 DEFAULT_CASE_ORDER_SEED = 612
 # The GPU idles at low clocks; a sustained resident workload before the first
@@ -1565,14 +1565,16 @@ def run_benchmark_matrix(
     boundaries: Sequence[str] = (),
     transfer_policies: Sequence[str] = ("pageable",),
     input_family: str = "dense",
-    model_tensors: str = "distinct",
+    model_tensors: str | None = None,
     model_limit: int | None = None,
 ) -> Path:
     if input_family not in INPUT_FAMILIES:
         raise ValueError(f"unknown input family {input_family!r}; choose from {INPUT_FAMILIES}")
-    if input_family != "model" and (model_tensors != "distinct" or model_limit is not None):
+    if input_family != "model" and (model_tensors is not None or model_limit is not None):
         raise ValueError("--model-tensors and --model-limit apply only to the model family")
-    select_model_tensors(model_tensors, model_limit)
+    if input_family == "model":
+        model_tensors = model_tensors or "distinct"
+        select_model_tensors(model_tensors, model_limit)
     if trials < 1:
         raise ValueError("trials must be at least 1")
     if "cpu" not in backends:
@@ -1704,7 +1706,7 @@ def sweep_matrix(
     in_process_warmup_seconds: float,
     force_fail: bool,
     input_family: str = "dense",
-    model_tensors: str = "distinct",
+    model_tensors: str | None = None,
     model_limit: int | None = None,
 ) -> Path:
     binary = find_binary(root)
@@ -1719,7 +1721,12 @@ def sweep_matrix(
 
     # 1. Inputs generation
     input_meta = generate_family_inputs(
-        input_family, counts, temp_dir / "inputs", input_seed, model_tensors, model_limit
+        input_family,
+        counts,
+        temp_dir / "inputs",
+        input_seed,
+        model_tensors or "distinct",
+        model_limit,
     )
     input_files: dict[str, Path] = {key: Path(meta["_path"]) for key, meta in input_meta.items()}
     clean_input_meta: dict[str, dict[str, Any]] = {
@@ -2028,7 +2035,7 @@ def sweep_matrix(
         "matrix_parameters": {
             "input_family": input_family,
             "counts": list(counts) if input_family != "model" else list(input_counts.values()),
-            "model_tensors": model_tensors if input_family == "model" else None,
+            "model_tensors": model_tensors,
             "model_limit": model_limit,
             "bit_widths": list(bit_widths),
             "backends": list(backends),
@@ -2190,8 +2197,8 @@ def main() -> None:
     parser.add_argument(
         "--model-tensors",
         choices=MODEL_TENSOR_SETS,
-        default="distinct",
-        help="Model family: one tensor per distinct shape and kind, or all tensors",
+        default=None,
+        help="Model family: one tensor per distinct shape and kind (default), or all tensors",
     )
     parser.add_argument(
         "--model-limit",
