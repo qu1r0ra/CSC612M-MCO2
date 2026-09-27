@@ -245,3 +245,41 @@ def test_render_report_draws_a_ci_that_excludes_the_point(tmp_path):
 
     for key in ("f2", "f4"):
         assert (tmp_path / "out" / FIGURES[key]).read_bytes().startswith(PNG_MAGIC)
+
+
+def test_avx2_comparator_is_drawn_but_stays_out_of_t1_and_crossovers(tmp_path, monkeypatch):
+    import bench_report
+
+    cases = sweep_cases()
+    for count in (1024, 4096, 16384):
+        for bits in (4, 8):
+            avx2 = make_case(count, bits, "optimized", 0.2, "faster", None)
+            avx2["backend"] = "cpu-avx2"
+            avx2["statistics"].update(
+                {
+                    "descriptive": True,
+                    "direction_supported": None,
+                    "magnitude_supported": None,
+                    "claim_supported_rev2": None,
+                }
+            )
+            cases.append(avx2)
+    snapshot = tmp_path / "snap"
+    write_snapshot(snapshot, cases)
+    drawn = []
+    original = bench_report.plot_descriptive_speedup
+
+    def spy(ax, indexed, counts, bits):
+        drawn.append(bits)
+        original(ax, indexed, counts, bits)
+
+    monkeypatch.setattr(bench_report, "plot_descriptive_speedup", spy)
+
+    result = render_report(snapshot, tmp_path / "out")
+
+    assert (1024, 8, "optimized") in index_cases(cases)
+    assert drawn == [4, 8]
+    report = result["report"].read_text(encoding="utf-8")
+    assert report.count("| 2^") == 18
+    assert "AVX2" not in report
+    assert all(path != "optimized" for _, path in result["crossovers"])

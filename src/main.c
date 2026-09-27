@@ -5,6 +5,7 @@
 #include "codec.h"
 #include "byteorder.h"
 #include "quantizer.h"
+#include "quantizer_avx2.h"
 #include "rng_cpu.h"
 #include "quantizer_cuda.h"
 
@@ -19,20 +20,28 @@
 #include <windows.h>
 #else
 #include <time.h>
+#include <unistd.h>
 #endif
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+
+#define MCO2_MAX_CPU_THREADS 256
 
 static void usage(FILE *stream)
 {
     fprintf(stream,
             "Usage:\n"
             "  mco2 compress --input INPUT.f32 --output RECORD --seed UINT64\n"
-            "      [--backend cpu|cuda] [--bits 4|8] [--tensor-id UINT32]\n"
+            "      [--backend cpu|cpu-avx2|cuda] [--bits 4|8] [--tensor-id UINT32]\n"
             "      [--invocation-id UINT32] [--scale FP32] [--words WORDS.u32]\n"
-            "      [--block-size UINT32] [--grid-size UINT32] [--timings]\n"
+            "      [--threads UINT32] [--block-size UINT32] [--grid-size UINT32]\n"
+            "      [--timings]\n"
             "  mco2 bench --input INPUT.f32 --seed UINT64\n"
             "      [--output RECORD | --record-output RECORD]\n"
-            "      [--backend cpu|cuda] [--bits 4|8] [--tensor-id UINT32]\n"
+            "      [--backend cpu|cpu-avx2|cuda] [--bits 4|8] [--tensor-id UINT32]\n"
             "      [--invocation-id UINT32] [--scale FP32] [--words WORDS.u32]\n"
+            "      [--threads UINT32]\n"
             "      [--boundary resident|resident-graph|host-origin|gpu-origin]\n"
             "      [--transfer-policy pageable|pinned] [--warmup UINT32 (default 10)]\n"
             "      [--reps UINT32 (default 30)]\n"
@@ -45,7 +54,9 @@ static void usage(FILE *stream)
             "Input and output tensors use little-endian raw FP32. Prescribed\n"
             "random words use little-endian raw uint32, one per element.\n"
             "expect writes little-endian FP64 per-element sums of the decoded\n"
-            "values, then per-element sums of their squares.\n");
+            "values, then per-element sums of their squares.\n"
+            "cpu-avx2 writes the same bytes as cpu; --threads defaults to the\n"
+            "processor count in the process affinity mask.\n");
 }
 
 static int read_file(const char *path, uint8_t **bytes, size_t *size)
@@ -131,17 +142,120 @@ static int parse_scale(const char *text, float *scale)
     return 1;
 }
 
+/* Checked here, outside the /arch:AVX2 translation unit: CPU support plus OS-saved YMM state. */
+static int cpu_has_avx2(void)
+{
+#if defined(_MSC_VER)
+    int info[4];
+
+    __cpuid(info, 0);
+    if (info[0] < 7)
+        return 0;
+    __cpuid(info, 1);
+    if ((info[2] & (1 << 27)) == 0 || (info[2] & (1 << 28)) == 0)
+        return 0;
+    if ((_xgetbv(0) & 6) != 6)
+        return 0;
+    __cpuidex(info, 7, 0);
+    return (info[1] & (1 << 5)) != 0;
+#elif defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("avx2");
+#else
+    return 0;
+#endif
+}
+
+static int default_thread_count(void)
+{
+#ifdef _WIN32
+    DWORD_PTR process_mask, system_mask;
+    int count = 0;
+
+    if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask))
+        for (; process_mask != 0; process_mask &= process_mask - 1)
+            count++;
+#else
+    long count = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+    if (count < 1)
+        return 1;
+    return count > MCO2_MAX_CPU_THREADS ? MCO2_MAX_CPU_THREADS : (int)count;
+}
+
+static int parse_threads(const char *text, uint64_t *threads)
+{
+    return parse_u64(text, threads) && *threads != 0 &&
+           *threads <= MCO2_MAX_CPU_THREADS;
+}
+
+/* Sets *threads to 0 for the scalar comparator, else to the requested AVX2 team size. */
+static mco2_q8_status resolve_cpu_threads(const char *backend, int threads_seen,
+                                          uint64_t requested, int *threads)
+{
+    *threads = 0;
+    if (strcmp(backend, "cpu-avx2") != 0)
+        return threads_seen ? MCO2_Q8_ERR_ARGUMENT : MCO2_Q8_OK;
+    if (!cpu_has_avx2())
+        return MCO2_Q8_ERR_AVX2_UNAVAILABLE;
+    *threads = threads_seen ? (int)requested : default_thread_count();
+    return MCO2_Q8_OK;
+}
+
+static int is_backend(const char *name)
+{
+    return strcmp(name, "cpu") == 0 || strcmp(name, "cpu-avx2") == 0 ||
+           strcmp(name, "cuda") == 0;
+}
+
+static int is_cpu_backend(const char *name)
+{
+    return strcmp(name, "cpu") == 0 || strcmp(name, "cpu-avx2") == 0;
+}
+
+/* One CPU compression; threads 0 runs the scalar comparator, otherwise the AVX2 one. */
+static mco2_q8_status cpu_compute_scale(const float *values, size_t count,
+                                        float *scale, float *partials,
+                                        size_t partial_capacity, int threads)
+{
+    if (threads == 0)
+        return mco2_q8_compute_scale_with_workspace(values, count, scale,
+                                                    partials, partial_capacity);
+    return mco2_avx2_compute_scale_with_workspace(values, count, scale, partials,
+                                                  partial_capacity, threads);
+}
+
+static void cpu_rng_words(const mco2_rng_stream *stream, size_t count,
+                          uint32_t *words, int threads)
+{
+    if (threads == 0)
+        mco2_rng_words_cpu(stream, (uint64_t)count, words);
+    else
+        mco2_avx2_rng_words(stream, (uint64_t)count, words, threads);
+}
+
+static mco2_q8_status cpu_encode_payload(uint8_t bits, const float *values,
+                                         size_t count, float scale,
+                                         const uint32_t *words, uint8_t *payload,
+                                         int threads)
+{
+    if (threads == 0)
+        return mco2_encode_payload(bits, values, count, scale, words, payload);
+    return mco2_avx2_encode_payload(bits, values, count, scale, words, payload,
+                                    threads);
+}
+
 static mco2_q8_status compress_file(int argc, char **argv)
 {
     const char *input_path = NULL, *output_path = NULL, *words_path = NULL;
     const char *backend = "cpu";
     uint64_t seed = 0, tensor_id = 0, invocation_id = 0, bits = MCO2_Q8_BITS;
-    uint64_t block_size = 256, grid_size = 0;
+    uint64_t block_size = 256, grid_size = 0, requested_threads = 0;
     float prescribed_scale = 0.0f, scale;
-    int seed_seen = 0, scale_seen = 0, timings_seen = 0;
-    int block_size_seen = 0, grid_size_seen = 0, i;
+    int seed_seen = 0, scale_seen = 0, timings_seen = 0, threads_seen = 0;
+    int block_size_seen = 0, grid_size_seen = 0, threads, i;
     uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
-    float *values = NULL;
+    float *values = NULL, *scale_partials = NULL;
     uint32_t *words = NULL;
     uint8_t *codes;
     size_t input_size = 0, word_size = 0, count, i_size;
@@ -182,9 +296,13 @@ static mco2_q8_status compress_file(int argc, char **argv)
             if (!scale_seen)
                 return MCO2_Q8_ERR_SCALE;
         } else if (strcmp(option, "--backend") == 0) {
-            if (strcmp(value, "cpu") != 0 && strcmp(value, "cuda") != 0)
+            if (!is_backend(value))
                 return MCO2_Q8_ERR_ARGUMENT;
             backend = value;
+        } else if (strcmp(option, "--threads") == 0) {
+            threads_seen = parse_threads(value, &requested_threads);
+            if (!threads_seen)
+                return MCO2_Q8_ERR_ARGUMENT;
         } else if (strcmp(option, "--block-size") == 0) {
             if (!parse_u64(value, &block_size) || block_size == 0 ||
                 block_size > 1024)
@@ -211,6 +329,9 @@ static mco2_q8_status compress_file(int argc, char **argv)
     if (strcmp(backend, "cuda") == 0)
         return MCO2_Q8_ERR_CUDA_UNAVAILABLE;
 #endif
+    status = resolve_cpu_threads(backend, threads_seen, requested_threads, &threads);
+    if (status != MCO2_Q8_OK)
+        return status;
     if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX)
         return MCO2_Q8_ERR_ID_OVERFLOW;
 
@@ -295,8 +416,27 @@ static mco2_q8_status compress_file(int argc, char **argv)
 
     if (scale_seen) {
         scale = prescribed_scale;
-    } else {
+    } else if (threads == 0) {
         status = mco2_q8_compute_scale(values, count, &scale);
+        if (status != MCO2_Q8_OK)
+            goto done;
+    } else {
+        size_t partial_count = mco2_q8_scale_workspace_elements(count);
+
+        if (partial_count == SIZE_MAX ||
+            partial_count > SIZE_MAX / sizeof *scale_partials) {
+            status = MCO2_Q8_ERR_MEMORY;
+            goto done;
+        }
+        if (partial_count != 0) {
+            scale_partials = (float *)malloc(partial_count * sizeof *scale_partials);
+            if (scale_partials == NULL) {
+                status = MCO2_Q8_ERR_MEMORY;
+                goto done;
+            }
+        }
+        status = cpu_compute_scale(values, count, &scale, scale_partials,
+                                   partial_count, threads);
         if (status != MCO2_Q8_OK)
             goto done;
     }
@@ -326,7 +466,7 @@ static mco2_q8_status compress_file(int argc, char **argv)
             status = MCO2_Q8_ERR_ID_OVERFLOW;
             goto done;
         }
-        mco2_rng_words_cpu(&stream, (uint64_t)count, words);
+        cpu_rng_words(&stream, count, words, threads);
     }
 
     {
@@ -340,7 +480,8 @@ static mco2_q8_status compress_file(int argc, char **argv)
         if (status != MCO2_Q8_OK)
             goto done;
         codes = record + MCO2_Q8_HEADER_SIZE;
-        status = mco2_encode_payload((uint8_t)bits, values, count, scale, words, codes);
+        status = cpu_encode_payload((uint8_t)bits, values, count, scale, words,
+                                    codes, threads);
         if (status != MCO2_Q8_OK)
             goto done;
         if (!write_file(output_path, record, MCO2_Q8_HEADER_SIZE + payload_size))
@@ -348,6 +489,7 @@ static mco2_q8_status compress_file(int argc, char **argv)
     }
 
 done:
+    free(scale_partials);
     free(record);
     free(words);
     free(word_bytes);
@@ -397,7 +539,7 @@ static mco2_q8_status bench_cpu_compress_one(
     uint64_t tensor_id, uint64_t invocation_id, int prescribed_scale_seen,
     float prescribed_scale, const uint32_t *prescribed_words,
     uint32_t *generated_words, float *scale_partials,
-    size_t scale_partial_capacity, uint8_t *record)
+    size_t scale_partial_capacity, int threads, uint8_t *record)
 {
     float scale;
     mco2_rng_stream stream;
@@ -405,8 +547,8 @@ static mco2_q8_status bench_cpu_compress_one(
     if (prescribed_scale_seen) {
         scale = prescribed_scale;
     } else {
-        status = mco2_q8_compute_scale_with_workspace(
-            values, count, &scale, scale_partials, scale_partial_capacity);
+        status = cpu_compute_scale(values, count, &scale, scale_partials,
+                                   scale_partial_capacity, threads);
         if (status != MCO2_Q8_OK)
             return status;
     }
@@ -414,15 +556,15 @@ static mco2_q8_status bench_cpu_compress_one(
         status = mco2_rng_stream_init(&stream, seed, tensor_id, invocation_id);
         if (status != MCO2_Q8_OK)
             return MCO2_Q8_ERR_ID_OVERFLOW;
-        mco2_rng_words_cpu(&stream, (uint64_t)count, generated_words);
+        cpu_rng_words(&stream, count, generated_words, threads);
     }
     status = mco2_q8_header_encode(bit_width, (uint64_t)count, scale, record);
     if (status != MCO2_Q8_OK)
         return status;
-    return mco2_encode_payload(
+    return cpu_encode_payload(
         bit_width, values, count, scale,
         prescribed_words != NULL ? prescribed_words : generated_words,
-        record + MCO2_Q8_HEADER_SIZE);
+        record + MCO2_Q8_HEADER_SIZE, threads);
 }
 
 typedef enum {
@@ -498,8 +640,8 @@ static void print_bench_json(
     size_t count, uint64_t seed, uint64_t tensor_id,
     uint64_t invocation_id, uint64_t warmups, uint64_t reps,
     int prescribed_scale_seen, float prescribed_scale, int block_size,
-    int grid_size, size_t payload_bytes, const mco2_bench_sample *samples,
-    double capture_ms)
+    int grid_size, int team_size, size_t payload_bytes,
+    const mco2_bench_sample *samples, double capture_ms)
 {
     const uint64_t id_step = strcmp(boundary, "resident-graph") == 0 ? 0 : 1;
 
@@ -515,8 +657,12 @@ static void print_bench_json(
     printf(",\"warmup_invocation_ids\":");
     print_invocation_ids(invocation_id, warmups, reps, id_step);
     printf(",\"boundary\":\"%s\",\"transfer_policy\":\"%s\","
-           "\"block_size\":%d,\"grid_size\":%d,\"prescribed_scale\":",
+           "\"block_size\":%d,\"grid_size\":%d,",
            boundary, transfer_policy, block_size, grid_size);
+    /* The team size OpenMP actually granted, which may be below the request. */
+    if (team_size != 0)
+        printf("\"threads\":%d,", team_size);
+    printf("\"prescribed_scale\":");
     if (prescribed_scale_seen)
         printf("%.9g", (double)prescribed_scale);
     else
@@ -581,7 +727,7 @@ static mco2_q8_status bench_cpu_gpu_origin(
         status = bench_cpu_compress_one(
             bits, landing, count, seed, tensor_id, invocation_id, scale_seen,
             prescribed_scale, prescribed_words, generated_words,
-            scale_partials, scale_partial_count, record);
+            scale_partials, scale_partial_count, 0, record);
     if (status != MCO2_Q8_OK)
         goto done;
     if (output_path != NULL && !write_file(output_path, record, record_size)) {
@@ -609,7 +755,7 @@ static mco2_q8_status bench_cpu_gpu_origin(
         status = bench_cpu_compress_one(
             bits, landing, count, seed, tensor_id, invocation_id + run_offset,
             scale_seen, prescribed_scale, prescribed_words, generated_words,
-            scale_partials, scale_partial_count, record);
+            scale_partials, scale_partial_count, 0, record);
         if (status != MCO2_Q8_OK)
             goto done;
         if (!bench_clock_now_ms(&clock_frequency, &stop_ms)) {
@@ -639,12 +785,13 @@ static mco2_q8_status bench_file(int argc, char **argv)
     double capture_ms = 0.0;
     uint64_t seed = 0, tensor_id = 0, invocation_id = 0;
     uint64_t bits = MCO2_Q8_BITS, block_size = 256, grid_size = 0;
-    uint64_t warmups = 10, reps = 30, total_runs;
+    uint64_t warmups = 10, reps = 30, total_runs, requested_threads = 0;
     float prescribed_scale = 0.0f;
 #ifdef MCO2_ENABLE_CUDA
     float scale;
 #endif
     int seed_seen = 0, scale_seen = 0, boundary_seen = 0, policy_seen = 0;
+    int threads_seen = 0, threads, team_size = 0;
     int transfers;
     int block_size_seen = 0, grid_size_seen = 0, i;
     uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
@@ -690,9 +837,13 @@ static mco2_q8_status bench_file(int argc, char **argv)
             if (!scale_seen)
                 return MCO2_Q8_ERR_SCALE;
         } else if (strcmp(option, "--backend") == 0) {
-            if (strcmp(value, "cpu") != 0 && strcmp(value, "cuda") != 0)
+            if (!is_backend(value))
                 return MCO2_Q8_ERR_ARGUMENT;
             backend = value;
+        } else if (strcmp(option, "--threads") == 0) {
+            threads_seen = parse_threads(value, &requested_threads);
+            if (!threads_seen)
+                return MCO2_Q8_ERR_ARGUMENT;
         } else if (strcmp(option, "--boundary") == 0) {
             if (strcmp(value, "resident") != 0 &&
                 strcmp(value, "resident-graph") != 0 &&
@@ -731,12 +882,16 @@ static mco2_q8_status bench_file(int argc, char **argv)
         return MCO2_Q8_ERR_ARGUMENT;
     if (bits != MCO2_Q4_BITS && bits != MCO2_Q8_BITS)
         return MCO2_Q8_ERR_BIT_WIDTH;
-    /* The CPU backend accepts only the GPU-origin boundary; host-host is its default. */
-    if (strcmp(backend, "cpu") == 0 &&
+    /*
+     * The scalar CPU backend accepts only the GPU-origin boundary; host-host is
+     * its default. The AVX2 comparator runs host-host only.
+     */
+    if (is_cpu_backend(backend) &&
         (block_size_seen || grid_size_seen ||
-         (boundary_seen && strcmp(boundary_name, "gpu-origin") != 0)))
+         (boundary_seen && strcmp(boundary_name, "gpu-origin") != 0) ||
+         (boundary_seen && strcmp(backend, "cpu-avx2") == 0)))
         return MCO2_Q8_ERR_ARGUMENT;
-    if (strcmp(backend, "cpu") == 0 && !boundary_seen)
+    if (is_cpu_backend(backend) && !boundary_seen)
         boundary_name = "host-host";
     transfers = strcmp(boundary_name, "host-origin") == 0 ||
                 strcmp(boundary_name, "gpu-origin") == 0;
@@ -748,6 +903,9 @@ static mco2_q8_status bench_file(int argc, char **argv)
     if (strcmp(backend, "cuda") == 0 || strcmp(boundary_name, "gpu-origin") == 0)
         return MCO2_Q8_ERR_CUDA_UNAVAILABLE;
 #endif
+    status = resolve_cpu_threads(backend, threads_seen, requested_threads, &threads);
+    if (status != MCO2_Q8_OK)
+        return status;
     if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX ||
         warmups > UINT64_MAX - reps ||
         (total_runs = warmups + reps) == 0 ||
@@ -831,11 +989,14 @@ static mco2_q8_status bench_file(int argc, char **argv)
         if (status != MCO2_Q8_OK)
             goto done;
 #endif
-    } else if (strcmp(backend, "cpu") == 0) {
+    } else if (is_cpu_backend(backend)) {
+        if (threads != 0)
+            team_size = mco2_avx2_team_size(threads);
         status = bench_cpu_compress_one(
             (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
             scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
-            generated_words, scale_partials, scale_partial_count, record);
+            generated_words, scale_partials, scale_partial_count, threads,
+            record);
         if (status != MCO2_Q8_OK)
             goto done;
         if (output_path != NULL && !write_file(output_path, record, record_size)) {
@@ -858,7 +1019,7 @@ static mco2_q8_status bench_file(int argc, char **argv)
                 (uint8_t)bits, values, count, seed, tensor_id,
                 current_invocation, scale_seen, prescribed_scale,
                 words_path != NULL ? words : NULL, generated_words,
-                scale_partials, scale_partial_count, record);
+                scale_partials, scale_partial_count, threads, record);
             if (status != MCO2_Q8_OK)
                 goto done;
             if (!bench_clock_now_ms(&clock_frequency, &stop_ms)) {
@@ -902,8 +1063,8 @@ static mco2_q8_status bench_file(int argc, char **argv)
     print_bench_json(backend, boundary_name, transfer_policy_name,
                      (uint8_t)bits, count, seed, tensor_id, invocation_id,
                      warmups, reps, scale_seen, prescribed_scale,
-                     (int)block_size, (int)grid_size, payload_bytes, samples,
-                     capture_ms);
+                     (int)block_size, (int)grid_size, team_size, payload_bytes,
+                     samples, capture_ms);
     status = MCO2_Q8_OK;
 
 done:

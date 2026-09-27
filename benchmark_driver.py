@@ -74,14 +74,18 @@ TRANSFER_POLICIES = ("pageable", "pinned")
 # All orderings stay affordable up to four paths; beyond that a Williams design
 # balances position and immediate predecessor in n (even) or 2n (odd) rows.
 MAX_PERMUTATION_PATHS = 4
+# Issue #22: the opt-in multithreaded AVX2 comparator. It is timed on the same
+# host-host boundary as the scalar comparator, which stays every claim's baseline.
+HOST_BOUNDARIES = ("comparator", "optimized")
 
 
 @dataclass(frozen=True)
 class BenchPath:
     """One timed path: a backend, its timing boundary, and its host transfer policy.
 
-    The comparator is the CPU host-host path. Resident paths move no host data, so
-    their policy is "none"; transfer boundaries carry "pageable" or "pinned".
+    The comparator is the CPU host-host path, and "optimized" is the AVX2 CPU path on
+    the same boundary. Resident paths move no host data, so their policy is "none";
+    transfer boundaries carry "pageable" or "pinned".
     """
 
     backend: str
@@ -98,7 +102,7 @@ class BenchPath:
 
     @property
     def extra_args(self) -> list[str]:
-        args = [] if self.boundary == "comparator" else ["--boundary", self.boundary]
+        args = [] if self.boundary in HOST_BOUNDARIES else ["--boundary", self.boundary]
         if self.policy == "pinned":
             args += ["--transfer-policy", "pinned"]
         return args
@@ -124,6 +128,8 @@ def build_paths(
     policies = [policy for policy in TRANSFER_POLICIES if policy in transfer_policies]
 
     paths = [BenchPath("cpu", "comparator", "none")]
+    if "cpu-avx2" in backends:
+        paths.append(BenchPath("cpu-avx2", "optimized", "none"))
     if "cuda" in backends:
         paths += [
             BenchPath("cuda", "resident", "none"),
@@ -311,7 +317,17 @@ def collect_build_commands(root: Path) -> dict[str, Any]:
             text = proc.stderr if proc.stderr.strip() else proc.stdout
             commands = [line.strip() for line in text.splitlines() if line.strip()]
 
+    return {"source": f"just --dry-run {BUILD_RECIPE}", **parse_build_commands(commands)}
+
+
+def parse_build_commands(commands: Sequence[str]) -> dict[str, Any]:
+    """Flags of the scalar comparator, the AVX2 comparator and the CUDA kernels.
+
+    Each C entry is the compile of its own source file, so the per-file flags of the
+    AVX2 translation unit never stand in for the scalar comparator's.
+    """
     host_flags: list[str] | None = None
+    avx2_flags: list[str] | None = None
     nvcc_flags: list[str] | None = None
     for command in commands:
         tokens = command.split()
@@ -321,17 +337,22 @@ def collect_build_commands(root: Path) -> dict[str, Any]:
             continue
         tool = Path(tokens[0]).name.lower()
         compiles = any(t.lower() in ("/c", "-c") for t in tokens)
-        if host_flags is None and compiles and tool in ("cl.exe", "cl", "gcc", "cc", "clang"):
-            host_flags = strip_compile_io(tokens[1:])
+        sources = {t.replace("\\", "/").rsplit("/", 1)[-1] for t in tokens[1:]}
+        if compiles and tool in ("cl.exe", "cl", "gcc", "cc", "clang"):
+            if host_flags is None and "quantizer.c" in sources:
+                host_flags = strip_compile_io(tokens[1:])
+            elif avx2_flags is None and "quantizer_avx2.c" in sources:
+                avx2_flags = strip_compile_io(tokens[1:])
         elif nvcc_flags is None and compiles and tool in ("nvcc", "nvcc.exe"):
             nvcc_flags = strip_compile_io(tokens[1:])
 
     return {
-        "source": f"just --dry-run {BUILD_RECIPE}",
-        "commands": commands,
+        "commands": list(commands),
         "comparator_c": " ".join(host_flags) if host_flags is not None else "unknown",
+        "avx2_c": " ".join(avx2_flags) if avx2_flags is not None else "unknown",
         "cuda_nvcc": " ".join(nvcc_flags) if nvcc_flags is not None else "unknown",
         "_host_tokens": host_flags,
+        "_avx2_tokens": avx2_flags,
     }
 
 
@@ -568,13 +589,18 @@ def generate_family_inputs(
     raise ValueError(f"unknown input family {family!r}; choose from {INPUT_FAMILIES}")
 
 
+COMPARATOR_SOURCES = ("src\\main.c", "src\\codec.c", "src\\quantizer.c", "src\\rng_cpu.c")
+AVX2_SOURCES = ("src\\quantizer_avx2.c",)
+
+
 def generate_msvc_vectorization_report(
     root: Path,
     output_file: Path,
     host_flags: Sequence[str] | None,
     object_dir: Path,
+    sources: Sequence[str] = COMPARATOR_SOURCES,
 ) -> str:
-    """Recompile the comparator's C sources with its exact build flags plus /Qvec-report:2."""
+    """Recompile C sources with their exact build flags plus /Qvec-report:2."""
     output_text = ""
     script = root / "scripts" / "with-msvc.ps1"
     if os.name == "nt" and script.is_file() and host_flags is not None:
@@ -591,10 +617,7 @@ def generate_msvc_vectorization_report(
             *host_flags,
             "/Qvec-report:2",
             "/c",
-            "src\\main.c",
-            "src\\codec.c",
-            "src\\quantizer.c",
-            "src\\rng_cpu.c",
+            *sources,
             f"/Fo:{object_arg}/",
         ]
         cmd = [
@@ -735,8 +758,46 @@ def verify_correctness(
             "error_message": "CPU bench record is not byte-identical to CPU compress record.",
         }
 
+    if "cpu-avx2" in backends:
+        avx2_comp_path = tmp_dir / f"cpu-avx2_comp_b{bits}_n{count}.msq"
+        res_avx2_comp = subprocess.run(
+            [
+                str(binary),
+                "compress",
+                "--input",
+                str(input_path),
+                "--output",
+                str(avx2_comp_path),
+                "--seed",
+                str(seed),
+                "--bits",
+                str(bits),
+                "--tensor-id",
+                str(tensor_id),
+                "--invocation-id",
+                str(invocation_id),
+                "--backend",
+                "cpu-avx2",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res_avx2_comp.returncode != 0:
+            return False, {
+                "status": "failed",
+                "error_message": f"cpu-avx2 compress failed: {res_avx2_comp.stderr.strip()}",
+            }
+        if avx2_comp_path.read_bytes() != cpu_comp_bytes:
+            return False, {
+                "status": "failed",
+                "byte_identical_to_compress": False,
+                "cpu_cuda_byte_identical": False,
+                "error_message": "cpu-avx2 compress record is not byte-identical to CPU.",
+            }
+
+    cuda_comp_bytes: bytes | None = None
     if include_cuda:
-        # CUDA compress
         res_cuda_comp = subprocess.run(
             [
                 str(binary),
@@ -765,76 +826,72 @@ def verify_correctness(
                 "status": "failed",
                 "error_message": f"CUDA compress failed: {res_cuda_comp.stderr.strip()}",
             }
-
-        cuda_bench_paths: dict[BenchPath, Path] = {
-            path: tmp_dir / f"bench_{path.label}_b{bits}_n{count}.msq"
-            for path in paths
-            if path.boundary != "comparator"
-        }
-        for path, record_path in cuda_bench_paths.items():
-            res_cuda_bench = subprocess.run(
-                [
-                    str(binary),
-                    "bench",
-                    "--input",
-                    str(input_path),
-                    "--record-output",
-                    str(record_path),
-                    "--seed",
-                    str(seed),
-                    "--bits",
-                    str(bits),
-                    "--tensor-id",
-                    str(tensor_id),
-                    "--invocation-id",
-                    str(invocation_id),
-                    "--backend",
-                    path.backend,
-                    *path.extra_args,
-                    "--warmup",
-                    "0",
-                    "--reps",
-                    "1",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if res_cuda_bench.returncode != 0:
-                name = "CUDA " + path.key if path.backend == "cuda" else path.label
-                return False, {
-                    "status": "failed",
-                    "error_message": (
-                        f"{name} bench record failed: {res_cuda_bench.stderr.strip()}"
-                    ),
-                }
-
         cuda_comp_bytes = cuda_comp_path.read_bytes()
-        # Each path must reproduce its own backend's compress record.
-        byte_identical_to_compress = all(
-            record_path.read_bytes()
-            == (cuda_comp_bytes if path.backend == "cuda" else cpu_comp_bytes)
-            for path, record_path in cuda_bench_paths.items()
+
+    bench_paths: dict[BenchPath, Path] = {
+        path: tmp_dir / f"bench_{path.label}_b{bits}_n{count}.msq"
+        for path in paths
+        if path.boundary != "comparator"
+    }
+    for path, record_path in bench_paths.items():
+        res_bench = subprocess.run(
+            [
+                str(binary),
+                "bench",
+                "--input",
+                str(input_path),
+                "--record-output",
+                str(record_path),
+                "--seed",
+                str(seed),
+                "--bits",
+                str(bits),
+                "--tensor-id",
+                str(tensor_id),
+                "--invocation-id",
+                str(invocation_id),
+                "--backend",
+                path.backend,
+                *path.extra_args,
+                "--warmup",
+                "0",
+                "--reps",
+                "1",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        cpu_cuda_byte_identical = cpu_comp_bytes == cuda_comp_bytes
-
-        if not byte_identical_to_compress:
+        if res_bench.returncode != 0:
+            name = "CUDA " + path.key if path.backend == "cuda" else path.label
             return False, {
                 "status": "failed",
-                "byte_identical_to_compress": False,
-                "cpu_cuda_byte_identical": cpu_cuda_byte_identical,
-                "error_message": "CUDA bench record output is not byte-identical to compress output.",
+                "error_message": f"{name} bench record failed: {res_bench.stderr.strip()}",
             }
 
-        if not cpu_cuda_byte_identical:
-            return False, {
-                "status": "failed",
-                "byte_identical_to_compress": True,
-                "cpu_cuda_byte_identical": False,
-                "error_message": "CPU and CUDA records are not byte-identical.",
-            }
-    else:
-        cpu_cuda_byte_identical = True
+    # Each path must reproduce its own backend's compress record; the AVX2
+    # comparator's is the scalar one, checked above.
+    byte_identical_to_compress = all(
+        record_path.read_bytes() == (cuda_comp_bytes if path.backend == "cuda" else cpu_comp_bytes)
+        for path, record_path in bench_paths.items()
+    )
+    cpu_cuda_byte_identical = cuda_comp_bytes is None or cpu_comp_bytes == cuda_comp_bytes
+
+    if not byte_identical_to_compress:
+        return False, {
+            "status": "failed",
+            "byte_identical_to_compress": False,
+            "cpu_cuda_byte_identical": cpu_cuda_byte_identical,
+            "error_message": "A bench record output is not byte-identical to compress output.",
+        }
+
+    if not cpu_cuda_byte_identical:
+        return False, {
+            "status": "failed",
+            "byte_identical_to_compress": True,
+            "cpu_cuda_byte_identical": False,
+            "error_message": "CPU and CUDA records are not byte-identical.",
+        }
 
     # Layer 2 decode validation against FP64 oracle
     input_bytes = input_path.read_bytes()
@@ -1040,6 +1097,7 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         if path.backend == "cuda" and stats_by_label[path.label] is not None
     }
     comparator = stats_by_label["cpu-comparator"]
+    avx2 = stats_by_label.get("cpu-avx2-optimized")
     # CPU gpu-origin adds a full input download to the comparator, so it must not beat it.
     cpu_inversion = {
         policy: (
@@ -1056,6 +1114,9 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
 
     def path_inversion(path: BenchPath) -> bool:
         group = "pinned" if path.policy == "pinned" else "pageable"
+        if path.backend == "cpu-avx2":
+            # Same boundary and work as the comparator: nothing it could invert.
+            return False
         if path.backend == "cpu":
             return cpu_inversion[group]
         if path.boundary == "gpu-origin":
@@ -1091,7 +1152,23 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         stats["baseline"] = base_label
         stats.update(compare_to_comparator(base_stats, stats))
         stats["boundary_inversion"] = inversion
+        if path.backend == "cpu-avx2":
+            # Descriptive only: the paper's claims stay against the scalar comparator.
+            stats.update(
+                {
+                    "descriptive": True,
+                    "direction_supported": None,
+                    "magnitude_supported": None,
+                    "claim_supported_rev2": None,
+                }
+            )
+            continue
         stats.update(claim_support(stats["verdict"], inversion, base_stats, stats))
+        if path.backend == "cuda" and avx2 is not None:
+            stats["vs_cpu_avx2"] = {
+                **compare_speedup(avx2, stats, "speedup_vs_cpu_avx2"),
+                "descriptive": True,
+            }
 
         if path.policy == "pinned":
             twin_path = BenchPath(path.backend, path.boundary, "pageable")
@@ -1713,6 +1790,8 @@ def sweep_matrix(
     toolchain_prov = collect_hardware_and_toolchain(root)
     build_prov = collect_build_commands(root)
     host_tokens = build_prov.pop("_host_tokens")
+    avx2_tokens = build_prov.pop("_avx2_tokens")
+    has_avx2 = any(path.backend == "cpu-avx2" for path in paths)
     gpu_state_start = query_gpu_state() if "cuda" in backends else None
 
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -1739,6 +1818,14 @@ def sweep_matrix(
     # 2. Vectorization report, compiled with the comparator's own flags
     vec_report_path = target_dir / "msvc_vectorization_report.txt"
     generate_msvc_vectorization_report(root, vec_report_path, host_tokens, temp_dir / "vec_obj")
+    if has_avx2:
+        generate_msvc_vectorization_report(
+            root,
+            target_dir / "msvc_vectorization_report_avx2.txt",
+            avx2_tokens,
+            temp_dir / "vec_obj_avx2",
+            AVX2_SOURCES,
+        )
 
     orders = trial_orders(paths, trials)
     order_labels = [[paths[i].label for i in order] for order in orders]
@@ -1804,6 +1891,7 @@ def sweep_matrix(
                     "build_flags": {
                         "comparator_c": build_prov["comparator_c"],
                         "cuda_nvcc": build_prov["cuda_nvcc"],
+                        **({"avx2_c": build_prov["avx2_c"]} if has_avx2 else {}),
                     },
                     "hardware": toolchain_prov["hardware"],
                     "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
@@ -1892,6 +1980,8 @@ def sweep_matrix(
                         ),
                         "samples_ms": payload.get("samples_ms", []),
                     }
+                    if "threads" in configuration:
+                        run["threads"] = configuration["threads"]
                     if "capture_and_instantiate_ms" in payload:
                         run["capture_and_instantiate_ms"] = payload["capture_and_instantiate_ms"]
                     for key in STAGE_KEYS:
@@ -1913,6 +2003,10 @@ def sweep_matrix(
                     raise RuntimeError(
                         f"{case['case_id']}: trials used different invocation identifiers"
                     )
+            if "threads" in first:
+                if any(run.get("threads") != first["threads"] for run in runs):
+                    raise RuntimeError(f"{case['case_id']}: trials ran different thread counts")
+                case["threads"] = first["threads"]
             case["repetition_invocation_ids"] = first["repetition_invocation_ids"]
             case["warmup_invocation_ids"] = first["warmup_invocation_ids"]
             case["samples_ms"] = [s for run in runs for s in run["samples_ms"]]
@@ -2050,6 +2144,18 @@ def sweep_matrix(
             "reps": reps,
             "trials": trials,
             "paths": [path.label for path in paths],
+            **(
+                {
+                    "cpu_avx2_threads": sorted(
+                        {c["threads"] for c in case_results if "threads" in c}
+                    ),
+                    "cpu_avx2_threads_rule": (
+                        "mco2 default: logical processors in the inherited affinity mask"
+                    ),
+                }
+                if has_avx2
+                else {}
+            ),
             "trial_design": trial_design(len(paths)),
             "trial_orders": order_labels,
             "case_order_seed": case_order_seed,
@@ -2170,7 +2276,10 @@ def main() -> None:
         type=str,
         nargs="+",
         default=["cpu", "cuda"],
-        help="Backends to benchmark (cpu, cuda)",
+        help=(
+            "Backends to benchmark (cpu, cuda, cpu-avx2); cpu-avx2 adds the "
+            "descriptive AVX2 comparator path"
+        ),
     )
     parser.add_argument(
         "--boundaries",

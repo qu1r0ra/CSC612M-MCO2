@@ -22,22 +22,32 @@ import numpy as np
 
 from benchmark_driver import compute_stage_medians
 
-PATHS = ("comparator", "resident", "resident-graph", "host-origin")
+# "optimized" is the opt-in AVX2 CPU comparator (issue #22): an F1 line and a
+# descriptive F2 line only. It never enters T1, the crossovers or a claim.
+PATHS = ("comparator", "optimized", "resident", "resident-graph", "host-origin")
 CUDA_PATHS = ("resident", "resident-graph", "host-origin")
 STAGE_PATHS = ("resident", "host-origin")
 LABELS = {
     "comparator": "C comparator",
+    "optimized": "AVX2 comparator (descriptive)",
     "resident": "CUDA resident",
     "resident-graph": "CUDA resident-graph",
     "host-origin": "CUDA host-origin",
 }
 COLORS = {
     "comparator": "#555555",
+    "optimized": "#CC79A7",
     "resident": "#0072B2",
     "resident-graph": "#009E73",
     "host-origin": "#E69F00",
 }
-MARKERS = {"comparator": "s", "resident": "o", "resident-graph": "D", "host-origin": "^"}
+MARKERS = {
+    "comparator": "s",
+    "optimized": "v",
+    "resident": "o",
+    "resident-graph": "D",
+    "host-origin": "^",
+}
 STAGE_COUNTS = (1 << 14, 1 << 18, 1 << 22, 1 << 26)
 STAGES = (
     ("k1_ms", "scale (K1)", "#0072B2"),
@@ -207,12 +217,27 @@ def plot_time(indexed, counts, bit_widths, out: Path) -> None:
     plt.close(fig)
 
 
+def plot_descriptive_speedup(ax, indexed, counts, bits) -> None:
+    """The AVX2 comparator as a dashed CI line with no claim markers."""
+    path = "optimized"
+    rows = [indexed[(n, bits, path)] for n in counts if (n, bits, path) in indexed]
+    rows = [r for r in rows if "speedup_vs_cpu" in r["statistics"]]
+    if not rows:
+        return
+    x = np.array([r["count"] for r in rows])
+    y = np.array([r["statistics"]["speedup_vs_cpu"] for r in rows])
+    bounds = np.array([speedup_interval(r["statistics"]) for r in rows])
+    ax.plot(x, y, color=COLORS[path], linewidth=1, linestyle="--", label=LABELS[path])
+    ax.vlines(x, bounds[:, 0], bounds[:, 1], color=COLORS[path], linewidth=1)
+
+
 def plot_speedup(indexed, counts, bit_widths, out: Path) -> None:
     fig, axes = plt.subplots(
         1, len(bit_widths), figsize=(5.5 * len(bit_widths), 4.2), sharey=True, squeeze=False
     )
     for ax, bits in zip(axes[0], bit_widths, strict=True):
         ax.axhline(1.0, color="black", linewidth=0.8, linestyle="--")
+        plot_descriptive_speedup(ax, indexed, counts, bits)
         for path in CUDA_PATHS:
             rows = [indexed[(n, bits, path)] for n in counts if (n, bits, path) in indexed]
             rows = [r for r in rows if "speedup_vs_cpu" in r["statistics"]]
@@ -255,7 +280,7 @@ def plot_speedup(indexed, counts, bit_widths, out: Path) -> None:
     axes[0][0].legend(loc="upper left", fontsize=8)
     fig.suptitle(
         "F2. Speedup vs elements, 95% bootstrap CI "
-        "(filled: magnitude; hollow: direction only; faded: neither)"
+        "(filled: magnitude; hollow: direction only; faded: neither; dashed: descriptive)"
     )
     fig.tight_layout()
     fig.savefig(out, dpi=200)
