@@ -37,6 +37,18 @@ __global__ static void read_kernel(const float4 *values, size_t count4, float *s
         *sink = acc;
 }
 
+// The device name goes into JSON, so quotes, backslashes, and control bytes are dropped.
+static void json_safe_name(const char *name, char *out, size_t size)
+{
+    size_t j = 0;
+    for (size_t i = 0; name[i] != '\0' && j + 1 < size; i++) {
+        const unsigned char c = (unsigned char)name[i];
+        if (c >= 0x20 && c != '"' && c != '\\')
+            out[j++] = (char)c;
+    }
+    out[j] = '\0';
+}
+
 static int parse_int(int argc, char **argv, int *i, int *out)
 {
     if (*i + 1 >= argc)
@@ -59,7 +71,8 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--discard") == 0)
             ok = parse_int(argc, argv, &i, &discard);
         if (!ok) {
-            fprintf(stderr, "usage: stream_probe [--min-exp N] [--max-exp N] [--reps N] [--discard N]\n");
+            fprintf(stderr, "usage: stream_probe [--min-exp N] [--max-exp N] [--reps N] "
+                            "[--discard N]\n");
             return 2;
         }
     }
@@ -91,6 +104,8 @@ int main(int argc, char **argv)
     CHECK(cudaEventCreate(&start));
     CHECK(cudaEventCreate(&stop));
     const int multipliers[] = {4, 8, 16, 32};
+    char name[sizeof prop.name];
+    json_safe_name(prop.name, name, sizeof name);
 
     printf("{\"device\":{\"name\":\"%s\",\"compute_capability\":\"%d.%d\","
            "\"memory_clock_khz\":%d,\"bus_width_bits\":%d,\"l2_bytes\":%d,"
@@ -98,7 +113,7 @@ int main(int argc, char **argv)
            "\"method\":{\"kernel\":\"grid-stride float4 read, 256 threads per block\","
            "\"grids_per_multiprocessor\":[4,8,16,32],\"reps\":%d,\"discarded\":%d,"
            "\"statistic\":\"best time over kept reps and grids\"},\"sizes\":[",
-           prop.name, major, minor, clock_khz, bus_bits, l2_bytes, sms, runtime_version,
+           name, major, minor, clock_khz, bus_bits, l2_bytes, sms, runtime_version,
            driver_version, reps, discard);
     for (int e = min_exp; e <= max_exp; e++) {
         const size_t count = (size_t)1 << e;
@@ -124,7 +139,8 @@ int main(int argc, char **argv)
                 best_ms = kept.front();
                 best_grid = grid;
                 const size_t half = kept.size() / 2;
-                best_grid_median_ms = kept.size() % 2 ? kept[half] : 0.5f * (kept[half - 1] + kept[half]);
+                best_grid_median_ms =
+                    kept.size() % 2 ? kept[half] : 0.5f * (kept[half - 1] + kept[half]);
             }
         }
         const double bytes = (double)count * sizeof(float);

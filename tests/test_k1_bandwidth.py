@@ -1,8 +1,13 @@
+import re
+from pathlib import Path
+
 import pytest
 
 from k1_bandwidth import (
+    REDUCTION_THREADS,
     k1_launch_count,
     k1_min_bytes,
+    probe_ceiling,
     probe_ceiling_gbps,
     regime,
     summarize_cell,
@@ -30,22 +35,34 @@ def test_theoretical_peak_uses_the_ddr_convention():
     assert theoretical_peak_gbps(14_001_000, 128) == pytest.approx(448.032)
 
 
-def test_regime_splits_at_the_l2_size():
+def test_reduction_threads_matches_the_cuda_source():
+    source = (Path(__file__).resolve().parents[1] / "src" / "quantizer_cuda.cu").read_text()
+    match = re.search(r"#define MCO2_CUDA_REDUCTION_THREADS (\d+)", source)
+    assert match is not None
+    assert int(match.group(1)) == REDUCTION_THREADS
+
+
+def test_regime_needs_four_times_l2_for_dram():
     assert regime(1 << 22, DEVICE["l2_bytes"]) == "l2-resident"
-    assert regime(1 << 23, DEVICE["l2_bytes"]) == "dram"
+    assert regime(1 << 23, DEVICE["l2_bytes"]) == "transitional"
+    assert regime(1 << 24, DEVICE["l2_bytes"]) == "transitional"
+    assert regime(1 << 25, DEVICE["l2_bytes"]) == "dram"
 
 
 def test_probe_ceiling_takes_the_best_dram_size():
     probe = {
         "sizes": [
             {"count": 1 << 22, "bytes": 1 << 24, "best_gbps": 1200.0},
-            {"count": 1 << 24, "bytes": 1 << 26, "best_gbps": 410.0},
+            {"count": 1 << 24, "bytes": 1 << 26, "best_gbps": 440.0},
+            {"count": 1 << 25, "bytes": 1 << 27, "best_gbps": 418.0},
             {"count": 1 << 26, "bytes": 1 << 28, "best_gbps": 425.0},
         ]
     }
+    # The 64 MiB size is transitional against a 24 MiB L2, so it cannot set the ceiling.
     assert probe_ceiling_gbps(probe, DEVICE["l2_bytes"]) == 425.0
+    assert probe_ceiling(probe, DEVICE["l2_bytes"])["count"] == 1 << 26
     with pytest.raises(ValueError):
-        probe_ceiling_gbps({"sizes": probe["sizes"][:1]}, DEVICE["l2_bytes"])
+        probe_ceiling_gbps({"sizes": probe["sizes"][:2]}, DEVICE["l2_bytes"])
 
 
 def test_summarize_cell_reports_fractions_only_above_l2():
@@ -61,6 +78,11 @@ def test_summarize_cell_reports_fractions_only_above_l2():
     assert big["ideal_ms_at_ceiling"] == pytest.approx(2 * 4 * (1 << 26) / 425.0 / 1e6)
     assert big["headroom"] == pytest.approx(3.2 / big["ideal_ms_at_ceiling"])
     assert big["k2_median_ms"] == pytest.approx(1.25)
+    assert big["k1"]["stable"] is True
+
+    edge = summarize_cell(1 << 23, 8, trials, stage, DEVICE, 425.0)
+    assert edge["regime"] == "transitional"
+    assert edge["fraction_of_peak"] is None
 
     small = summarize_cell(1 << 22, 8, trials, stage, DEVICE, 425.0)
     assert small["regime"] == "l2-resident"

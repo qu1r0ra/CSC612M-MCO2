@@ -10,9 +10,10 @@ Records the baseline that any K1 change is judged against, before the change:
 
 Effective bandwidth counts the contract-forced minimum traffic: two full reads of
 the input, one for max|x| and one for the squared terms, which need max|x| first.
-Fractions of peak are reported only where the input exceeds the L2 cache; below
-that, K1 runs from L2 and is bound by its kernel launches, so the launch count is
-recorded instead.
+Fractions of peak are reported only where the input is at least four times the L2
+cache, so neither K1's second read nor the probe's repeated scans can be served
+from L2. Smaller inputs are labelled transitional (1-4x L2) or l2-resident, and
+the launch count is recorded instead.
 
     just k1-baseline --output-dir results/<date>-<sha>-k1-baseline
 """
@@ -21,9 +22,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import random
+import shutil
 import statistics
 import subprocess
 import sys
@@ -50,9 +53,11 @@ from benchmark_driver import (
     warm_up_gpu,
 )
 
+# MCO2_CUDA_REDUCTION_THREADS in src/quantizer_cuda.cu.
 REDUCTION_THREADS = 256
 BYTES_PER_VALUE = 4
 K1_INPUT_READS = 2
+DRAM_L2_MULTIPLE = 4
 DEFAULT_PROCESSES = 12
 DEFAULT_REPS = 30
 MIN_WARMUPS = 10
@@ -62,13 +67,24 @@ ORDER_SEED = 23
 PROBE_RECIPE = "build-stream-probe"
 PEAK_RULE = (
     "theoretical_peak_gbps = 2 * memory_clock_khz * 1e3 * bus_width_bits / 8 / 1e9 "
-    "(DDR convention, CUDA C++ Best Practices Guide)"
+    "(DDR convention, CUDA C++ Best Practices Guide); the RTX 5060 vendor figure is "
+    "448 GB/s (28 Gbps x 128-bit GDDR7)"
 )
 EFFECTIVE_RULE = (
     "effective_gbps = K1_INPUT_READS * 4 * count / k1 pooled median (ms) / 1e6; "
     "the contract forces two full input reads (max|x|, then the squared terms)"
 )
-REGIME_RULE = "dram when 4 * count > L2 size, else l2-resident; fractions only for dram"
+REGIME_RULE = (
+    f"dram when 4 * count >= {DRAM_L2_MULTIPLE} * L2 size, transitional when 4 * count > L2 "
+    "size, else l2-resident; fractions, headroom and the probe ceiling use dram sizes only"
+)
+
+
+STAGE_KEYS = {
+    "k2_ms": "k2_median_ms",
+    "k3_ms": "k3_median_ms",
+    "samples_ms": "total_median_ms",
+}
 
 
 def k1_launch_count(count: int) -> int:
@@ -90,16 +106,29 @@ def theoretical_peak_gbps(memory_clock_khz: int, bus_width_bits: int) -> float:
     return 2.0 * memory_clock_khz * 1e3 * bus_width_bits / 8.0 / 1e9
 
 
+def regime_for_bytes(size_bytes: int, l2_bytes: int) -> str:
+    if size_bytes >= DRAM_L2_MULTIPLE * l2_bytes:
+        return "dram"
+    return "transitional" if size_bytes > l2_bytes else "l2-resident"
+
+
 def regime(count: int, l2_bytes: int) -> str:
-    return "dram" if count * BYTES_PER_VALUE > l2_bytes else "l2-resident"
+    return regime_for_bytes(count * BYTES_PER_VALUE, l2_bytes)
+
+
+def probe_ceiling(probe: dict[str, Any], l2_bytes: int) -> dict[str, Any]:
+    """Best streaming-read bandwidth over the probe sizes in the dram regime."""
+    dram = [s for s in probe["sizes"] if regime_for_bytes(s["bytes"], l2_bytes) == "dram"]
+    if not dram:
+        raise ValueError(
+            f"the probe has no size of at least {DRAM_L2_MULTIPLE}x L2; raise --max-exp"
+        )
+    best = max(dram, key=lambda s: s["best_gbps"])
+    return {"gbps": best["best_gbps"], "count": best["count"], "bytes": best["bytes"]}
 
 
 def probe_ceiling_gbps(probe: dict[str, Any], l2_bytes: int) -> float:
-    """Best streaming-read bandwidth over the probe sizes that exceed L2."""
-    dram = [size["best_gbps"] for size in probe["sizes"] if size["bytes"] > l2_bytes]
-    if not dram:
-        raise ValueError("the probe has no size larger than L2; raise --max-exp")
-    return max(dram)
+    return probe_ceiling(probe, l2_bytes)["gbps"]
 
 
 def summarize_cell(
@@ -113,13 +142,14 @@ def summarize_cell(
     k1 = compute_case_statistics(trial_k1_samples)
     min_bytes = k1_min_bytes(count)
     effective = min_bytes / k1["median_ms"] / 1e6
-    in_dram = regime(count, device["l2_bytes"]) == "dram"
+    cell_regime = regime(count, device["l2_bytes"])
+    in_dram = cell_regime == "dram"
     peak = theoretical_peak_gbps(device["memory_clock_khz"], device["bus_width_bits"])
     ideal_ms = min_bytes / ceiling_gbps / 1e6
     return {
         "count": count,
         "bits": bits,
-        "regime": regime(count, device["l2_bytes"]),
+        "regime": cell_regime,
         "launches": k1_launch_count(count),
         "min_bytes": min_bytes,
         "k1": k1,
@@ -129,7 +159,7 @@ def summarize_cell(
         "ideal_ms_at_ceiling": ideal_ms if in_dram else None,
         "headroom": k1["median_ms"] / ideal_ms if in_dram else None,
         **{
-            f"{stage[:-3]}_median_ms": statistics.median(values)
+            STAGE_KEYS[stage]: statistics.median(values)
             for stage, values in stage_trial_medians.items()
         },
     }
@@ -143,11 +173,21 @@ def probe_path(root: Path) -> Path:
 
 
 def dry_run(root: Path, recipe: str) -> list[str]:
+    just = shutil.which("just")
+    if just is None:
+        raise RuntimeError("just is not on PATH; build provenance cannot be recorded")
     proc = subprocess.run(
-        ["just", "--dry-run", recipe], cwd=root, capture_output=True, text=True, check=False
+        [just, "--dry-run", recipe], cwd=root, capture_output=True, text=True, check=False
     )
+    if proc.returncode != 0:
+        raise RuntimeError(f"just --dry-run {recipe} failed: {proc.stderr.strip()}")
+    # just echoes dry-run commands on stderr.
     text = proc.stderr if proc.stderr.strip() else proc.stdout
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def run_probe(probe: Path) -> dict[str, Any]:
@@ -196,12 +236,20 @@ def main() -> None:
     out = args.output_dir
     if out.exists() and any(out.iterdir()):
         sys.exit(f"{out} is not empty; snapshots are never overwritten.")
-    out.mkdir(parents=True, exist_ok=True)
     binary = find_binary(root)
-    probe = run_probe(probe_path(root))
-    device = probe["device"]
-    ceiling = probe_ceiling_gbps(probe, device["l2_bytes"])
-    (out / "stream_probe.json").write_text(json.dumps(probe, indent=2), encoding="utf-8")
+    probe_binary = probe_path(root)
+    build = collect_build_commands(root)
+    build.pop("_host_tokens", None)
+    if not build["commands"]:
+        sys.exit(f"just --dry-run {BUILD_RECIPE} failed; build provenance cannot be recorded.")
+    build_record = {
+        BUILD_RECIPE: build["commands"],
+        PROBE_RECIPE: dry_run(root, PROBE_RECIPE),
+        "sha256": {
+            binary.name: file_sha256(binary),
+            probe_binary.name: file_sha256(probe_binary),
+        },
+    }
 
     cells = [(count, bits) for count in args.counts for bits in args.bits]
     records: list[dict[str, Any]] = []
@@ -210,6 +258,13 @@ def main() -> None:
         inputs = generate_inputs(args.counts, Path(scratch))
         paths = {count: Path(inputs[count]["_path"]) for count in args.counts}
         warm = warm_up_gpu(binary, paths[max(args.counts)], args.gpu_warmup_seconds)
+        gpu_probe_start = query_gpu_state()
+        probe = run_probe(probe_binary)
+        gpu_probe_end = query_gpu_state()
+        device = probe["device"]
+        ceiling = probe_ceiling(probe, device["l2_bytes"])
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "stream_probe.json").write_text(json.dumps(probe, indent=2), encoding="utf-8")
         warmups = {}
         for count, bits in cells:
             payload = run_resident(binary, paths[count], bits, MIN_WARMUPS, CALIBRATION_REPS)
@@ -253,7 +308,7 @@ def main() -> None:
                     for stage in ("k2_ms", "k3_ms", "samples_ms")
                 },
                 device,
-                ceiling,
+                ceiling["gbps"],
             )
         )
 
@@ -270,20 +325,20 @@ def main() -> None:
             )
     (out / "processes.json").write_text(json.dumps(records), encoding="utf-8")
 
-    build = collect_build_commands(root)
-    build.pop("_host_tokens", None)
     summary = {
         "created_utc": datetime.now(UTC).isoformat(),
         "purpose": "issue #23 K1 baseline before any K1 change",
         "git": git,
-        "build": {BUILD_RECIPE: build["commands"], PROBE_RECIPE: dry_run(root, PROBE_RECIPE)},
+        "build": build_record,
         **collect_hardware_and_toolchain(root),
         "device": device,
         "rules": {"peak": PEAK_RULE, "effective": EFFECTIVE_RULE, "regime": REGIME_RULE},
         "theoretical_peak_gbps": theoretical_peak_gbps(
             device["memory_clock_khz"], device["bus_width_bits"]
         ),
-        "probe_ceiling_gbps": ceiling,
+        "probe_ceiling_gbps": ceiling["gbps"],
+        "probe_ceiling_size": {"count": ceiling["count"], "bytes": ceiling["bytes"]},
+        "gpu_state_probe": {"start": gpu_probe_start, "end": gpu_probe_end},
         "protocol": {
             "path": "cuda resident",
             "processes": args.processes,
@@ -303,7 +358,7 @@ def main() -> None:
     for cell in cell_summaries:
         fraction = cell["fraction_of_peak"]
         print(
-            f"n=2^{cell['count'].bit_length() - 1} b={cell['bits']} {cell['regime']:>11} "
+            f"n=2^{cell['count'].bit_length() - 1} b={cell['bits']} {cell['regime']:>12} "
             f"k1={cell['k1']['median_ms']:.4f} ms  {cell['effective_gbps']:.1f} GB/s  "
             + (
                 f"{fraction:.1%} of peak"

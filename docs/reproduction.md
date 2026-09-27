@@ -189,7 +189,7 @@ just figures results/<date>-<short_rev>
 
 ### K1 bandwidth baseline
 
-`just k1-baseline --output-dir results/<date>-<short_rev>-k1-baseline` builds the CUDA executable and `build/stream_probe`, then measures the reference K1 against the device's theoretical and achievable bandwidth over the full matrix (about 15 minutes on the RTX 5060). It writes `summary.json`, `processes.csv`, `processes.json`, and `stream_probe.json`, and refuses a dirty tree or a non-empty output folder. `--allow-dirty`, `--counts`, `--bits`, and `--processes N` give non-evidence runs.
+`just k1-baseline --output-dir results/<date>-<short_rev>-k1-baseline` builds the CUDA executable and `build/stream_probe`, then measures the reference K1 against the device's theoretical and achievable bandwidth over the full matrix. It writes `summary.json`, `processes.csv`, `processes.json`, and `stream_probe.json`, and refuses a dirty tree or a non-empty output folder. `--allow-dirty`, `--counts`, `--bits`, and `--processes N` give non-evidence runs.
 
 ### Inspecting results and provenance
 
