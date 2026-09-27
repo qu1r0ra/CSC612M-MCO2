@@ -56,7 +56,7 @@ static void usage(FILE *stream)
             "expect writes little-endian FP64 per-element sums of the decoded\n"
             "values, then per-element sums of their squares.\n"
             "cpu-avx2 writes the same bytes as cpu; --threads defaults to the\n"
-            "processor count in the process affinity mask.\n");
+            "processor count in the process affinity mask (Windows) or online (elsewhere).\n");
 }
 
 static int read_file(const char *path, uint8_t **bytes, size_t *size)
@@ -659,7 +659,8 @@ static void print_bench_json(
     printf(",\"boundary\":\"%s\",\"transfer_policy\":\"%s\","
            "\"block_size\":%d,\"grid_size\":%d,",
            boundary, transfer_policy, block_size, grid_size);
-    /* The team size OpenMP actually granted, which may be below the request. */
+    /* The team size OpenMP grants a probe region; with dynamic teams off the
+       timed regions get the same size. */
     if (team_size != 0)
         printf("\"threads\":%d,", team_size);
     printf("\"prescribed_scale\":");

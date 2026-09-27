@@ -791,8 +791,7 @@ def verify_correctness(
         if avx2_comp_path.read_bytes() != cpu_comp_bytes:
             return False, {
                 "status": "failed",
-                "byte_identical_to_compress": False,
-                "cpu_cuda_byte_identical": False,
+                "cpu_avx2_byte_identical": False,
                 "error_message": "cpu-avx2 compress record is not byte-identical to CPU.",
             }
 
@@ -2150,7 +2149,8 @@ def sweep_matrix(
                         {c["threads"] for c in case_results if "threads" in c}
                     ),
                     "cpu_avx2_threads_rule": (
-                        "mco2 default: logical processors in the inherited affinity mask"
+                        "mco2 default: logical processors in the inherited affinity mask "
+                        "(Windows; online processors elsewhere)"
                     ),
                 }
                 if has_avx2

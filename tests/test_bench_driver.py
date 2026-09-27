@@ -1198,6 +1198,37 @@ def test_correctness_gate_checks_the_avx2_path_without_cuda(tmp_path):
     assert info["byte_identical_to_compress"] is True
 
 
+def test_an_avx2_mismatch_is_not_reported_as_a_cpu_cuda_divergence(tmp_path, monkeypatch):
+    values = np.linspace(-3.0, 3.0, 1287, dtype=np.float32)
+    input_path = tmp_path / "input.f32"
+    input_path.write_bytes(values.astype("<f4").tobytes())
+    real_run = subprocess.run
+
+    def corrupt_avx2(args, **kwargs):
+        result = real_run(args, **kwargs)
+        if "compress" in args and args[-1] == "cpu-avx2":
+            out = Path(args[args.index("--output") + 1])
+            data = bytearray(out.read_bytes())
+            data[-1] ^= 1
+            out.write_bytes(bytes(data))
+        return result
+
+    monkeypatch.setattr(benchmark_driver.subprocess, "run", corrupt_avx2)
+    backends = ["cpu", "cpu-avx2"]
+    passed, info = verify_correctness(
+        benchmark_driver.find_binary(ROOT),
+        input_path,
+        len(values),
+        4,
+        backends=backends,
+        paths=build_paths(backends),
+        tmp_dir=tmp_path,
+    )
+    assert not passed
+    assert info["cpu_avx2_byte_identical"] is False
+    assert "cpu_cuda_byte_identical" not in info
+
+
 def test_driver_cpu_avx2_snapshot_records_threads_and_flags(tmp_path):
     snapshot_dir = tmp_path / "avx2-snapshot"
     run_benchmark_matrix(

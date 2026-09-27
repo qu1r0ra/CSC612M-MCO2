@@ -28,13 +28,22 @@ src\quantizer_avx2.c(7) : info C5002: loop not vectorized due to reason '1200'
     assert vec_report_check.unvectorized_hot_loops(SOURCE, report) == [7]
 
 
-def test_a_loop_vectorized_in_any_inlined_copy_counts_once():
+def test_a_loop_vectorized_in_every_inlined_copy_passes():
     report = r"""src\quantizer_avx2.c(7) : info C5001: loop vectorized
 src\quantizer_avx2.c(3) : info C5001: loop vectorized
 src\quantizer_avx2.c(3) : info C5001: loop vectorized
 """
 
     assert vec_report_check.unvectorized_hot_loops(SOURCE, report) == []
+
+
+def test_a_scalar_inlined_copy_fails_the_tagged_loop():
+    report = r"""src\quantizer_avx2.c(7) : info C5001: loop vectorized
+src\quantizer_avx2.c(3) : info C5001: loop vectorized
+src\quantizer_avx2.c(3) : info C5002: loop not vectorized due to reason '1200'
+"""
+
+    assert vec_report_check.unvectorized_hot_loops(SOURCE, report) == [3]
 
 
 def test_other_files_do_not_satisfy_the_check():

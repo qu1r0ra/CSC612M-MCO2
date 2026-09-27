@@ -9,8 +9,9 @@
 /*
  * The loops are written for the auto-vectorizer. Loops tagged "avx2-hot" must
  * appear as vectorized in the compiler report (see scripts/vec_report_check.py).
- * Untagged loops either drive tagged ones chunk by chunk or are the strided
- * nibble pack and Philox word interleave, which MSVC leaves scalar.
+ * Untagged loops drive tagged ones chunk by chunk, or are scalar: the Philox
+ * word interleave, the 4-bit nibble pack, and the per-block bit reversal of
+ * the scale tree.
  * Every float operation matches quantizer.c one for one; contraction stays off.
  */
 #ifdef _MSC_VER
@@ -211,7 +212,7 @@ static void philox_chunk(uint64_t first_group, uint32_t k0, uint32_t k1,
     uint32_t c0[PHILOX_CHUNK], c1[PHILOX_CHUNK], c2[PHILOX_CHUNK], c3[PHILOX_CHUNK];
     int j, r;
 
-    for (j = 0; j < PHILOX_CHUNK; j++) {
+    for (j = 0; j < PHILOX_CHUNK; j++) { /* avx2-hot */
         uint64_t group = first_group + (uint64_t)j;
         c0[j] = (uint32_t)group;
         c1[j] = (uint32_t)(group >> 32);

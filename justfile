@@ -27,8 +27,9 @@ nvcc_flags := "-O2 -arch=" + cuda_arch + " -Isrc -Ithird_party/random123/include
 rng_sources := "src/rng_cpu.c src/rng_cuda.cu tests/test_rng.c"
 # Only the AVX2 comparator gets vector, OpenMP and non-strict FP flags. Neither
 # /fp:precise nor -ffp-contract=off contracts a*b+c, and its tests pin the bytes.
+# The file reads float storage as uint32_t, so gcc drops type-based aliasing.
 avx2_cl_flags := "/nologo /O2 /W4 /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Isrc /Ithird_party/random123/include"
-avx2_cc_flags := "-O2 -std=c11 -Wall -Wextra -Werror -mavx2 -fopenmp -ffp-contract=off -Isrc -Ithird_party/random123/include"
+avx2_cc_flags := "-O2 -std=c11 -Wall -Wextra -Werror -mavx2 -fopenmp -ffp-contract=off -fno-strict-aliasing -Isrc -Ithird_party/random123/include"
 
 # Record the CUDA toolkit and GPU used for a build
 [windows]
@@ -119,14 +120,14 @@ build-avx2-test:
     New-Item -ItemType Directory -Force build | Out-Null
     ./scripts/with-msvc.ps1 cl.exe /nologo /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /Isrc /Ithird_party/random123/include /c tests\test_quantizer_avx2.c /Fo:build\test_quantizer_avx2.obj
     ./scripts/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c src\quantizer_avx2.c /Fo:build\quantizer_avx2_test.obj
-    ./scripts/with-msvc.ps1 cl.exe /nologo /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /Isrc /Ithird_party/random123/include build\test_quantizer_avx2.obj build\quantizer_avx2_test.obj src\quantizer.c src\codec.c src\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer_avx2.exe
+    ./scripts/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /Isrc /Ithird_party/random123/include build\test_quantizer_avx2.obj build\quantizer_avx2_test.obj src\quantizer.c src\codec.c src\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer_avx2.exe
 
 [unix]
 build-avx2-test:
     mkdir -p build
     ${CC:-cc} -std=c11 -Wall -Wextra -Werror -ffp-contract=off -Isrc -Ithird_party/random123/include -c tests/test_quantizer_avx2.c -o build/test_quantizer_avx2.o
     ${CC:-cc} {{avx2_cc_flags}} -c src/quantizer_avx2.c -o build/quantizer_avx2_test.o
-    ${CC:-cc} -std=c11 -Wall -Wextra -Werror -ffp-contract=off -fopenmp -Isrc -Ithird_party/random123/include build/test_quantizer_avx2.o build/quantizer_avx2_test.o src/quantizer.c src/codec.c src/rng_cpu.c -lm -o build/test_quantizer_avx2
+    ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -fopenmp -Isrc -Ithird_party/random123/include build/test_quantizer_avx2.o build/quantizer_avx2_test.o src/quantizer.c src/codec.c src/rng_cpu.c -lm -o build/test_quantizer_avx2
 
 # Check that MSVC reports every tagged AVX2 hot loop as vectorized
 [windows]

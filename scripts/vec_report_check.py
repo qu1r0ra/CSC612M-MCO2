@@ -2,7 +2,8 @@
 
 Recompiles `src/quantizer_avx2.c` with the exact flags of the `build-cuda`
 recipe plus /Qvec-report:2, writes the report, and fails unless each loop
-tagged `/* avx2-hot */` is reported as "loop vectorized" (info C5001).
+tagged `/* avx2-hot */` is reported as "loop vectorized" (info C5001) and no
+inlined copy of it as "loop not vectorized" (info C5002).
 
     uv run python scripts/vec_report_check.py [--output build/vec_report_avx2.txt]
 """
@@ -32,13 +33,15 @@ def hot_lines(source_text: str) -> list[int]:
 
 
 def unvectorized_hot_loops(source_text: str, report_text: str) -> list[int]:
-    """Tagged lines the report does not mark as "loop vectorized"."""
+    """Tagged lines not reported as "loop vectorized" in every inlined copy."""
     pattern = re.compile(
-        rf"(?:^|[\\/\s]){re.escape(SOURCE_NAME)}\((\d+)\)\s*:\s*info C5001: loop vectorized",
+        rf"(?:^|[\\/\s]){re.escape(SOURCE_NAME)}\((\d+)\)\s*:\s*info (C500[12]):",
         re.IGNORECASE | re.MULTILINE,
     )
-    vectorized = {int(m.group(1)) for m in pattern.finditer(report_text)}
-    return [n for n in hot_lines(source_text) if n not in vectorized]
+    vectorized, scalar = set(), set()
+    for m in pattern.finditer(report_text):
+        (vectorized if m.group(2).upper() == "C5001" else scalar).add(int(m.group(1)))
+    return [n for n in hot_lines(source_text) if n not in vectorized or n in scalar]
 
 
 def main() -> int:
