@@ -87,6 +87,8 @@ build\mco2.exe compress --input input.f32 --output tensor_q4.msq --bits 4 --seed
 
 The CLI requires `--seed` for every compression command. `--words` supplies the random decisions for prescribed-scale tests. `--bits` accepts `4` or `8` (defaulting to `8`). The exact header layout, 4-bit nibble packing, pairwise FP32 reduction, and layer-2 bounds are in [the technical contract](technical-contract.md).
 
+`--backend cpu-avx2` runs the multithreaded AVX2 CPU compressor, which writes the same bytes as `--backend cpu`; `--threads N` sets its team. `just vec-report` checks that MSVC vectorizes its hot loops.
+
 The CUDA backend is selected with `--backend cuda`; it supports both 8-bit and 4-bit records (`--bits 8|4`). Optional `--block-size` and `--grid-size` configure execution geometry. Add `--timings` to emit a single JSON line to stderr with K1, K2, K3 device event times and host measured H2D/D2H copy times. For acceptance timing, use an input of `2^22` FP32 elements and record the output line with the GPU and toolkit from `just toolchain`:
 
 ```powershell

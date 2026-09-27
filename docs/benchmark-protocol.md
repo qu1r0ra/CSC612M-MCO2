@@ -267,6 +267,20 @@ This section adds paths to revision 3; it is not a new revision. The revision 3 
 - **Snapshots.** A non-pilot run of a non-dense family writes `results/<date>-<short_rev>-<family>/`. Summary rows carry `input_family` and `input_key`. `bench_report.py` reads dense cases only.
 - **Model option guard.** `--model-tensors` and `--model-limit` are rejected with any other family.
 
+### AVX2 comparator (paper extension)
+
+`--backends cpu cuda cpu-avx2` adds `cpu-avx2-optimized`, a multithreaded AVX2 build of the CPU compressor, timed on the comparator's host-host boundary. Spec: [qu1r0ra/CSC612M-MCO2-Paper#22](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/22). It answers how much of the CUDA speedup a tuned CPU recovers; it does not replace the baseline.
+
+- **Opt-in.** A default run has no AVX2 path and records the revision 3 paths and case identifiers. The AVX2 path runs right after the comparator.
+- **Baseline.** Every claim stays against the single-thread scalar comparator. The AVX2 path's ratio to the comparator, and each CUDA path's `vs_cpu_avx2` ratio, are descriptive: `descriptive` is true and the claim fields are null. The AVX2 path never raises a boundary inversion and stays out of T1 and the crossovers; `bench_report.py` draws it as an extra F1 line and a dashed F2 line.
+- **Correctness.** Its `compress` output and bench record must be byte-identical to the scalar comparator's before timing. `tests/test_quantizer_avx2.c` checks each stage against its scalar counterpart bit for bit across sizes, team sizes, zeros, subnormals, non-finite inputs, and extreme random words.
+- **Build flags.** Only `src/quantizer_avx2.c` is compiled with `/O2 /fp:precise /arch:AVX2 /openmp` (`-mavx2 -fopenmp -ffp-contract=off` elsewhere); the scalar comparator keeps `/fp:strict`. Neither setting contracts `a*b+c`. Each case records both as `build_flags.comparator_c` and `build_flags.avx2_c`.
+- **Vectorization.** `just vec-report` recompiles the AVX2 source with its build flags plus `/Qvec-report:2` and fails unless every loop tagged `/* avx2-hot */` is reported as vectorized and none of their inlined copies is reported as not vectorized. The tagged loops are the max|x| scan, the scale terms, the scale tree, the Philox counter setup and rounds, the threshold split and the code combine. The Philox word interleave, the 4-bit nibble pack, and the per-block bit reversal stay scalar, so the report does not show that the whole path is vector code. A run with the AVX2 path saves that report as `msvc_vectorization_report_avx2.txt`. The check is MSVC-only; the gcc build is covered by the byte-identity test alone.
+- **Threads.** `mco2 --threads N` (1–256, `cpu-avx2` only) sets the team; the default is the processor count in the process affinity mask on Windows (the online count elsewhere), which the driver's pinning sets to every logical processor off physical core 0 (logical 0 and 1). Each run, case and bench line records the team size it ran, and the manifest records `cpu_avx2_threads`.
+- **Trial order.** Five paths need a Williams design of 10 orders, so the default 24 trials is rejected and the run must pass `--trials` explicitly.
+- **Threat.** All-core turbo and thermal limits make a multithreaded CPU time more sensitive to machine state than the single-thread comparator. The stability readings and pilot rule apply unchanged.
+- **Evidence status.** Issue #22 adds the path, its tests, and a tiny non-evidence run only. Its timed evidence comes from the publication matrix of issue #25.
+
 ### K1 bandwidth baseline (issue #23)
 
 Spec: [qu1r0ra/CSC612M-MCO2-Paper#23](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/23). Before any K1 change, `just k1-baseline` freezes how far the reference K1 sits from the memory system, so that a later change is judged against a measured headroom rather than an assumed one.
@@ -283,6 +297,7 @@ Spec: [qu1r0ra/CSC612M-MCO2-Paper#23](https://github.com/qu1r0ra/CSC612M-MCO2-Pa
 
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.
 - The course sequential/parallel comparison is the single-thread C comparator against CUDA. Record compiler vectorization settings and identify a scalar configuration for that comparison.
+- The opt-in multithreaded AVX2 comparator (above) is an additional, descriptive CPU row; the scalar comparator stays the headline baseline.
 - The scalar Python reference is the correctness oracle; its timings may appear as an additional row but never as the headline baseline. A vectorized Python implementation may be useful for comparison.
 
 ## Timing boundaries

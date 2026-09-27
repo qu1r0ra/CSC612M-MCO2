@@ -71,6 +71,8 @@ const char *mco2_q8_status_message(mco2_q8_status status)
         return "--timings requires --backend cuda";
     case MCO2_Q8_ERR_CLOCK:
         return "high-resolution monotonic clock failed";
+    case MCO2_Q8_ERR_AVX2_UNAVAILABLE:
+        return "cpu-avx2 backend needs a processor and operating system with AVX2 enabled";
     }
     return "unknown error";
 }

@@ -703,3 +703,126 @@ def test_expect_rejects_invalid_arguments(tmp_path, extra):
     assert result.returncode != 0
     assert result.stdout == ""
     assert not output_path.exists()
+
+
+def _avx2_values(count: int) -> np.ndarray:
+    rng = np.random.default_rng(612)
+    values = rng.standard_normal(count).astype(np.float32)
+    values *= np.exp2(rng.integers(-20, 20, count)).astype(np.float32)
+    values[::97] = 0.0
+    values[1::89] = -0.0
+    return values
+
+
+@pytest.mark.parametrize("bits", ["4", "8"])
+@pytest.mark.parametrize("count", [1, 7, 1287, 65549])
+@pytest.mark.parametrize("threads", [None, "1", "3", "16"])
+def test_cpu_avx2_compress_is_byte_identical_to_cpu(tmp_path, bits, count, threads):
+    values = _avx2_values(count)
+    common = ("--bits", bits, "--tensor-id", "5", "--invocation-id", "9")
+    scalar = _compress(tmp_path, values, seed=77, extra=common)
+    avx2_extra = common + ("--backend", "cpu-avx2")
+    if threads is not None:
+        avx2_extra += ("--threads", threads)
+    assert _compress(tmp_path, values, seed=77, extra=avx2_extra) == scalar
+
+
+def test_cpu_avx2_prescribed_and_empty_records_match_cpu(tmp_path):
+    values = _avx2_values(300)
+    prescribed = ("--scale", "0.25")
+    assert _compress(tmp_path, values, extra=prescribed + ("--backend", "cpu-avx2")) == (
+        _compress(tmp_path, values, extra=prescribed)
+    )
+    empty = np.zeros(0, dtype=np.float32)
+    assert _compress(tmp_path, empty, extra=("--backend", "cpu-avx2")) == _compress(tmp_path, empty)
+
+
+def test_cpu_avx2_bench_records_threads_and_base_record(tmp_path):
+    values = _avx2_values(1000)
+    input_path = tmp_path / "bench-input.f32"
+    record_path = tmp_path / "bench-record.msq"
+    _write_f32(input_path, values)
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(record_path),
+        "--seed",
+        "812",
+        "--backend",
+        "cpu-avx2",
+        "--threads",
+        "3",
+        "--warmup",
+        "1",
+        "--reps",
+        "2",
+    )
+
+    assert result.returncode == 0, result.stderr
+    configuration = json.loads(result.stdout)["configuration"]
+    assert configuration["backend"] == "cpu-avx2"
+    assert configuration["boundary"] == "host-host"
+    assert configuration["transfer_policy"] == "none"
+    assert configuration["threads"] == 3
+    assert record_path.read_bytes() == _compress(tmp_path, values, seed=812)
+
+
+def test_cpu_bench_omits_threads(tmp_path):
+    input_path = tmp_path / "input.f32"
+    _write_f32(input_path, np.ones(3, dtype=np.float32))
+    result = _run("bench", "--input", str(input_path), "--seed", "1", "--reps", "1")
+
+    assert result.returncode == 0, result.stderr
+    assert "threads" not in json.loads(result.stdout)["configuration"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--threads", "2"),
+        ("--backend", "cpu-avx2", "--threads", "0"),
+        ("--backend", "cpu-avx2", "--threads", "257"),
+        ("--backend", "cpu-avx2", "--threads", "x"),
+    ],
+)
+def test_threads_is_validated_and_avx2_only(tmp_path, arguments):
+    input_path = tmp_path / "input.f32"
+    output_path = tmp_path / "record.msq"
+    _write_f32(input_path, np.ones(3, dtype=np.float32))
+    result = _run(
+        "compress",
+        "--input",
+        str(input_path),
+        "--output",
+        str(output_path),
+        "--seed",
+        "1",
+        *arguments,
+    )
+
+    assert result.returncode != 0
+    assert "invalid argument" in result.stderr
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize("boundary", ["host-host", "gpu-origin", "resident"])
+def test_cpu_avx2_bench_rejects_boundary(tmp_path, boundary):
+    input_path = tmp_path / "input.f32"
+    _write_f32(input_path, np.ones(3, dtype=np.float32))
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--seed",
+        "1",
+        "--backend",
+        "cpu-avx2",
+        "--boundary",
+        boundary,
+    )
+
+    assert result.returncode != 0
+    assert "invalid argument" in result.stderr
+    assert result.stdout == ""
