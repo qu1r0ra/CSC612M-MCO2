@@ -1,0 +1,287 @@
+{
+  "created_at_utc": "2026-09-27T04:10:44.303109+00:00",
+  "git_provenance": {
+    "code_revision": "a7e3b96d86a5e055421e7007b94056379d6dec0d",
+    "code_revision_short": "a7e3b96",
+    "git_dirty": false,
+    "dirty_files": []
+  },
+  "evidence": true,
+  "non_evidence_reasons": [],
+  "seeds": 4096,
+  "seed_start": 1,
+  "sigma": 5.0,
+  "gate_rule": "each element with realised rounding probability q strictly between 0 and 1 satisfies |mean - E| <= 5 * delta * sqrt(q * (1 - q) / T), where E is the decoded expectation (1 - q) * dec(l) + q * dec(l + 1), delta = |dec(l + 1) - dec(l)|, l = floor(a), a = min(|x| / scale * s, s) in FP32, and q = floor(fl32(p * 2^32)) / 2^32 is the Bernoulli probability the rounding comparison realises for p = a - l; every element with q = 0 has mean exactly dec(l)",
+  "variance": "reported as the pooled ratio of observed to expected variance; not gated",
+  "numpy_version": "2.4.6",
+  "figure": "f_unbiasedness.png",
+  "all_passed": true,
+  "cases": [
+    {
+      "count": 1024,
+      "scale": 36.30843734741211,
+      "scale_bits": "0x42113bd7",
+      "signed_limit": 7,
+      "stochastic_elements": 1022,
+      "deterministic_elements": 2,
+      "deterministic_exact": true,
+      "max_error_over_bound": 0.7076271174021688,
+      "elements_over_bound": 0,
+      "max_abs_z": 3.538135587010844,
+      "variance_ratio_pooled": 0.9995576479960534,
+      "max_expectation_gap_steps": 3.082182425369685e-08,
+      "passed": true,
+      "input": "course",
+      "bits": 4,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "course",
+        "generator": "fixed construction: signed zeros, +/-2, +/-2k/7, +/-2k/127, and a ramp inside +/-1.95",
+        "sha256": "2dbfcb85f19f7a5e0ffa4ee6e7ab1b84750cf40e9f27e6348ca1c70b76eb29e6"
+      }
+    },
+    {
+      "count": 1024,
+      "scale": 36.30843734741211,
+      "scale_bits": "0x42113bd7",
+      "signed_limit": 127,
+      "stochastic_elements": 1022,
+      "deterministic_elements": 2,
+      "deterministic_exact": true,
+      "max_error_over_bound": 0.6543148488492319,
+      "elements_over_bound": 0,
+      "max_abs_z": 3.2715742442461595,
+      "variance_ratio_pooled": 0.9994781719839674,
+      "max_expectation_gap_steps": 5.678190016296917e-07,
+      "passed": true,
+      "input": "course",
+      "bits": 8,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "course",
+        "generator": "fixed construction: signed zeros, +/-2, +/-2k/7, +/-2k/127, and a ramp inside +/-1.95",
+        "sha256": "2dbfcb85f19f7a5e0ffa4ee6e7ab1b84750cf40e9f27e6348ca1c70b76eb29e6"
+      }
+    },
+    {
+      "count": 16384,
+      "scale": 128.42108154296875,
+      "scale_bits": "0x43006bcc",
+      "signed_limit": 7,
+      "stochastic_elements": 16384,
+      "deterministic_elements": 0,
+      "deterministic_exact": true,
+      "max_error_over_bound": 0.8368536053360565,
+      "elements_over_bound": 0,
+      "max_abs_z": 4.184268026680282,
+      "variance_ratio_pooled": 1.00080879931146,
+      "max_expectation_gap_steps": 1.5361778898525292e-08,
+      "passed": true,
+      "input": "dense_n16384",
+      "bits": 4,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "dense",
+        "generator": "numpy.random.default_rng",
+        "bit_generator": "PCG64",
+        "seed": 2026,
+        "draw": "first normal draw of 16384 values, cast to FP32",
+        "sha256": "c14b9da791244e154b05e6821b9e97d29080403ed1a1f6736dd96ba7812117c1"
+      }
+    },
+    {
+      "count": 16384,
+      "scale": 128.42108154296875,
+      "scale_bits": "0x43006bcc",
+      "signed_limit": 127,
+      "stochastic_elements": 16384,
+      "deterministic_elements": 0,
+      "deterministic_exact": true,
+      "max_error_over_bound": 0.9150391295339854,
+      "elements_over_bound": 0,
+      "max_abs_z": 4.5751956476699265,
+      "variance_ratio_pooled": 0.9996994896006169,
+      "max_expectation_gap_steps": 3.05198102492601e-07,
+      "passed": true,
+      "input": "dense_n16384",
+      "bits": 8,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "dense",
+        "generator": "numpy.random.default_rng",
+        "bit_generator": "PCG64",
+        "seed": 2026,
+        "draw": "first normal draw of 16384 values, cast to FP32",
+        "sha256": "c14b9da791244e154b05e6821b9e97d29080403ed1a1f6736dd96ba7812117c1"
+      }
+    },
+    {
+      "count": 16384,
+      "scale": 40.85500717163086,
+      "scale_bits": "0x42236b87",
+      "signed_limit": 7,
+      "stochastic_elements": 1629,
+      "deterministic_elements": 14755,
+      "deterministic_exact": true,
+      "max_error_over_bound": 0.8401633375419613,
+      "elements_over_bound": 0,
+      "max_abs_z": 4.200816687709806,
+      "variance_ratio_pooled": 0.999085155859363,
+      "max_expectation_gap_steps": 7.910633136868185e-08,
+      "passed": true,
+      "input": "sparse_n16384",
+      "bits": 4,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "sparse",
+        "seed": 2026,
+        "mask_seed": 1021,
+        "zero_fraction_target": 0.9,
+        "zero_fraction_realised": 0.90057373046875,
+        "sha256": "7a40d3b34f9daf5257e9edbbdffbf8a0cbda628c9a0158905b0161eceed9af1c"
+      }
+    },
+    {
+      "count": 16384,
+      "scale": 40.85500717163086,
+      "scale_bits": "0x42236b87",
+      "signed_limit": 127,
+      "stochastic_elements": 1629,
+      "deterministic_elements": 14755,
+      "deterministic_exact": true,
+      "max_error_over_bound": 0.6466997674689837,
+      "elements_over_bound": 0,
+      "max_abs_z": 3.2334988373449187,
+      "variance_ratio_pooled": 0.9991540276202747,
+      "max_expectation_gap_steps": 1.0994262819852367e-06,
+      "passed": true,
+      "input": "sparse_n16384",
+      "bits": 8,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "sparse",
+        "seed": 2026,
+        "mask_seed": 1021,
+        "zero_fraction_target": 0.9,
+        "zero_fraction_realised": 0.90057373046875,
+        "sha256": "7a40d3b34f9daf5257e9edbbdffbf8a0cbda628c9a0158905b0161eceed9af1c"
+      }
+    },
+    {
+      "count": 36864,
+      "scale": 11.327852249145508,
+      "scale_bits": "0x41353ee2",
+      "signed_limit": 7,
+      "stochastic_elements": 36864,
+      "deterministic_elements": 0,
+      "deterministic_exact": true,
+      "max_error_over_bound": 0.8949166940451545,
+      "elements_over_bound": 0,
+      "max_abs_z": 4.474583470225772,
+      "variance_ratio_pooled": 0.9997394089869508,
+      "max_expectation_gap_steps": 1.689200709868779e-08,
+      "passed": true,
+      "input": "model_layer1.0.conv1.weight",
+      "bits": 4,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "model",
+        "model": "resnet18-cifar10",
+        "tensor_name": "layer1.0.conv1.weight",
+        "tensor_shape": [
+          64,
+          64,
+          3,
+          3
+        ],
+        "seed": [
+          2026,
+          3
+        ],
+        "sha256": "1e64c93c29b0301c0d05dd21150278360fa8cbb818cb4dc012443cbc272f03fa"
+      }
+    },
+    {
+      "count": 36864,
+      "scale": 11.327852249145508,
+      "scale_bits": "0x41353ee2",
+      "signed_limit": 127,
+      "stochastic_elements": 36864,
+      "deterministic_elements": 0,
+      "deterministic_exact": true,
+      "max_error_over_bound": 0.8406662682531798,
+      "elements_over_bound": 0,
+      "max_abs_z": 4.2033313412658995,
+      "variance_ratio_pooled": 0.9996849905168439,
+      "max_expectation_gap_steps": 2.5086247169673577e-07,
+      "passed": true,
+      "input": "model_layer1.0.conv1.weight",
+      "bits": 8,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "model",
+        "model": "resnet18-cifar10",
+        "tensor_name": "layer1.0.conv1.weight",
+        "tensor_shape": [
+          64,
+          64,
+          3,
+          3
+        ],
+        "seed": [
+          2026,
+          3
+        ],
+        "sha256": "1e64c93c29b0301c0d05dd21150278360fa8cbb818cb4dc012443cbc272f03fa"
+      }
+    }
+  ]
+}
