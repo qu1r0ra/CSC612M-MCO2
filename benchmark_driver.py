@@ -77,6 +77,11 @@ MAX_PERMUTATION_PATHS = 4
 # Issue #22: the opt-in multithreaded AVX2 comparator. It is timed on the same
 # host-host boundary as the scalar comparator, which stays every claim's baseline.
 HOST_BOUNDARIES = ("comparator", "optimized")
+K1_VARIANTS = ("reference", "optimized")
+
+
+def k1_args(backend: str, k1: str) -> list[str]:
+    return ["--k1", k1] if backend == "cuda" else []
 
 
 @dataclass(frozen=True)
@@ -657,6 +662,7 @@ def verify_correctness(
     invocation_id: int = 0,
     tmp_dir: Path,
     force_fail: bool = False,
+    k1: str = "reference",
 ) -> tuple[bool, dict[str, Any]]:
     """Gating check before timing each case.
 
@@ -815,6 +821,7 @@ def verify_correctness(
                 str(invocation_id),
                 "--backend",
                 "cuda",
+                *k1_args("cuda", k1),
             ],
             capture_output=True,
             text=True,
@@ -851,6 +858,7 @@ def verify_correctness(
                 str(invocation_id),
                 "--backend",
                 path.backend,
+                *k1_args(path.backend, k1),
                 *path.extra_args,
                 "--warmup",
                 "0",
@@ -1440,7 +1448,9 @@ def case_order(keys: Sequence[Any], bit_widths: Sequence[int], seed: int) -> lis
     return [cases[i] for i in permutation]
 
 
-def warm_up_gpu(binary: Path, input_path: Path, seconds: float) -> dict[str, Any]:
+def warm_up_gpu(
+    binary: Path, input_path: Path, seconds: float, k1: str = "reference"
+) -> dict[str, Any]:
     """Run the resident CUDA path untimed until `seconds` have passed."""
     start = time.monotonic()
     processes = 0
@@ -1450,6 +1460,7 @@ def warm_up_gpu(binary: Path, input_path: Path, seconds: float) -> dict[str, Any
             input_path,
             bits=8,
             backend="cuda",
+            k1=k1,
             extra_args=["--boundary", "resident"],
             seed=DEFAULT_COMPRESSION_SEED,
             warmups=0,
@@ -1494,6 +1505,7 @@ def run_bench_process(
     seed: int,
     warmups: int,
     reps: int,
+    k1: str = "reference",
 ) -> tuple[dict[str, Any] | None, str | None]:
     bench_cmd = [
         str(binary),
@@ -1510,6 +1522,7 @@ def run_bench_process(
         "0",
         "--backend",
         backend,
+        *k1_args(backend, k1),
         "--warmup",
         str(warmups),
         "--reps",
@@ -1643,7 +1656,10 @@ def run_benchmark_matrix(
     input_family: str = "dense",
     model_tensors: str | None = None,
     model_limit: int | None = None,
+    k1: str = "reference",
 ) -> Path:
+    if k1 not in K1_VARIANTS:
+        raise ValueError(f"unknown K1 variant {k1!r}; choose from {K1_VARIANTS}")
     if input_family not in INPUT_FAMILIES:
         raise ValueError(f"unknown input family {input_family!r}; choose from {INPUT_FAMILIES}")
     if input_family != "model" and (model_tensors is not None or model_limit is not None):
@@ -1756,6 +1772,7 @@ def run_benchmark_matrix(
             input_family=input_family,
             model_tensors=model_tensors,
             model_limit=model_limit,
+            k1=k1,
         )
 
 
@@ -1784,6 +1801,7 @@ def sweep_matrix(
     input_family: str = "dense",
     model_tensors: str | None = None,
     model_limit: int | None = None,
+    k1: str = "reference",
 ) -> Path:
     binary = find_binary(root)
     toolchain_prov = collect_hardware_and_toolchain(root)
@@ -1835,7 +1853,7 @@ def sweep_matrix(
     gpu_warmup = None
     gpu_state_after_warmup = None
     if "cuda" in backends and gpu_warmup_seconds > 0:
-        gpu_warmup = warm_up_gpu(binary, input_files[largest_input], gpu_warmup_seconds)
+        gpu_warmup = warm_up_gpu(binary, input_files[largest_input], gpu_warmup_seconds, k1)
         gpu_state_after_warmup = query_gpu_state()
 
     # 3. Benchmark cases
@@ -1860,6 +1878,7 @@ def sweep_matrix(
             invocation_id=0,
             tmp_dir=temp_dir,
             force_fail=force_fail,
+            k1=k1,
         )
 
         cases: list[dict[str, Any]] = []
@@ -1875,6 +1894,7 @@ def sweep_matrix(
                     "timing_boundary": path.boundary,
                     "transfer_policy": path.policy,
                     "path_label": path.label,
+                    "configuration": {"k1": k1 if path.backend == "cuda" else None},
                     "seed": compression_seed,
                     "tensor_id": 0,
                     "invocation_id": 0,
@@ -1908,7 +1928,7 @@ def sweep_matrix(
         if passed and "cuda" in backends and case_warmup_seconds > 0:
             # Restore GPU clocks after the untimed correctness gate and any
             # long CPU processes of the previous case.
-            case_warmup = warm_up_gpu(binary, input_path, case_warmup_seconds)
+            case_warmup = warm_up_gpu(binary, input_path, case_warmup_seconds, k1)
             case_warmup["gpu_state_after"] = query_gpu_state()
             for case in cases:
                 case["case_warmup"] = case_warmup
@@ -1926,6 +1946,7 @@ def sweep_matrix(
                     seed=compression_seed,
                     warmups=warmups,
                     reps=reps,
+                    k1=k1,
                 )
                 if payload is None:
                     case["correctness"] = {"status": "failed", "error_message": error}
@@ -1959,11 +1980,17 @@ def sweep_matrix(
                         seed=compression_seed,
                         warmups=case["warmup"],
                         reps=reps,
+                        k1=k1,
                     )
                     if payload is None:
                         case["correctness"] = {"status": "failed", "error_message": error}
                         continue
                     configuration = payload.get("configuration", {})
+                    if path.backend == "cuda" and configuration.get("k1") != k1:
+                        raise RuntimeError(
+                            f"{case['case_id']}: mco2 bench ran K1 "
+                            f"{configuration.get('k1')!r}, expected {k1!r}"
+                        )
                     if configuration.get("transfer_policy") != path.policy:
                         raise RuntimeError(
                             f"{case['case_id']}: mco2 bench ran transfer policy "
@@ -2126,6 +2153,7 @@ def sweep_matrix(
             "end": gpu_state_end,
         },
         "matrix_parameters": {
+            "k1": k1,
             "input_family": input_family,
             "counts": list(counts) if input_family != "model" else list(input_counts.values()),
             "model_tensors": (model_tensors or "distinct") if input_family == "model" else None,
@@ -2281,6 +2309,7 @@ def main() -> None:
             "descriptive AVX2 comparator path"
         ),
     )
+    parser.add_argument("--k1", choices=K1_VARIANTS, default="reference", help="CUDA K1 variant")
     parser.add_argument(
         "--boundaries",
         type=str,
@@ -2369,6 +2398,7 @@ def main() -> None:
             input_family=args.input_family,
             model_tensors=args.model_tensors,
             model_limit=args.model_limit,
+            k1=args.k1,
         )
         print(f"Benchmark completed successfully. Snapshot written to: {snapshot_dir}")
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:

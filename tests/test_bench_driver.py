@@ -74,6 +74,7 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
     assert manifest["manifest_version"] == "3.1"
     assert manifest["transfer_policies"] == ["pageable"]
     assert manifest["matrix_parameters"]["paths"] == ["cpu-comparator"]
+    assert manifest["matrix_parameters"]["k1"] == "reference"
     assert manifest["matrix_parameters"]["trial_design"] == "all-permutations"
     assert len(manifest["cases"]) == 2  # 1 size * 2 bit widths * 1 CPU path
     assert manifest["all_cases_passed"] is True
@@ -104,6 +105,41 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
         assert row["backend"] == "cpu"
         assert row["correctness"] == "passed"
         assert float(row["speedup_vs_c"]) == 1.0
+
+
+def test_driver_rejects_unknown_k1_variant(tmp_path):
+    with pytest.raises(ValueError, match="unknown K1 variant"):
+        run_benchmark_matrix(root=ROOT, output_dir=tmp_path / "invalid", k1="other")
+
+
+@CUDA_SKIP
+def test_optimized_k1_reaches_all_cuda_paths_and_is_recorded(tmp_path):
+    snapshot = run_benchmark_matrix(
+        root=ROOT,
+        output_dir=tmp_path / "optimized-k1",
+        counts=[1024],
+        bit_widths=[8],
+        backends=["cpu", "cpu-avx2", "cuda"],
+        boundaries=["gpu-origin"],
+        transfer_policies=["pageable", "pinned"],
+        warmups=1,
+        reps=2,
+        trials=10,
+        gpu_warmup_seconds=0,
+        case_warmup_seconds=0,
+        in_process_warmup_seconds=0,
+        allow_dirty=True,
+        readiness_facts=READY_FACTS,
+        k1="optimized",
+    )
+    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["matrix_parameters"]["k1"] == "optimized"
+    assert len(manifest["matrix_parameters"]["paths"]) == 10
+    assert manifest["all_cases_passed"] is True
+    for case_id in manifest["cases"]:
+        case = json.loads((snapshot / f"{case_id}.json").read_text(encoding="utf-8"))
+        expected = "optimized" if case["backend"] == "cuda" else None
+        assert case["configuration"]["k1"] == expected
 
 
 @CUDA_SKIP
@@ -159,6 +195,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert "2048" in gpu_state["warmup"]["workload"]
     assert gpu_state["after_warmup"] is not None
     params = manifest["matrix_parameters"]
+    assert params["k1"] == "reference"
     assert params["case_order_seed"] == 7
     assert params["case_order"] == [
         {"count": c, "bits": b} for c, b in case_order([1024, 2048], [4, 8], 7)
@@ -239,6 +276,9 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         expected_policy = "pageable" if case_data["timing_boundary"] == "host-origin" else "none"
         assert case_data["transfer_policy"] == expected_policy
         assert case_data["path_label"] == f"{case_data['backend']}-{case_data['timing_boundary']}"
+        assert case_data["configuration"]["k1"] == (
+            "reference" if case_data["backend"] == "cuda" else None
+        )
         probe = case_data["in_process_warmup"]
         assert probe["target_seconds"] == 0.01
         assert probe["probe_warmup"] == 1
