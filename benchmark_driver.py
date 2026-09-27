@@ -273,6 +273,16 @@ def find_binary(root: Path) -> Path:
     return path
 
 
+def query_device_attributes(root: Path) -> dict[str, Any] | None:
+    """Read device constants without running the streaming probe."""
+
+    name = "stream_probe.exe" if os.name == "nt" else "stream_probe"
+    path = root / "build" / name
+    if not path.is_file():
+        return None
+    return json.loads(run_command([str(path), "--device-only"], root))
+
+
 def run_command(args: Sequence[str], cwd: Path) -> str:
     result = subprocess.run(
         args,
@@ -1809,6 +1819,8 @@ def sweep_matrix(
     host_tokens = build_prov.pop("_host_tokens")
     avx2_tokens = build_prov.pop("_avx2_tokens")
     has_avx2 = any(path.backend == "cpu-avx2" for path in paths)
+    publication = len(paths) == 10 and k1 == "optimized"
+    device_attributes = query_device_attributes(root) if publication else None
     gpu_state_start = query_gpu_state() if "cuda" in backends else None
 
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -2138,6 +2150,7 @@ def sweep_matrix(
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,
         "hardware": toolchain_prov["hardware"],
+        **({"device": device_attributes} if device_attributes is not None else {}),
         "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
         "build_flags": build_prov,
         "transfer_policies": list(transfer_policies),

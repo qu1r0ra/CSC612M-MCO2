@@ -500,9 +500,25 @@ def crossover_lines(crossovers: dict[tuple[int, str], dict[str, Any]]) -> list[s
 
 
 def render_report(
-    snapshot: Path, output_dir: Path | None = None, stage_counts=STAGE_COUNTS
+    snapshot: Path,
+    output_dir: Path | None = None,
+    stage_counts=STAGE_COUNTS,
+    *,
+    k1_ab: Path | None = None,
+    second_platform: Path | None = None,
 ) -> dict[str, Any]:
     manifest, cases = load_snapshot(snapshot)
+    if any(
+        case.get("input_family", "dense") != "dense"
+        or case.get("timing_boundary") == "gpu-origin"
+        or case.get("transfer_policy") == "pinned"
+        for case in cases
+    ):
+        from publication_report import render_publication_report
+
+        return render_publication_report(
+            snapshot, manifest, cases, output_dir, k1_ab, second_platform
+        )
     out = output_dir or snapshot
     out.mkdir(parents=True, exist_ok=True)
     indexed = index_cases(cases)
@@ -579,13 +595,20 @@ def render_report(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Render F1-F3, T1 and the crossover report")
+    parser = argparse.ArgumentParser(description="Render benchmark snapshot figures and report")
     parser.add_argument("snapshot", type=Path, help="Snapshot directory under results/")
     parser.add_argument(
         "--output-dir", type=Path, default=None, help="Write here instead of the snapshot"
     )
+    parser.add_argument("--k1-ab", type=Path, help="K1 A/B snapshot for publication bandwidth")
+    parser.add_argument("--second-platform", type=Path, help="optional second-platform snapshot")
     args = parser.parse_args()
-    result = render_report(args.snapshot, args.output_dir)
+    result = render_report(
+        args.snapshot,
+        args.output_dir,
+        k1_ab=args.k1_ab,
+        second_platform=args.second_platform,
+    )
     for path in [*result["figures"], result["report"]]:
         print(path)
 
