@@ -801,3 +801,200 @@ def test_cuda_expect_matches_cpu_bytes(tmp_path, bits):
         assert json.loads(result.stdout)["backend"] == backend
         outputs[backend] = output_path.read_bytes()
     assert outputs["cuda"] == outputs["cpu"]
+
+
+def _k1_values(name: str) -> np.ndarray:
+    rng = np.random.default_rng(2323)
+    if name == "normal":
+        return rng.normal(size=70001).astype(np.float32)
+    if name == "zeros":
+        return np.zeros(4099, dtype=np.float32)
+    if name == "signed-zeros":
+        return np.asarray([-0.0, 0.0] * 700, dtype=np.float32)
+    if name == "subnormal":
+        tiny = np.float32(1.0e-45) * rng.integers(1, 1000, size=3001).astype(np.float32)
+        return (tiny * rng.choice([-1.0, 1.0], size=3001)).astype(np.float32)
+    if name == "large":
+        return (rng.uniform(0.5, 1.0, size=5003) * 1.0e20).astype(np.float32)
+    if name == "wide-range":
+        exponents = rng.uniform(-40.0, 30.0, size=9001)
+        signs = rng.choice([-1.0, 1.0], size=9001)
+        return (signs * np.power(10.0, exponents)).astype(np.float32)
+    if name == "one-spike":
+        values = np.full(65539, 1.0e-3, dtype=np.float32)
+        values[40000] = -7.0
+        return values
+    raise ValueError(name)
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+@pytest.mark.parametrize(
+    "count",
+    [1, 3, 4, 5, 7, 8, 255, 256, 257, 1025, 2047, 2048, 2049, 65539, 524289, 1048581],
+)
+def test_cuda_k1_optimized_record_is_byte_identical_to_reference(tmp_path, bits, count):
+    values = np.random.default_rng(count).normal(size=count).astype(np.float32)
+    extra = ("--bits", str(bits))
+    ref_res, ref_rec = _compress(tmp_path, values, backend="cuda", seed=7, extra=extra)
+    opt_res, opt_rec = _compress(
+        tmp_path, values, backend="cuda", seed=7, extra=(*extra, "--k1", "optimized")
+    )
+    assert ref_res.returncode == 0, ref_res.stderr
+    assert opt_res.returncode == 0, opt_res.stderr
+    assert opt_rec == ref_rec
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+@pytest.mark.parametrize(
+    "family",
+    ["normal", "zeros", "signed-zeros", "subnormal", "large", "wide-range", "one-spike"],
+)
+def test_cuda_k1_optimized_matches_reference_on_edge_families(tmp_path, bits, family):
+    values = _k1_values(family)
+    extra = ("--bits", str(bits))
+    ref_res, ref_rec = _compress(tmp_path, values, backend="cuda", extra=extra)
+    opt_res, opt_rec = _compress(
+        tmp_path, values, backend="cuda", extra=(*extra, "--k1", "optimized")
+    )
+    cpu_res, cpu_rec = _compress(tmp_path, values, backend="cpu", extra=extra)
+    assert ref_res.returncode == opt_res.returncode == cpu_res.returncode == 0
+    assert opt_rec == ref_rec == cpu_rec
+
+
+@pytest.mark.parametrize(
+    "values,message",
+    [
+        (np.asarray([1.0, np.nan, 2.0], dtype=np.float32), "non-finite"),
+        (np.asarray([np.inf] + [1.0] * 5000, dtype=np.float32), "non-finite"),
+        (np.asarray([1.0] * 5000 + [-np.inf], dtype=np.float32), "non-finite"),
+        (np.asarray([3.0e38, 3.0e38], dtype=np.float32), "scale overflow"),
+        (np.full(70001, 3.0e38, dtype=np.float32), "scale overflow"),
+    ],
+)
+def test_cuda_k1_optimized_rejects_like_reference(tmp_path, values, message):
+    ref_res, ref_rec = _compress(tmp_path, values, backend="cuda")
+    opt_res, opt_rec = _compress(tmp_path, values, backend="cuda", extra=("--k1", "optimized"))
+    assert ref_res.returncode != 0 and opt_res.returncode != 0
+    assert message in opt_res.stderr.lower()
+    assert opt_res.stderr == ref_res.stderr
+    assert ref_rec is None and opt_rec is None
+
+
+@pytest.mark.parametrize("grid_size", [1, 2, 7, 13, 64, 256, 1024, 65535])
+def test_cuda_k1_optimized_grid_size_independence(tmp_path, grid_size: int):
+    values = np.random.default_rng(778).normal(size=1048581).astype(np.float32)
+    base_res, base_rec = _compress(tmp_path, values, backend="cuda", seed=999)
+    grid_res, grid_rec = _compress(
+        tmp_path,
+        values,
+        backend="cuda",
+        seed=999,
+        extra=("--k1", "optimized", "--grid-size", str(grid_size)),
+    )
+    assert base_res.returncode == 0, base_res.stderr
+    assert grid_res.returncode == 0, grid_res.stderr
+    assert grid_rec == base_rec
+
+
+def test_cuda_k1_reference_is_the_default(tmp_path):
+    values = np.random.default_rng(5).normal(size=1025).astype(np.float32)
+    default_res, default_rec = _compress(tmp_path, values, backend="cuda")
+    ref_res, ref_rec = _compress(tmp_path, values, backend="cuda", extra=("--k1", "reference"))
+    assert default_res.returncode == ref_res.returncode == 0
+    assert ref_rec == default_rec
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+@pytest.mark.parametrize("boundary", ["resident", "resident-graph", "host-origin", "gpu-origin"])
+@pytest.mark.parametrize("grid", [(), ("--grid-size", "7")])
+def test_cuda_bench_k1_optimized_records_variant_and_same_record(tmp_path, bits, boundary, grid):
+    values = np.random.default_rng(1616).normal(size=70001).astype(np.float32)
+    input_path = tmp_path / "bench-input.f32"
+    _write_values(input_path, values)
+    records = {}
+    for variant in ("reference", "optimized"):
+        record_path = tmp_path / f"bench-{variant}.msq"
+        result = _run(
+            "bench",
+            "--input",
+            str(input_path),
+            "--record-output",
+            str(record_path),
+            "--seed",
+            "615",
+            "--backend",
+            "cuda",
+            "--boundary",
+            boundary,
+            "--bits",
+            str(bits),
+            "--warmup",
+            "1",
+            "--reps",
+            "2",
+            "--k1",
+            variant,
+            *grid,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["configuration"]["k1"] == variant
+        records[variant] = record_path.read_bytes()
+    compress_res, compress_rec = _compress(
+        tmp_path, values, backend="cuda", seed=615, extra=("--bits", str(bits))
+    )
+    assert compress_res.returncode == 0
+    assert records["optimized"] == records["reference"] == compress_rec
+
+
+def test_cuda_bench_records_reference_k1_by_default(tmp_path):
+    input_path = tmp_path / "bench-input.f32"
+    _write_values(input_path, np.ones(9, dtype=np.float32))
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--seed",
+        "1",
+        "--backend",
+        "cuda",
+        "--warmup",
+        "0",
+        "--reps",
+        "1",
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["configuration"]["k1"] == "reference"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ("--backend", "cpu", "--k1", "optimized"),
+        ("--backend", "cpu", "--k1", "reference"),
+        ("--backend", "cpu-avx2", "--k1", "optimized"),
+        ("--backend", "cuda", "--k1", "fast"),
+        ("--backend", "cuda", "--k1", ""),
+    ],
+)
+def test_k1_option_needs_cuda_and_a_known_variant(tmp_path, extra):
+    values = np.ones(3, dtype=np.float32)
+    input_path = tmp_path / "input.f32"
+    output_path = tmp_path / "record.msq"
+    _write_values(input_path, values)
+    compress = _run(
+        "compress",
+        "--input",
+        str(input_path),
+        "--output",
+        str(output_path),
+        "--seed",
+        "1",
+        *extra,
+    )
+    assert compress.returncode != 0
+    assert "invalid argument" in compress.stderr.lower()
+    assert not output_path.exists()
+    bench = _run("bench", "--input", str(input_path), "--seed", "1", *extra)
+    assert bench.returncode != 0
+    assert "invalid argument" in bench.stderr.lower()
+    assert bench.stdout == ""

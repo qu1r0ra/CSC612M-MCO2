@@ -248,6 +248,180 @@ __global__ static void pack_q4_kernel(const uint8_t *codes, uint64_t count,
     }
 }
 
+/*
+ * Optimized K1 (issue #23). The max is order-free, so each thread scans float4
+ * words grid-stride and each block keeps one partial. The sum must reproduce
+ * the reference tree bit for bit: one perfect binary tree of adjacent pairs
+ * over padded_count * 256 leaves, zero-padded. A warp builds one 256-leaf
+ * subtree: each lane adds its 8 contiguous leaves as a 3-level tree, and
+ * shuffles with offsets 1, 2, 4, 8, 16 add the next 5 levels. Each launch above
+ * that reduces 2048 inputs per block instead of one level per launch.
+ */
+#define MCO2_CUDA_WARP 32
+#define MCO2_CUDA_K1_LEAVES_PER_LANE 8
+#define MCO2_CUDA_K1_TREE_SPAN 2048
+#define MCO2_CUDA_K1_MAX_AUTO_GRID 1024
+
+/* The optimized kernels size their warp arrays for 256-thread blocks. */
+static_assert(MCO2_CUDA_REDUCTION_THREADS % MCO2_CUDA_WARP == 0 &&
+                  MCO2_CUDA_REDUCTION_THREADS / MCO2_CUDA_WARP * MCO2_CUDA_K1_LEAVES_PER_LANE <=
+                      MCO2_CUDA_K1_TREE_SPAN,
+              "optimized K1 geometry");
+
+static int k1_variant = MCO2_CUDA_K1_REFERENCE;
+
+extern "C" int mco2_cuda_select_k1(int variant)
+{
+    if (variant != MCO2_CUDA_K1_REFERENCE && variant != MCO2_CUDA_K1_OPTIMIZED)
+        return (int)cudaErrorInvalidValue;
+    k1_variant = variant;
+    return (int)cudaSuccess;
+}
+
+__device__ static void absorb_max(float value, float *local_max,
+                                  uint32_t *local_invalid)
+{
+    if (!isfinite(value)) {
+        *local_invalid = 1;
+        return;
+    }
+    const float magnitude = fabsf(value);
+    if (magnitude > *local_max)
+        *local_max = magnitude;
+}
+
+__global__ static void max_vector_kernel(const float *values, uint64_t count,
+                                         float *max_partials,
+                                         uint32_t *invalid_partials)
+{
+    __shared__ float warp_max[MCO2_CUDA_REDUCTION_THREADS / MCO2_CUDA_WARP];
+    __shared__ uint32_t warp_invalid[MCO2_CUDA_REDUCTION_THREADS / MCO2_CUDA_WARP];
+    const float4 *words = reinterpret_cast<const float4 *>(values);
+    const uint64_t word_count = count / 4;
+    const uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    const uint64_t first = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const unsigned int lane = threadIdx.x % MCO2_CUDA_WARP;
+    const unsigned int warp = threadIdx.x / MCO2_CUDA_WARP;
+    float local_max = 0.0f;
+    uint32_t local_invalid = 0;
+
+    for (uint64_t i = first; i < word_count; i += stride) {
+        const float4 word = words[i];
+        absorb_max(word.x, &local_max, &local_invalid);
+        absorb_max(word.y, &local_max, &local_invalid);
+        absorb_max(word.z, &local_max, &local_invalid);
+        absorb_max(word.w, &local_max, &local_invalid);
+    }
+    if (first < count % 4)
+        absorb_max(values[word_count * 4 + first], &local_max, &local_invalid);
+
+    for (unsigned int offset = MCO2_CUDA_WARP / 2; offset != 0; offset /= 2) {
+        const float other_max = __shfl_down_sync(0xFFFFFFFFU, local_max, offset);
+        if (other_max > local_max)
+            local_max = other_max;
+        local_invalid |= __shfl_down_sync(0xFFFFFFFFU, local_invalid, offset);
+    }
+    if (lane == 0) {
+        warp_max[warp] = local_max;
+        warp_invalid[warp] = local_invalid;
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        for (unsigned int w = 1; w < MCO2_CUDA_REDUCTION_THREADS / MCO2_CUDA_WARP; w++) {
+            if (warp_max[w] > local_max)
+                local_max = warp_max[w];
+            local_invalid |= warp_invalid[w];
+        }
+        max_partials[blockIdx.x] = local_max;
+        invalid_partials[blockIdx.x] = local_invalid;
+    }
+}
+
+__device__ static float scale_term(float value, float max_abs)
+{
+    const float ratio = fabsf(value) / max_abs;
+    return ratio * ratio;
+}
+
+__global__ static void sum_warps_kernel(const float *values, uint64_t count,
+                                        uint64_t block_count,
+                                        uint64_t padded_count,
+                                        const float *max_abs, const int *status,
+                                        float *partials)
+{
+    const unsigned int warps_per_block = MCO2_CUDA_REDUCTION_THREADS / MCO2_CUDA_WARP;
+    const unsigned int lane = threadIdx.x % MCO2_CUDA_WARP;
+    const uint64_t warp_stride = (uint64_t)gridDim.x * warps_per_block;
+    const int skip = *status != MCO2_Q8_OK || *max_abs == 0.0f;
+    const float max_value = *max_abs;
+
+    for (uint64_t chunk = (uint64_t)blockIdx.x * warps_per_block +
+                          threadIdx.x / MCO2_CUDA_WARP;
+         chunk < padded_count; chunk += warp_stride) {
+        if (skip || chunk >= block_count) {
+            if (lane == 0)
+                partials[chunk] = 0.0f;
+            continue;
+        }
+
+        const uint64_t base = chunk * MCO2_CUDA_REDUCTION_THREADS +
+                              (uint64_t)lane * MCO2_CUDA_K1_LEAVES_PER_LANE;
+        float t[MCO2_CUDA_K1_LEAVES_PER_LANE];
+        if (base + MCO2_CUDA_K1_LEAVES_PER_LANE <= count) {
+            const float4 low = *reinterpret_cast<const float4 *>(values + base);
+            const float4 high = *reinterpret_cast<const float4 *>(values + base + 4);
+            t[0] = scale_term(low.x, max_value);
+            t[1] = scale_term(low.y, max_value);
+            t[2] = scale_term(low.z, max_value);
+            t[3] = scale_term(low.w, max_value);
+            t[4] = scale_term(high.x, max_value);
+            t[5] = scale_term(high.y, max_value);
+            t[6] = scale_term(high.z, max_value);
+            t[7] = scale_term(high.w, max_value);
+        } else {
+            for (unsigned int k = 0; k < MCO2_CUDA_K1_LEAVES_PER_LANE; k++)
+                t[k] = base + k < count ? scale_term(values[base + k], max_value) : 0.0f;
+        }
+        float sum = ((t[0] + t[1]) + (t[2] + t[3])) + ((t[4] + t[5]) + (t[6] + t[7]));
+
+        /* After offset d, a lane that is a multiple of 2d holds the subtree of
+           lanes l .. l + 2d - 1; other lanes hold values no one reads. */
+        for (unsigned int offset = 1; offset < MCO2_CUDA_WARP; offset *= 2)
+            sum = sum + __shfl_down_sync(0xFFFFFFFFU, sum, offset);
+        if (lane == 0)
+            partials[chunk] = sum;
+    }
+}
+
+/* Reduces each run of span adjacent inputs (a power of two, at most 2048) to
+   one output as a perfect binary tree of adjacent pairs. */
+__global__ static void reduce_tree_kernel(const float *input, float *output,
+                                          uint64_t output_count,
+                                          unsigned int span)
+{
+    __shared__ float level[2][MCO2_CUDA_K1_TREE_SPAN];
+
+    for (uint64_t segment = blockIdx.x; segment < output_count;
+         segment += gridDim.x) {
+        float *source = level[0];
+        float *target = level[1];
+        for (unsigned int k = threadIdx.x; k < span; k += blockDim.x)
+            source[k] = input[segment * span + k];
+        __syncthreads();
+        for (unsigned int width = span / 2; width != 0; width /= 2) {
+            for (unsigned int k = threadIdx.x; k < width; k += blockDim.x)
+                target[k] = source[2 * k] + source[2 * k + 1];
+            __syncthreads();
+            float *temporary = source;
+            source = target;
+            target = temporary;
+        }
+        if (threadIdx.x == 0)
+            output[segment] = source[0];
+        __syncthreads();
+    }
+}
+
 static int automatic_grid(uint64_t work, int block_size)
 {
     const uint64_t blocks = work / (uint64_t)block_size +
@@ -262,6 +436,78 @@ static int launch_grid(uint64_t work, int block_size, int grid_size)
     if (grid_size > 0)
         return grid_size;
     return automatic_grid(work, block_size);
+}
+
+static int launch_k1_optimized(const float *device_values, uint64_t count,
+                               float *device_max_partials,
+                               uint32_t *device_invalid_partials,
+                               float *device_sums_a, float *device_sums_b,
+                               uint64_t block_count, uint64_t padded_count,
+                               float *device_scale, int *device_status,
+                               int grid_size, cudaStream_t stream)
+{
+    const uint64_t word_count = count / 4 + (count % 4 != 0);
+    const uint64_t auto_max_grid =
+        (uint64_t)automatic_grid(word_count, MCO2_CUDA_REDUCTION_THREADS * 2);
+    uint64_t max_grid = grid_size > 0 ? (uint64_t)grid_size
+                                      : (auto_max_grid < MCO2_CUDA_K1_MAX_AUTO_GRID
+                                             ? auto_max_grid
+                                             : MCO2_CUDA_K1_MAX_AUTO_GRID);
+    /* One max partial per block, and the buffer holds block_count of them. */
+    if (max_grid > block_count)
+        max_grid = block_count;
+    const unsigned int sum_grid =
+        grid_size > 0 ? (unsigned int)grid_size
+                      : (unsigned int)automatic_grid(
+                            padded_count, MCO2_CUDA_REDUCTION_THREADS / MCO2_CUDA_WARP);
+
+    if ((uintptr_t)device_values % sizeof(float4) != 0)
+        return (int)cudaErrorMisalignedAddress;
+
+    max_vector_kernel<<<(unsigned int)max_grid, MCO2_CUDA_REDUCTION_THREADS, 0, stream>>>(
+        device_values, count, device_max_partials, device_invalid_partials);
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess)
+        return (int)error;
+
+    reduce_max_kernel<<<1, MCO2_CUDA_REDUCTION_THREADS, 0, stream>>>(
+        device_max_partials, device_invalid_partials, max_grid, device_scale,
+        device_status);
+    error = cudaGetLastError();
+    if (error != cudaSuccess)
+        return (int)error;
+
+    sum_warps_kernel<<<sum_grid, MCO2_CUDA_REDUCTION_THREADS, 0, stream>>>(
+        device_values, count, block_count, padded_count, device_scale,
+        device_status, device_sums_a);
+    error = cudaGetLastError();
+    if (error != cudaSuccess)
+        return (int)error;
+
+    uint64_t active = padded_count;
+    float *input = device_sums_a;
+    float *output = device_sums_b;
+    while (active > 1) {
+        const unsigned int span = active < MCO2_CUDA_K1_TREE_SPAN
+                                      ? (unsigned int)active
+                                      : MCO2_CUDA_K1_TREE_SPAN;
+        const uint64_t output_count = active / span;
+        const unsigned int tree_grid =
+            grid_size > 0 ? (unsigned int)grid_size
+                          : (unsigned int)automatic_grid(output_count, 1);
+        reduce_tree_kernel<<<tree_grid, MCO2_CUDA_REDUCTION_THREADS, 0, stream>>>(
+            input, output, output_count, span);
+        error = cudaGetLastError();
+        if (error != cudaSuccess)
+            return (int)error;
+        active = output_count;
+        float *temporary = input;
+        input = output;
+        output = temporary;
+    }
+
+    finish_scale_kernel<<<1, 1, 0, stream>>>(input, device_scale, device_status);
+    return (int)cudaGetLastError();
 }
 
 extern "C" int mco2_cuda_launch_k1(const float *device_values,
@@ -301,6 +547,12 @@ extern "C" int mco2_cuda_launch_k1(const float *device_values,
         device_invalid_partials == NULL || device_sums_a == NULL ||
         device_sums_b == NULL || device_scale == NULL || device_status == NULL)
         return (int)cudaErrorInvalidValue;
+    if (k1_variant == MCO2_CUDA_K1_OPTIMIZED)
+        return launch_k1_optimized(device_values, count, device_max_partials,
+                                   device_invalid_partials, device_sums_a,
+                                   device_sums_b, block_count, padded_count,
+                                   device_scale, device_status, grid_size,
+                                   stream);
 
     max_blocks_kernel<<<max_grid, MCO2_CUDA_REDUCTION_THREADS, 0, stream>>>(
         device_values, count, block_count, device_max_partials,

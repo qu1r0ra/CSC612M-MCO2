@@ -49,6 +49,15 @@ typedef struct mco2_cuda_staging mco2_cuda_staging;
 extern "C" {
 #endif
 
+/* K1 variants (issue #23). Both write the same scale bit for bit. The
+   optimized one needs a 16-byte-aligned input (cudaMalloc pointers are) and
+   returns cudaErrorMisalignedAddress otherwise. */
+enum { MCO2_CUDA_K1_REFERENCE = 0, MCO2_CUDA_K1_OPTIMIZED = 1 };
+
+/* Selects the K1 variant for every later launch in this process; the CLI
+   calls it once before any CUDA work. Returns 0 or cudaErrorInvalidValue. */
+int mco2_cuda_select_k1(int variant);
+
 /* Stage launchers accept device pointers and an opaque CUDA stream handle. */
 int mco2_cuda_launch_k1(const float *device_values, uint64_t count,
                         float *device_max_partials,

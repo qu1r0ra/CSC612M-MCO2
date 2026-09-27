@@ -598,6 +598,7 @@ def test_cpu_bench_reports_raw_samples_and_base_record(tmp_path, bits: int):
         ("--transfer-policy", "pageable"),
         ("--block-size", "128"),
         ("--grid-size", "3"),
+        ("--k1", "optimized"),
     ],
 )
 def test_cpu_bench_rejects_cuda_only_options(tmp_path, extra):
