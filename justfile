@@ -87,6 +87,17 @@ build-cuda:
     nvcc {{nvcc_flags}} --fmad=false --ftz=false --prec-div=true --prec-sqrt=true -c src/quantizer_cuda.cu -o build/quantizer_cuda.o
     nvcc {{nvcc_flags}} --fmad=false --ftz=false --prec-div=true --prec-sqrt=true build/main_cuda.o build/codec_cuda.o build/quantizer_cuda_host.o build/rng_cpu_cuda.o build/quantizer_cuda.o -lm -o build/mco2
 
+# Build the device-attribute and streaming-read probe for the K1 baseline
+[windows]
+build-stream-probe:
+    New-Item -ItemType Directory -Force build | Out-Null
+    ./scripts/with-msvc.ps1 nvcc {{nvcc_flags}} scripts\stream_probe.cu -o build\stream_probe.exe
+
+[unix]
+build-stream-probe:
+    mkdir -p build
+    nvcc {{nvcc_flags}} scripts/stream_probe.cu -o build/stream_probe
+
 [windows]
 build-codec-test:
     New-Item -ItemType Directory -Force build | Out-Null
@@ -150,3 +161,12 @@ unbiasedness *args: build-cuda
 [unix]
 unbiasedness *args: build-cuda
     MCO2_TEST_CUDA=1 uv run python unbiasedness.py {{args}}
+
+# Measure the reference K1 against the device bandwidth (issue #23 baseline)
+[windows]
+k1-baseline *args: build-cuda build-stream-probe
+    $env:MCO2_TEST_CUDA = '1'; uv run python k1_bandwidth.py {{args}}
+
+[unix]
+k1-baseline *args: build-cuda build-stream-probe
+    MCO2_TEST_CUDA=1 uv run python k1_bandwidth.py {{args}}

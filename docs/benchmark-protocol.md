@@ -267,6 +267,17 @@ This section adds paths to revision 3; it is not a new revision. The revision 3 
 - **Snapshots.** A non-pilot run of a non-dense family writes `results/<date>-<short_rev>-<family>/`. Summary rows carry `input_family` and `input_key`. `bench_report.py` reads dense cases only.
 - **Model option guard.** `--model-tensors` and `--model-limit` are rejected with any other family.
 
+### K1 bandwidth baseline (issue #23)
+
+Spec: [qu1r0ra/CSC612M-MCO2-Paper#23](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/23). Before any K1 change, `just k1-baseline` freezes how far the reference K1 sits from the memory system, so that a later change is judged against a measured headroom rather than an assumed one.
+
+- **Theoretical peak.** `2 * memory_clock_khz * 1e3 * bus_width_bits / 8 / 1e9` GB/s from `cudaDeviceGetAttribute`, the DDR convention of the CUDA C++ Best Practices Guide.
+- **Achievable ceiling.** `build/stream_probe` reads a float32 buffer once with a grid-stride `float4` kernel at 4, 8, 16, and 32 blocks per multiprocessor. The ceiling is the best time over kept repetitions and grids (the STREAM convention), taken over sizes larger than L2.
+- **Effective bandwidth.** The contract forces two full input reads, one for max|x| and one for the squared terms that divide by it, so K1 moves at least `8 * count` bytes. Effective bandwidth is that minimum over the pooled K1 median of the CUDA resident path.
+- **Regime.** Fractions of peak and ceiling, and the headroom (K1 median over the ideal time at the ceiling), are reported only when the input exceeds L2. Below that the input is L2-resident and K1 is bound by its launches (`4 + log2` of the padded block count), which the summary records instead.
+- **Protocol.** Every matrix count at both bit widths, 12 processes per cell in a per-round shuffled order, each with the in-process warm-up of revision 2 and 30 repetitions, after a 20 s GPU warm-up. `compute_case_statistics` gives the pooled median and the between-process spread.
+- **Evidence status.** The baseline snapshot is `results/<date>-<short_rev>-k1-baseline/`, run from a clean merged tree. A K1 change is kept only if an A/B run on the same tree is supported as faster under the revision 3 claim rule.
+
 ## Comparison backends
 
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.
