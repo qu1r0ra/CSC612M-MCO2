@@ -209,3 +209,12 @@ k1-baseline *args: build-cuda build-stream-probe
 [unix]
 k1-baseline *args: build-cuda build-stream-probe
     MCO2_TEST_CUDA=1 uv run python k1_bandwidth.py {{args}}
+
+# A/B the reference and optimized K1 on the same tree, or re-render F5 (issue #23)
+[windows]
+k1-ab *args: build-cuda build-stream-probe
+    $env:MCO2_TEST_CUDA = '1'; uv run python k1_ab.py {{args}}
+
+[unix]
+k1-ab *args: build-cuda build-stream-probe
+    MCO2_TEST_CUDA=1 uv run python k1_ab.py {{args}}
