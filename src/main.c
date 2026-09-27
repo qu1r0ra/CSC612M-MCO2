@@ -410,7 +410,10 @@ static mco2_q8_status compress_file(int argc, char **argv)
             status = MCO2_Q8_ERR_MEMORY;
             goto done;
         }
-        mco2_cuda_select_k1(k1);
+        if (mco2_cuda_select_k1(k1) != 0) {
+            status = MCO2_Q8_ERR_ARGUMENT;
+            goto done;
+        }
         status = mco2_cuda_compress(
             (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
             scale_seen, prescribed_scale, words, (int)block_size,
@@ -1065,7 +1068,10 @@ static mco2_q8_status bench_file(int argc, char **argv)
     } else {
 #ifdef MCO2_ENABLE_CUDA
         uint8_t *base_payload = record + MCO2_Q8_HEADER_SIZE;
-        mco2_cuda_select_k1(k1);
+        if (mco2_cuda_select_k1(k1) != 0) {
+            status = MCO2_Q8_ERR_ARGUMENT;
+            goto done;
+        }
         status = mco2_cuda_bench(
             (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
             scale_seen, prescribed_scale, words_path != NULL ? words : NULL,

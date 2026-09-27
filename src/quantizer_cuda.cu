@@ -262,6 +262,12 @@ __global__ static void pack_q4_kernel(const uint8_t *codes, uint64_t count,
 #define MCO2_CUDA_K1_TREE_SPAN 2048
 #define MCO2_CUDA_K1_MAX_AUTO_GRID 1024
 
+/* The optimized kernels size their warp arrays for 256-thread blocks. */
+static_assert(MCO2_CUDA_REDUCTION_THREADS % MCO2_CUDA_WARP == 0 &&
+                  MCO2_CUDA_REDUCTION_THREADS / MCO2_CUDA_WARP * MCO2_CUDA_K1_LEAVES_PER_LANE <=
+                      MCO2_CUDA_K1_TREE_SPAN,
+              "optimized K1 geometry");
+
 static int k1_variant = MCO2_CUDA_K1_REFERENCE;
 
 extern "C" int mco2_cuda_select_k1(int variant)

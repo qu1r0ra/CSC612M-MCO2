@@ -905,8 +905,9 @@ def test_cuda_k1_reference_is_the_default(tmp_path):
 
 
 @pytest.mark.parametrize("bits", [4, 8])
-@pytest.mark.parametrize("boundary", ["resident", "resident-graph", "host-origin"])
-def test_cuda_bench_k1_optimized_records_variant_and_same_record(tmp_path, bits, boundary):
+@pytest.mark.parametrize("boundary", ["resident", "resident-graph", "host-origin", "gpu-origin"])
+@pytest.mark.parametrize("grid", [(), ("--grid-size", "7")])
+def test_cuda_bench_k1_optimized_records_variant_and_same_record(tmp_path, bits, boundary, grid):
     values = np.random.default_rng(1616).normal(size=70001).astype(np.float32)
     input_path = tmp_path / "bench-input.f32"
     _write_values(input_path, values)
@@ -933,6 +934,7 @@ def test_cuda_bench_k1_optimized_records_variant_and_same_record(tmp_path, bits,
             "2",
             "--k1",
             variant,
+            *grid,
         )
         assert result.returncode == 0, result.stderr
         assert json.loads(result.stdout)["configuration"]["k1"] == variant
