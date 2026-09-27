@@ -189,6 +189,10 @@ just figures results/<date>-<short_rev>
 
 `just unbiasedness` builds the CUDA executable and runs the full expectation suite of the technical contract (correctness layer 3): four inputs, both bit widths, both backends, 4,096 seeds, about a minute on the RTX 5060. It writes `results/<date>-<short_rev>-unbiasedness/unbiasedness.json` and `f_unbiasedness.png` and exits nonzero if any case fails. Run it from a clean tree; `--allow-dirty`, `--seeds N`, `--backends cpu`, and `--output-dir DIR` give non-evidence runs.
 
+### K1 bandwidth baseline
+
+`just k1-baseline --output-dir results/<date>-<short_rev>-k1-baseline` builds the CUDA executable and `build/stream_probe`, then measures the reference K1 against the device's theoretical and achievable bandwidth over the full matrix. It writes `summary.json`, `processes.csv`, `processes.json`, and `stream_probe.json`, and refuses a dirty tree or a non-empty output folder. `--allow-dirty`, `--counts`, `--bits`, and `--processes N` give non-evidence runs.
+
 ### Inspecting results and provenance
 
 Snapshots are stored in `results/<date>-<short_rev>/`:
