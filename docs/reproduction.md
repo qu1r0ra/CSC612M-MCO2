@@ -89,7 +89,7 @@ The CLI requires `--seed` for every compression command. `--words` supplies the 
 
 `--backend cpu-avx2` runs the multithreaded AVX2 CPU compressor, which writes the same bytes as `--backend cpu`; `--threads N` sets its team. `just vec-report` checks that MSVC vectorizes its hot loops.
 
-The CUDA backend is selected with `--backend cuda`; it supports both 8-bit and 4-bit records (`--bits 8|4`). Optional `--block-size` and `--grid-size` configure execution geometry. Add `--timings` to emit a single JSON line to stderr with K1, K2, K3 device event times and host measured H2D/D2H copy times. For acceptance timing, use an input of `2^22` FP32 elements and record the output line with the GPU and toolkit from `just toolchain`:
+The CUDA backend is selected with `--backend cuda`; it supports both 8-bit and 4-bit records (`--bits 8|4`). Optional `--block-size` and `--grid-size` configure execution geometry, and `--k1 optimized` selects the optimized scale-stage kernels, which write the same bytes as the default `reference`. Add `--timings` to emit a single JSON line to stderr with K1, K2, K3 device event times and host measured H2D/D2H copy times. For acceptance timing, use an input of `2^22` FP32 elements and record the output line with the GPU and toolkit from `just toolchain`:
 
 ```powershell
 # 8-bit CUDA compression with timings

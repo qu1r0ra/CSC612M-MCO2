@@ -36,7 +36,7 @@ static void usage(FILE *stream)
             "      [--backend cpu|cpu-avx2|cuda] [--bits 4|8] [--tensor-id UINT32]\n"
             "      [--invocation-id UINT32] [--scale FP32] [--words WORDS.u32]\n"
             "      [--threads UINT32] [--block-size UINT32] [--grid-size UINT32]\n"
-            "      [--timings]\n"
+            "      [--k1 reference|optimized] [--timings]\n"
             "  mco2 bench --input INPUT.f32 --seed UINT64\n"
             "      [--output RECORD | --record-output RECORD]\n"
             "      [--backend cpu|cpu-avx2|cuda] [--bits 4|8] [--tensor-id UINT32]\n"
@@ -45,7 +45,8 @@ static void usage(FILE *stream)
             "      [--boundary resident|resident-graph|host-origin|gpu-origin]\n"
             "      [--transfer-policy pageable|pinned] [--warmup UINT32 (default 10)]\n"
             "      [--reps UINT32 (default 30)]\n"
-            "      [--block-size UINT32] [--grid-size UINT32] [--timings]\n"
+            "      [--block-size UINT32] [--grid-size UINT32]\n"
+            "      [--k1 reference|optimized] [--timings]\n"
             "  mco2 decompress --input RECORD --output OUTPUT.f32\n"
             "  mco2 expect --input INPUT.f32 --output SUMS.f64 --seeds UINT64\n"
             "      [--seed-start UINT64 (default 1)] [--backend cpu|cuda]\n"
@@ -56,7 +57,9 @@ static void usage(FILE *stream)
             "expect writes little-endian FP64 per-element sums of the decoded\n"
             "values, then per-element sums of their squares.\n"
             "cpu-avx2 writes the same bytes as cpu; --threads defaults to the\n"
-            "processor count in the process affinity mask (Windows) or online (elsewhere).\n");
+            "processor count in the process affinity mask (Windows) or online (elsewhere).\n"
+            "--k1 (cuda only) picks the scale-stage kernels; both write the same bytes\n"
+            "and reference is the default.\n");
 }
 
 static int read_file(const char *path, uint8_t **bytes, size_t *size)
@@ -189,6 +192,22 @@ static int parse_threads(const char *text, uint64_t *threads)
            *threads <= MCO2_MAX_CPU_THREADS;
 }
 
+static int parse_k1(const char *text, int *variant)
+{
+    if (strcmp(text, "reference") == 0)
+        *variant = MCO2_CUDA_K1_REFERENCE;
+    else if (strcmp(text, "optimized") == 0)
+        *variant = MCO2_CUDA_K1_OPTIMIZED;
+    else
+        return 0;
+    return 1;
+}
+
+static const char *k1_name(int variant)
+{
+    return variant == MCO2_CUDA_K1_OPTIMIZED ? "optimized" : "reference";
+}
+
 /* Sets *threads to 0 for the scalar comparator, else to the requested AVX2 team size. */
 static mco2_q8_status resolve_cpu_threads(const char *backend, int threads_seen,
                                           uint64_t requested, int *threads)
@@ -254,6 +273,7 @@ static mco2_q8_status compress_file(int argc, char **argv)
     float prescribed_scale = 0.0f, scale;
     int seed_seen = 0, scale_seen = 0, timings_seen = 0, threads_seen = 0;
     int block_size_seen = 0, grid_size_seen = 0, threads, i;
+    int k1 = MCO2_CUDA_K1_REFERENCE, k1_seen = 0;
     uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
     float *values = NULL, *scale_partials = NULL;
     uint32_t *words = NULL;
@@ -313,6 +333,10 @@ static mco2_q8_status compress_file(int argc, char **argv)
                 grid_size > 65535)
                 return MCO2_Q8_ERR_ARGUMENT;
             grid_size_seen = 1;
+        } else if (strcmp(option, "--k1") == 0) {
+            k1_seen = parse_k1(value, &k1);
+            if (!k1_seen)
+                return MCO2_Q8_ERR_ARGUMENT;
         } else {
             return MCO2_Q8_ERR_ARGUMENT;
         }
@@ -321,7 +345,7 @@ static mco2_q8_status compress_file(int argc, char **argv)
         return MCO2_Q8_ERR_ARGUMENT;
     if (bits != MCO2_Q4_BITS && bits != MCO2_Q8_BITS)
         return MCO2_Q8_ERR_BIT_WIDTH;
-    if ((block_size_seen || grid_size_seen) && strcmp(backend, "cuda") != 0)
+    if ((block_size_seen || grid_size_seen || k1_seen) && strcmp(backend, "cuda") != 0)
         return MCO2_Q8_ERR_ARGUMENT;
     if (timings_seen && strcmp(backend, "cuda") != 0)
         return MCO2_Q8_ERR_TIMINGS_BACKEND;
@@ -386,6 +410,7 @@ static mco2_q8_status compress_file(int argc, char **argv)
             status = MCO2_Q8_ERR_MEMORY;
             goto done;
         }
+        mco2_cuda_select_k1(k1);
         status = mco2_cuda_compress(
             (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
             scale_seen, prescribed_scale, words, (int)block_size,
@@ -640,7 +665,7 @@ static void print_bench_json(
     size_t count, uint64_t seed, uint64_t tensor_id,
     uint64_t invocation_id, uint64_t warmups, uint64_t reps,
     int prescribed_scale_seen, float prescribed_scale, int block_size,
-    int grid_size, int team_size, size_t payload_bytes,
+    int grid_size, const char *k1, int team_size, size_t payload_bytes,
     const mco2_bench_sample *samples, double capture_ms)
 {
     const uint64_t id_step = strcmp(boundary, "resident-graph") == 0 ? 0 : 1;
@@ -659,6 +684,8 @@ static void print_bench_json(
     printf(",\"boundary\":\"%s\",\"transfer_policy\":\"%s\","
            "\"block_size\":%d,\"grid_size\":%d,",
            boundary, transfer_policy, block_size, grid_size);
+    if (k1 != NULL)
+        printf("\"k1\":\"%s\",", k1);
     /* The team size OpenMP grants a probe region; with dynamic teams off the
        timed regions get the same size. */
     if (team_size != 0)
@@ -795,6 +822,7 @@ static mco2_q8_status bench_file(int argc, char **argv)
     int threads_seen = 0, threads, team_size = 0;
     int transfers;
     int block_size_seen = 0, grid_size_seen = 0, i;
+    int k1 = MCO2_CUDA_K1_REFERENCE, k1_seen = 0;
     uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
     float *values = NULL, *scale_partials = NULL;
     uint32_t *words = NULL, *generated_words = NULL;
@@ -874,6 +902,10 @@ static mco2_q8_status bench_file(int argc, char **argv)
                 grid_size > MCO2_CUDA_MAX_GRID_SIZE)
                 return MCO2_Q8_ERR_ARGUMENT;
             grid_size_seen = 1;
+        } else if (strcmp(option, "--k1") == 0) {
+            k1_seen = parse_k1(value, &k1);
+            if (!k1_seen)
+                return MCO2_Q8_ERR_ARGUMENT;
         } else {
             return MCO2_Q8_ERR_ARGUMENT;
         }
@@ -888,7 +920,7 @@ static mco2_q8_status bench_file(int argc, char **argv)
      * its default. The AVX2 comparator runs host-host only.
      */
     if (is_cpu_backend(backend) &&
-        (block_size_seen || grid_size_seen ||
+        (block_size_seen || grid_size_seen || k1_seen ||
          (boundary_seen && strcmp(boundary_name, "gpu-origin") != 0) ||
          (boundary_seen && strcmp(backend, "cpu-avx2") == 0)))
         return MCO2_Q8_ERR_ARGUMENT;
@@ -1033,6 +1065,7 @@ static mco2_q8_status bench_file(int argc, char **argv)
     } else {
 #ifdef MCO2_ENABLE_CUDA
         uint8_t *base_payload = record + MCO2_Q8_HEADER_SIZE;
+        mco2_cuda_select_k1(k1);
         status = mco2_cuda_bench(
             (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
             scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
@@ -1064,7 +1097,9 @@ static mco2_q8_status bench_file(int argc, char **argv)
     print_bench_json(backend, boundary_name, transfer_policy_name,
                      (uint8_t)bits, count, seed, tensor_id, invocation_id,
                      warmups, reps, scale_seen, prescribed_scale,
-                     (int)block_size, (int)grid_size, team_size, payload_bytes,
+                     (int)block_size, (int)grid_size,
+                     strcmp(backend, "cuda") == 0 ? k1_name(k1) : NULL,
+                     team_size, payload_bytes,
                      samples, capture_ms);
     status = MCO2_Q8_OK;
 
