@@ -1,4 +1,7 @@
 import json
+from pathlib import Path
+
+import pytest
 
 from bench_report import FIGURES, STAGE_PATHS, find_crossovers, index_cases, render_report
 
@@ -79,6 +82,12 @@ def write_snapshot(root, cases):
         "git_provenance": {"code_revision_short": "abc1234"},
         "all_cases_passed": True,
         "cases": [c["case_id"] for c in cases],
+        "device": {
+            "name": "Fixture GPU",
+            "memory_clock_khz": 14000000,
+            "bus_width_bits": 128,
+            "l2_bytes": 1024,
+        },
     }
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -283,3 +292,156 @@ def test_avx2_comparator_is_drawn_but_stays_out_of_t1_and_crossovers(tmp_path, m
     assert report.count("| 2^") == 18
     assert "AVX2" not in report
     assert all(path != "optimized" for _, path in result["crossovers"])
+
+
+def publication_cases(family="dense"):
+    cases = []
+    paths = (
+        ("cpu", "comparator", "none"),
+        ("cpu-avx2", "optimized", "none"),
+        ("cuda", "resident", "none"),
+        ("cuda", "resident-graph", "none"),
+        ("cuda", "host-origin", "pageable"),
+        ("cuda", "host-origin", "pinned"),
+        ("cpu", "gpu-origin", "pageable"),
+        ("cuda", "gpu-origin", "pageable"),
+        ("cpu", "gpu-origin", "pinned"),
+        ("cuda", "gpu-origin", "pinned"),
+    )
+    for count in (1024, 4096):
+        for bits in (4, 8):
+            for index, (backend, boundary, policy) in enumerate(paths):
+                case = make_case(count, bits, boundary, 1 + index / 10, "faster", True)
+                suffix = "-pinned" if policy == "pinned" else ""
+                case.update(
+                    backend=backend,
+                    transfer_policy=policy,
+                    path_label=f"{backend}-{boundary}{suffix}",
+                    input_family=family,
+                    input_key=f"n{count}" if family != "model" else f"tensor_{count}",
+                    case_id=f"case_{backend}_{boundary}{suffix}_bits{bits}_n{count}",
+                )
+                case["statistics"]["baseline"] = (
+                    "cpu-gpu-origin"
+                    if backend == "cuda" and boundary == "gpu-origin"
+                    else "cpu-comparator"
+                )
+                case["statistics"]["boundary_inversion"] = index == 5 and count == 1024
+                if policy == "pinned":
+                    case["statistics"]["vs_pageable"] = {
+                        "speedup_vs_pageable": 1.2,
+                        "speedup_low": 1.1,
+                        "speedup_high": 1.3,
+                        "speedup_ci_low": 1.15,
+                        "speedup_ci_high": 1.25,
+                        "verdict": "faster",
+                        "direction_supported": True,
+                        "magnitude_supported": True,
+                    }
+                cases.append(case)
+    return cases
+
+
+def write_k1_summary(root):
+    root.mkdir()
+    cells = [
+        {
+            "count": count,
+            "bits": bits,
+            "arms": {
+                "reference": {"effective_gbps": 100.0},
+                "optimized": {"effective_gbps": 400.0},
+            },
+        }
+        for count in (1024, 4096)
+        for bits in (4, 8)
+    ]
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "evidence": True,
+                "git": {"git_dirty": False},
+                "theoretical_peak_gbps": 448.0,
+                "probe_ceiling_gbps": 430.0,
+                "cells": cells,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "stream_probe.json").write_text(
+        json.dumps(
+            {
+                "device": {
+                    "name": "Fixture GPU",
+                    "memory_clock_khz": 14000000,
+                    "bus_width_bits": 128,
+                    "l2_bytes": 1024,
+                },
+                "sizes": [{"bytes": 4096, "best_gbps": 430.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_publication_report_includes_extensions_and_bandwidth(tmp_path, monkeypatch):
+    import publication_report
+
+    snapshot = tmp_path / "dense"
+    write_snapshot(snapshot, publication_cases())
+    k1 = tmp_path / "k1-ab"
+    write_k1_summary(k1)
+    drawn = []
+    original = publication_report.plot_publication_time
+
+    def spy(cases, out, second):
+        drawn.append(second)
+        return original(cases, out, second)
+
+    monkeypatch.setattr(publication_report, "plot_publication_time", spy)
+    out = tmp_path / "out"
+    result = render_report(snapshot, out, k1_ab=k1)
+    assert drawn == [None]
+    assert result["bandwidth"] == {"peak_gbps": 448.0, "ceiling_gbps": 430.0}
+    assert all(path.read_bytes().startswith(PNG_MAGIC) for path in result["figures"])
+    report = result["report"].read_text(encoding="utf-8")
+    assert "cuda-gpu-origin-pinned" in report
+    assert "cpu-gpu-origin-pinned" in report
+    assert "Pinned vs pageable" in report
+    assert "direction and magnitude vetoed" in report
+    assert "| dense | 2 | 40 | 2 |" in report
+
+    second = tmp_path / "second"
+    write_snapshot(second, publication_cases())
+    render_report(snapshot, tmp_path / "second-out", k1_ab=k1, second_platform=second)
+    assert drawn[-1] is not None
+    assert len(drawn[-1]) == 40
+
+
+def test_sparse_and_model_publication_reports(tmp_path):
+    k1 = tmp_path / "k1-ab"
+    write_k1_summary(k1)
+    for family in ("sparse", "model"):
+        snapshot = tmp_path / family
+        write_snapshot(snapshot, publication_cases(family))
+        report = render_report(snapshot, tmp_path / f"{family}-out", k1_ab=k1)["report"]
+        assert f"# Publication matrix report ({family})" in report.read_text(encoding="utf-8")
+        assert "## Input family" in report.read_text(encoding="utf-8")
+
+
+def test_publication_bandwidth_rejects_same_name_device_mismatch(tmp_path):
+    snapshot = tmp_path / "dense"
+    write_snapshot(snapshot, publication_cases())
+    k1 = tmp_path / "k1-ab"
+    write_k1_summary(k1)
+    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
+    manifest["device"]["bus_width_bits"] = 192
+    (snapshot / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="attributes differ"):
+        render_report(snapshot, tmp_path / "out", k1_ab=k1)
+
+
+def test_revision_3_frozen_report_remains_byte_identical(tmp_path):
+    snapshot = Path(__file__).resolve().parents[1] / "results" / "2026-09-26-a1d2439"
+    report = render_report(snapshot, tmp_path / "old-output")["report"]
+    assert report.read_bytes() == (snapshot / "report.md").read_bytes()

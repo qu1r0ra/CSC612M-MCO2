@@ -60,6 +60,7 @@ static int parse_int(int argc, char **argv, int *i, int *out)
 int main(int argc, char **argv)
 {
     int min_exp = 10, max_exp = 26, reps = 50, discard = 10;
+    bool device_only = false;
     for (int i = 1; i < argc; i++) {
         int ok = 0;
         if (strcmp(argv[i], "--min-exp") == 0)
@@ -70,6 +71,10 @@ int main(int argc, char **argv)
             ok = parse_int(argc, argv, &i, &reps);
         else if (strcmp(argv[i], "--discard") == 0)
             ok = parse_int(argc, argv, &i, &discard);
+        else if (strcmp(argv[i], "--device-only") == 0) {
+            device_only = true;
+            ok = 1;
+        }
         if (!ok) {
             fprintf(stderr, "usage: stream_probe [--min-exp N] [--max-exp N] [--reps N] "
                             "[--discard N]\n");
@@ -94,6 +99,18 @@ int main(int argc, char **argv)
     CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
     CHECK(cudaRuntimeGetVersion(&runtime_version));
     CHECK(cudaDriverGetVersion(&driver_version));
+
+    if (device_only) {
+        char name[sizeof prop.name];
+        json_safe_name(prop.name, name, sizeof name);
+        printf("{\"name\":\"%s\",\"compute_capability\":\"%d.%d\","
+               "\"memory_clock_khz\":%d,\"bus_width_bits\":%d,\"l2_bytes\":%d,"
+               "\"multiprocessors\":%d,\"cuda_runtime_version\":%d,"
+               "\"cuda_driver_version\":%d}\n",
+               name, major, minor, clock_khz, bus_bits, l2_bytes, sms,
+               runtime_version, driver_version);
+        return 0;
+    }
 
     const size_t max_count = (size_t)1 << max_exp;
     float *values = NULL, *sink = NULL;
