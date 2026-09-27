@@ -58,6 +58,8 @@ REDUCTION_THREADS = 256
 BYTES_PER_VALUE = 4
 K1_INPUT_READS = 2
 DRAM_L2_MULTIPLE = 4
+# One size past the largest matrix count, so the ceiling is not set at the range edge.
+PROBE_MAX_EXP = 27
 DEFAULT_PROCESSES = 12
 DEFAULT_REPS = 30
 MIN_WARMUPS = 10
@@ -180,7 +182,9 @@ def dry_run(root: Path, recipe: str) -> list[str]:
         [just, "--dry-run", recipe], cwd=root, capture_output=True, text=True, check=False
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"just --dry-run {recipe} failed: {proc.stderr.strip()}")
+        raise RuntimeError(
+            f"just --dry-run {recipe} failed; build provenance cannot be recorded: {proc.stderr.strip()}"
+        )
     # just echoes dry-run commands on stderr.
     text = proc.stderr if proc.stderr.strip() else proc.stdout
     return [line.strip() for line in text.splitlines() if line.strip()]
@@ -191,7 +195,9 @@ def file_sha256(path: Path) -> str:
 
 
 def run_probe(probe: Path) -> dict[str, Any]:
-    proc = subprocess.run([str(probe)], capture_output=True, text=True, check=False)
+    proc = subprocess.run(
+        [str(probe), "--max-exp", str(PROBE_MAX_EXP)], capture_output=True, text=True, check=False
+    )
     if proc.returncode != 0:
         raise RuntimeError(f"stream probe failed: {proc.stderr.strip()}")
     return json.loads(proc.stdout)
@@ -242,9 +248,13 @@ def main() -> None:
     build.pop("_host_tokens", None)
     if not build["commands"]:
         sys.exit(f"just --dry-run {BUILD_RECIPE} failed; build provenance cannot be recorded.")
+    try:
+        probe_commands = dry_run(root, PROBE_RECIPE)
+    except RuntimeError as error:
+        sys.exit(str(error))
     build_record = {
         BUILD_RECIPE: build["commands"],
-        PROBE_RECIPE: dry_run(root, PROBE_RECIPE),
+        PROBE_RECIPE: probe_commands,
         "sha256": {
             binary.name: file_sha256(binary),
             probe_binary.name: file_sha256(probe_binary),

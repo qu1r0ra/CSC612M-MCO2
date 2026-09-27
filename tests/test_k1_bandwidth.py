@@ -36,7 +36,9 @@ def test_theoretical_peak_uses_the_ddr_convention():
 
 
 def test_reduction_threads_matches_the_cuda_source():
-    source = (Path(__file__).resolve().parents[1] / "src" / "quantizer_cuda.cu").read_text()
+    source = (Path(__file__).resolve().parents[1] / "src" / "quantizer_cuda.cu").read_text(
+        encoding="utf-8"
+    )
     match = re.search(r"#define MCO2_CUDA_REDUCTION_THREADS (\d+)", source)
     assert match is not None
     assert int(match.group(1)) == REDUCTION_THREADS
