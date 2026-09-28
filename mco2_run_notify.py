@@ -248,7 +248,6 @@ def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]
     heartbeat_seconds = int(config["heartbeat_seconds"])
     previous_snapshots = _snapshot_directories(root)
     started_at = datetime.now(UTC)
-    started = time.monotonic()
 
     try:
         _publish(
@@ -275,6 +274,7 @@ def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]
 
     exit_code = 127
     child: subprocess.Popen[bytes] | None = None
+    started = time.monotonic()
     try:
         child = subprocess.Popen(command, cwd=root, env=child_env)
         next_heartbeat = time.monotonic() + heartbeat_seconds

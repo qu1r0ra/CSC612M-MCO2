@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +16,7 @@ class CaptureServer(ThreadingHTTPServer):
         super().__init__(address, CaptureHandler)
         self.messages = []
         self.fail_requests = set()
+        self.delay_requests = set()
         self.messages_lock = threading.Lock()
 
 
@@ -32,6 +34,8 @@ class CaptureHandler(BaseHTTPRequestHandler):
                     "body": body,
                 }
             )
+        if request_number in self.server.delay_requests:
+            time.sleep(1.3)
         status = 503 if request_number in self.server.fail_requests else 200
         self.send_response(status)
         self.end_headers()
@@ -157,6 +161,23 @@ def test_check_option_sends_preflight_without_starting_a_command(tmp_path):
     assert len(server.messages) == 1
     assert server.messages[0]["title"] == "MCO2 ntfy preflight"
     assert server.messages[0]["body"] == "MCO2 ntfy preflight succeeded."
+
+
+def test_elapsed_duration_excludes_slow_start_notification(tmp_path):
+    child = [sys.executable, "-c", "import time; time.sleep(0.1)"]
+    with ntfy_stub() as (server, server_url):
+        server.delay_requests.add(2)
+        result = subprocess.run(
+            [sys.executable, str(RUNNER), "--", *child],
+            cwd=tmp_path,
+            env=ntfy_environment(server_url),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    assert result.returncode == 0
+    assert "duration: 00:00:00" in server.messages[-1]["body"]
 
 
 def test_successful_run_sends_progress_and_terminal_summary(tmp_path):
