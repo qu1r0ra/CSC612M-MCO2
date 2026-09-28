@@ -109,6 +109,10 @@ COLLAPSE = [
     (r"(.*/)?gpu_state\w*", "gpu state"),
     (r"git_provenance|git", "git provenance"),
     (r"(.*/)?(hardware|toolkit_and_driver)|device", "environment"),
+    # Lists whose length depends on timings or on the tree and machine state.
+    (r"decision/(kept|failing_cells|descriptive_slowdowns)", "timing-derived"),
+    (r"(run_conditions/)?(evidence|non_evidence_reasons)", "run conditions"),
+    (r"run_conditions/readiness/(passed|failures|overridden)", "run conditions"),
 ]
 REDACT = [
     (r"(.*/)?(created_at_utc|created_utc|captured_at_utc)|date", "timestamp"),
@@ -126,10 +130,7 @@ REDACT = [
         "timing-derived",
     ),
     (r"probe_ceiling_gbps|probe_ceiling_size/.*|sizes/\d+/best_\w+", "timing-derived"),
-    (r"decision/(kept|failing_cells|descriptive_slowdowns)(/.*)?", "timing-derived"),
     (r"initial_gpu_warm_up/seconds_elapsed", "timing"),
-    (r"(run_conditions/)?(evidence|non_evidence_reasons(/.*)?)", "run conditions"),
-    (r"run_conditions/readiness/(passed|failures(/.*)?|overridden)", "run conditions"),
     (r"run_conditions/affinity/previous_mask", "run conditions"),
 ]
 CSV_COMPARED_COLUMNS = {
