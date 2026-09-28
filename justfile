@@ -6,20 +6,35 @@ default: verify
 status:
     git status --short --branch
 
-# Apply Ruff's formatter to Python files
+# Format Python and C/CUDA sources and apply Ruff's safe lint fixes
 format:
-    ruff format .
+    uv run ruff check --fix .
+    uv run ruff format .
+    uv run python tools/clang_format.py
 
-# Run Ruff's linter
-lint:
-    ruff check .
-
-# Verify that Ruff formatting is already clean without changing files
+# Verify formatting without changing files
 format-check:
-    ruff format --check .
+    uv run ruff format --check .
+    uv run python tools/clang_format.py --check
+
+# Lint Python (Ruff, basedpyright) and the native sources
+lint: lint-python lint-native
+
+lint-python:
+    uv run ruff check .
+    uv run basedpyright
+
+# clang-tidy and MSVC /analyze on every translation unit the build compiles
+[windows]
+lint-native:
+    ./tools/with-msvc.ps1 uv run python tools/native_lint.py
+
+[unix]
+lint-native:
+    @echo "native lint needs the MSVC toolchain; run it on Windows"
 
 # Run the non-mutating code-quality gates
-verify: lint format-check
+verify: format-check lint
 
 # CUDA target architecture; RTX 5060 is sm_120. Override with CUDA_ARCH.
 cuda_arch := env("CUDA_ARCH", "native")

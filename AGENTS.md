@@ -4,3 +4,4 @@
 - **Pilot first:** before every full sweep, run `just bench-matrix --pilot` from the merged, clean tree and `just figures` on its `results/pilots/` folder. Fixes after a pilot follow the protocol's pilot rule.
 - **Frozen snapshots:** folders under `results/` are evidence; write each new run to a new folder.
 - **System settings** stay as the user left them; the user reboots, closes apps, and applies any setting.
+- **Before committing,** run `just format`; `just verify` is the CI lint gate. Run `uv run pre-commit install` once per clone so the fast fixers run on commit.
