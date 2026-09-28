@@ -168,7 +168,9 @@ def test_empty_and_all_zero_compress_use_zero_scale(tmp_path, values):
 )
 def test_decompress_rejects_each_minimum_header_error(tmp_path, mutation, message):
     record = bytearray(
-        compress_record_fp32(np.asarray([1.0], dtype=np.float32), scale=1.0, words=[0])
+        compress_record_fp32(
+            np.asarray([1.0], dtype=np.float32), scale=1.0, words=np.asarray([0], dtype=np.uint32)
+        )
     )
     if mutation == "magic":
         record[0] ^= 1
@@ -317,7 +319,9 @@ def test_layer_two_4bit_scale_and_reconstruction_within_bound(tmp_path):
 )
 def test_decompress_rejects_extended_decoder_errors(tmp_path, case, mutation_fn, expected_message):
     record = bytearray(
-        compress_record_fp32(np.asarray([1.0], dtype=np.float32), scale=1.0, words=[0])
+        compress_record_fp32(
+            np.asarray([1.0], dtype=np.float32), scale=1.0, words=np.asarray([0], dtype=np.uint32)
+        )
     )
     mutation_fn(record)
     input_path = tmp_path / "malformed.msq"
@@ -433,8 +437,8 @@ def test_layer_three_course_subset_unbiasedness():
 
     for bits, s in [(4, 7), (8, 127)]:
         scaled = np.minimum(np.abs(x) / scale * s, float(s))
-        l = np.floor(scaled).astype(np.int32)
-        p = scaled - l.astype(np.float32)
+        lower = np.floor(scaled).astype(np.int32)
+        p = scaled - lower.astype(np.float32)
 
         decoded_sum = np.zeros(n, dtype=np.float64)
         for seed in range(t):

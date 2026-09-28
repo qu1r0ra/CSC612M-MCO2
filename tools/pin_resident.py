@@ -53,7 +53,10 @@ def run_one(
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip())
     payload = json.loads(proc.stdout)
-    kern = [a + b + c for a, b, c in zip(payload["k1_ms"], payload["k2_ms"], payload["k3_ms"])]
+    kern = [
+        a + b + c
+        for a, b, c in zip(payload["k1_ms"], payload["k2_ms"], payload["k3_ms"], strict=True)
+    ]
     return {
         "wall_median_ms": statistics.median(payload["samples_ms"]),
         "kernel_median_ms": statistics.median(kern),

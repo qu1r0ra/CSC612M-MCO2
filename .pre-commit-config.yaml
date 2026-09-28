@@ -1,0 +1,24 @@
+# Fast fixers only; each runs the version pinned in uv.lock. The slower gates
+# (basedpyright, clang-tidy, /analyze) run in `just lint` and in CI.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check --fix
+        entry: uv run ruff check --fix --force-exclude
+        language: unsupported
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: unsupported
+        types_or: [python, pyi]
+        require_serial: true
+      - id: clang-format
+        name: clang-format
+        entry: uv run clang-format -i
+        language: unsupported
+        types_or: [c, c++, cuda]
+        exclude: ^third_party/
+        require_serial: true

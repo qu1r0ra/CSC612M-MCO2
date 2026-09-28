@@ -17,9 +17,11 @@
 /* Team size a parallel region actually gets for the requested thread count. */
 int sq_avx2_team_size(int threads);
 
-sq_status sq_avx2_compute_scale_with_workspace(
-    const float *values, size_t count, float *scale, float *partials,
-    size_t partial_capacity, int threads);
+sq_status sq_avx2_compute_scale_with_workspace(const float *values,
+                                               size_t count, float *scale,
+                                               float *partials,
+                                               size_t partial_capacity,
+                                               int threads);
 void sq_avx2_rng_words(const sq_rng_stream *s, uint64_t n, uint32_t *out,
                        int threads);
 sq_status sq_avx2_encode_payload(uint8_t bit_width, const float *values,

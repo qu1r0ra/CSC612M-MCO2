@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -251,7 +252,7 @@ def child_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if not k.startswith(prefixes)}
 
 
-def run(argv: list[str], log: Path) -> subprocess.CompletedProcess[str]:
+def run(argv: Sequence[str | Path], log: Path) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         [str(a) for a in argv],
         cwd=REPO,
@@ -270,7 +271,7 @@ def run(argv: list[str], log: Path) -> subprocess.CompletedProcess[str]:
     return result
 
 
-def run_or_fail(argv: list[str], log: Path) -> None:
+def run_or_fail(argv: Sequence[str | Path], log: Path) -> None:
     result = run(argv, log)
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-15:])
@@ -503,7 +504,7 @@ def compare(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     sub = parser.add_subparsers(dest="mode", required=True)
     cap = sub.add_parser("capture", help="Store a baseline for the current commit")
     cap.add_argument("--store", type=Path, help="Baseline folder (default: primary checkout)")

@@ -234,7 +234,7 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
             continue
         inversion = path_inversion(path)
         base_label = baseline_label(path)
-        base_stats = stats_by_label.get(base_label)
+        base_stats = stats_by_label.get(base_label) if base_label else None
         if base_stats is None:
             continue
         stats["baseline"] = base_label

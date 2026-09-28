@@ -16,7 +16,12 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "basedpyright>=1.40.1",
+    "clang-format>=23.1.1",
+    "clang-tidy>=22.1.8",
+    "pre-commit>=4.6.2",
     "pytest>=9.1.1",
+    "ruff>=0.16.9",
 ]
 
 [tool.uv.workspace]
@@ -29,3 +34,12 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tools"]
+
+[tool.ruff.lint]
+# Ruff's default rule set plus the full import-order, bugbear and pyupgrade families.
+extend-select = ["I", "B", "UP"]
+
+[tool.basedpyright]
+include = ["src", "tools", "tests"]
+typeCheckingMode = "standard"
+pythonVersion = "3.11"

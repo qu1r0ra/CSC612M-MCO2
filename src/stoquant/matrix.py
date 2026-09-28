@@ -129,7 +129,7 @@ def failed_row(
     input_family: str = "dense",
     input_key: str = "",
 ) -> dict[str, Any]:
-    row = dict.fromkeys(SUMMARY_FIELDS, "")
+    row: dict[str, Any] = dict.fromkeys(SUMMARY_FIELDS, "")
     row.update(
         {
             "count": count,

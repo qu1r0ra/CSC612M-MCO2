@@ -1,0 +1,5 @@
+# Formatting-only commits; `git blame` skips them when blame.ignoreRevsFile
+# points here (GitHub reads this file automatically).
+
+# style: format C and CUDA sources with LLVM style (#51)
+3f248c3d068cc580aa55f242aaddad738ef97448

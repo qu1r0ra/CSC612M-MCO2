@@ -36,7 +36,9 @@ PATH_LABELS = {
     "cpu-gpu-origin-pinned": "CPU GPU-origin pinned",
     "cuda-gpu-origin-pinned": "CUDA GPU-origin pinned",
 }
-PATH_COLORS = dict(zip(PATH_LABELS, plt.cm.tab10.colors, strict=True))
+# The stubs type plt.cm.tab10 as a plain Colormap; it is a ListedColormap of RGB tuples.
+_TAB10: list[Any] = plt.cm.tab10.colors  # pyright: ignore[reportAttributeAccessIssue]
+PATH_COLORS = dict(zip(PATH_LABELS, _TAB10, strict=True))
 TRANSFER_PAIRS = (
     ("cuda-host-origin", "cuda-host-origin-pinned"),
     ("cpu-gpu-origin", "cpu-gpu-origin-pinned"),
@@ -243,6 +245,15 @@ def plot_publication_stages(cases: list[dict[str, Any]], out: Path) -> None:
     plt.close(fig)
 
 
+def _stage_ms(case: dict[str, Any], stage: str) -> float:
+    if stage == "pipeline":
+        return case["statistics"]["median_ms"]
+    medians = stage_medians(case)
+    if medians is None:
+        raise ValueError(f"resident case n={case['count']} lacks stage times")
+    return medians["k1_ms"]
+
+
 def plot_bandwidth(
     manifest: dict[str, Any], cases: list[dict[str, Any]], k1_ab: Path, out: Path
 ) -> dict[str, float]:
@@ -271,19 +282,7 @@ def plot_bandwidth(
         for stage, style in (("k1", "-"), ("pipeline", "--")):
             ax.plot(
                 [c["count"] for c in selected],
-                [
-                    8
-                    * c["count"]
-                    / (
-                        (
-                            stage_medians(c)["k1_ms"]
-                            if stage == "k1"
-                            else c["statistics"]["median_ms"]
-                        )
-                        * 1e6
-                    )
-                    for c in selected
-                ],
+                [8 * c["count"] / (_stage_ms(c, stage) * 1e6) for c in selected],
                 linestyle=style,
                 label=f"{bits}-bit {stage}",
             )
