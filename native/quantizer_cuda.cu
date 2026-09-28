@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 
 #define SQ_CUDA_REDUCTION_THREADS 256
@@ -133,7 +134,8 @@ __global__ static void sum_blocks_kernel(const float *values, uint64_t count,
     for (unsigned int stride = SQ_CUDA_REDUCTION_THREADS / 2; stride != 0;
          stride /= 2) {
       if (lane < stride) {
-        output[lane] = input[2 * lane] + input[2 * lane + 1];
+        const unsigned int pair = 2 * lane;
+        output[lane] = input[pair] + input[pair + 1];
       }
       __syncthreads();
       float *temporary = input;
@@ -426,7 +428,8 @@ __global__ static void reduce_tree_kernel(const float *input, float *output,
     __syncthreads();
     for (unsigned int width = span / 2; width != 0; width /= 2) {
       for (unsigned int k = threadIdx.x; k < width; k += blockDim.x) {
-        target[k] = source[2 * k] + source[2 * k + 1];
+        const unsigned int pair = 2 * k;
+        target[k] = source[pair] + source[pair + 1];
       }
       __syncthreads();
       float *temporary = source;
@@ -1234,11 +1237,17 @@ static void destroy_bench_context(sq_cuda_bench_context *context) {
   free_host(context->host, context->transfer_policy);
 }
 
+static uint32_t f32_bits(float value) {
+  uint32_t bits;
+  memcpy(&bits, &value, sizeof bits);
+  return bits;
+}
+
 static sq_status check_bench_result(float host_scale, int prescribed_scale_seen,
                                     int host_status,
                                     uint32_t host_validation_flags) {
   if (host_status != SQ_OK &&
-      !(prescribed_scale_seen && host_status == SQ_ERR_SCALE_OVERFLOW)) {
+      (!prescribed_scale_seen || host_status != SQ_ERR_SCALE_OVERFLOW)) {
     return (sq_status)host_status;
   }
   if ((host_validation_flags & SQ_CUDA_INPUT_NONFINITE) != 0) {
@@ -1254,12 +1263,13 @@ static sq_status check_bench_result(float host_scale, int prescribed_scale_seen,
   return SQ_OK;
 }
 
-static sq_status run_bench_pipeline(
-    sq_cuda_bench_context *context, uint8_t bit_width, const float *values,
-    size_t count, uint64_t seed, uint64_t tensor_id, uint64_t invocation_id,
-    int prescribed_scale_seen, int prescribed_words_seen, int block_size,
-    int grid_size, sq_cuda_bench_boundary boundary, int copy_outputs,
-    int inspect_result, sq_bench_sample *sample) {
+static sq_status
+run_bench_pipeline(sq_cuda_bench_context *context, uint8_t bit_width,
+                   size_t count, uint64_t seed, uint64_t tensor_id,
+                   uint64_t invocation_id, int prescribed_scale_seen,
+                   int prescribed_words_seen, int block_size, int grid_size,
+                   sq_cuda_bench_boundary boundary, int copy_outputs,
+                   int inspect_result, sq_bench_sample *sample) {
   const size_t payload_bytes =
       bit_width == SQ_Q4_BITS ? count / 2 + (count & 1) : count;
   const uint64_t block_count = count / SQ_CUDA_REDUCTION_THREADS +
@@ -1597,7 +1607,7 @@ static sq_status run_bench_graph(sq_cuda_bench_context *context,
       goto done;
     }
     result = SQ_ERR_CUDA;
-    if (memcmp(&context->host->scale, &base_scale, sizeof(float)) != 0 ||
+    if (f32_bits(context->host->scale) != f32_bits(base_scale) ||
         (payload_bytes != 0 &&
          memcmp(context->host_payload, base_payload, payload_bytes) != 0)) {
       goto done;
@@ -1661,7 +1671,11 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
     return SQ_ERR_SCALE;
   }
   if (tensor_id > UINT32_MAX || base_invocation_id > UINT32_MAX ||
-      warmups > UINT64_MAX - reps || (total_runs = warmups + reps) == 0 ||
+      warmups > UINT64_MAX - reps) {
+    return SQ_ERR_ID_OVERFLOW;
+  }
+  total_runs = warmups + reps;
+  if (total_runs == 0 ||
       total_runs - 1 > (uint64_t)UINT32_MAX - base_invocation_id) {
     return SQ_ERR_ID_OVERFLOW;
   }
@@ -1848,7 +1862,7 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
   }
 
   result = run_bench_pipeline(
-      &context, bit_width, values, count, seed, tensor_id, base_invocation_id,
+      &context, bit_width, count, seed, tensor_id, base_invocation_id,
       prescribed_scale_seen, prescribed_words != NULL, block_size, grid_size,
       boundary == SQ_CUDA_BENCH_HOST_ORIGIN ? SQ_CUDA_BENCH_HOST_ORIGIN
                                             : SQ_CUDA_BENCH_RESIDENT,
@@ -1875,8 +1889,8 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
     const uint64_t run_offset =
         index < warmups ? reps + index : index - warmups;
     const uint64_t invocation_id = base_invocation_id + run_offset;
-    result = run_bench_pipeline(&context, bit_width, values, count, seed,
-                                tensor_id, invocation_id, prescribed_scale_seen,
+    result = run_bench_pipeline(&context, bit_width, count, seed, tensor_id,
+                                invocation_id, prescribed_scale_seen,
                                 prescribed_words != NULL, block_size, grid_size,
                                 boundary, transfers, 0, sample);
     if (result != SQ_OK) {

@@ -10,6 +10,7 @@
 #include "quantizer.h"
 #include "quantizer_avx2.h"
 #include "rng_cpu.h"
+#include "test_alloc.h"
 
 static int failures;
 static int checks;
@@ -53,14 +54,18 @@ static void fill(float *values, size_t count, int kind) {
 }
 
 static int same_float(float a, float b) {
-  return memcmp(&a, &b, sizeof a) == 0;
+  uint32_t a_bits, b_bits;
+
+  memcpy(&a_bits, &a, sizeof a_bits);
+  memcpy(&b_bits, &b, sizeof b_bits);
+  return a_bits == b_bits;
 }
 
 static void compare_scale(const float *values, size_t count, int threads,
                           const char *what) {
   size_t capacity = sq_scale_workspace_elements(count);
-  float *p0 = capacity ? (float *)malloc(capacity * sizeof *p0) : NULL;
-  float *p1 = capacity ? (float *)malloc(capacity * sizeof *p1) : NULL;
+  float *p0 = capacity ? (float *)test_alloc(capacity, sizeof *p0) : NULL;
+  float *p1 = capacity ? (float *)test_alloc(capacity, sizeof *p1) : NULL;
   float s0 = -1.0f, s1 = -2.0f;
   sq_status st0 =
       sq_compute_scale_with_workspace(values, count, &s0, p0, capacity);
@@ -76,8 +81,8 @@ static void compare_encode(uint8_t bits, const float *values, size_t count,
                            float scale, const uint32_t *words, int threads,
                            const char *what) {
   size_t bytes = bits == SQ_Q4_BITS ? (count + 1) / 2 : count;
-  uint8_t *e0 = (uint8_t *)malloc(bytes + 1),
-          *e1 = (uint8_t *)malloc(bytes + 1);
+  uint8_t *e0 = (uint8_t *)test_alloc(bytes + 1, 1),
+          *e1 = (uint8_t *)test_alloc(bytes + 1, 1);
   sq_status st0, st1;
 
   memset(e0, 0xA5, bytes + 1);
@@ -92,8 +97,8 @@ static void compare_encode(uint8_t bits, const float *values, size_t count,
 static void compare_all(const float *values, size_t count, int threads,
                         uint64_t seed) {
   sq_rng_stream stream;
-  uint32_t *w0 = (uint32_t *)malloc((count + 1) * sizeof *w0);
-  uint32_t *w1 = (uint32_t *)malloc((count + 1) * sizeof *w1);
+  uint32_t *w0 = (uint32_t *)test_alloc(count + 1, sizeof *w0);
+  uint32_t *w1 = (uint32_t *)test_alloc(count + 1, sizeof *w1);
   float scale = 0.0f;
 
   sq_rng_stream_init(&stream, seed, 7, 0xFFFFFFFFu);
@@ -141,8 +146,8 @@ int main(void) {
   static const int team[] = {1, 2, 3, 7, 16};
   const float probes[] = {NAN, INFINITY, -INFINITY};
   const size_t big = (1u << 20) + 13;
-  float *values = (float *)malloc(big * sizeof *values);
-  uint32_t *words = (uint32_t *)malloc(big * sizeof *words);
+  float *values = (float *)test_alloc(big, sizeof *values);
+  uint32_t *words = (uint32_t *)test_alloc(big, sizeof *words);
   size_t c, i;
   int t, k, kind;
 
@@ -213,7 +218,7 @@ int main(void) {
   /* Extreme words: every threshold boundary gets hit by 0 and UINT32_MAX. */
   fill(values, 65549, 1);
   for (i = 0; i < 65549; i++) {
-    words[i] = i % 2 ? UINT32_MAX : 0;
+    words[i] = i % 2 != 0 ? UINT32_MAX : 0;
   }
   for (t = 0; t < (int)(sizeof team / sizeof team[0]); t++) {
     float scale;

@@ -7,6 +7,7 @@
 
 #include "quantizer.h"
 #include "rng_cpu.h"
+#include "test_alloc.h"
 
 static int failures;
 
@@ -128,9 +129,9 @@ int main(void) {
     for (l_idx = 0; l_idx < sizeof odd_lengths / sizeof odd_lengths[0];
          l_idx++) {
       size_t n = odd_lengths[l_idx];
-      float *test_in = (float *)malloc(n * sizeof *test_in);
-      uint32_t *test_words = (uint32_t *)calloc(n, sizeof *test_words);
-      uint8_t *rec = (uint8_t *)malloc(SQ_HEADER_SIZE + (n + 1) / 2);
+      float *test_in = (float *)test_alloc(n, sizeof *test_in);
+      uint32_t *test_words = (uint32_t *)test_alloc(n, sizeof *test_words);
+      uint8_t *rec = (uint8_t *)test_alloc(SQ_HEADER_SIZE + (n + 1) / 2, 1);
       float *out_vals = NULL;
       size_t out_count = 0;
       size_t k;
@@ -158,10 +159,10 @@ int main(void) {
   {
     const size_t l3_n = 1024;
     const size_t l3_t = 4096;
-    float *x = (float *)malloc(l3_n * sizeof *x);
-    double *sum_decoded = (double *)calloc(l3_n, sizeof *sum_decoded);
-    uint32_t *l3_words = (uint32_t *)malloc(l3_n * sizeof *l3_words);
-    uint8_t *l3_payload = (uint8_t *)malloc(l3_n);
+    float *x = (float *)test_alloc(l3_n, sizeof *x);
+    double *sum_decoded = (double *)test_alloc(l3_n, sizeof *sum_decoded);
+    uint32_t *l3_words = (uint32_t *)test_alloc(l3_n, sizeof *l3_words);
+    uint8_t *l3_payload = (uint8_t *)test_alloc(l3_n, 1);
     size_t idx, k, seed;
     int bits_case;
 

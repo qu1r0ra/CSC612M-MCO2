@@ -4,6 +4,7 @@
 
 #include "rng_cpu.h"
 #include "rng_cuda.h"
+#include "test_alloc.h"
 
 static int failures;
 
@@ -55,10 +56,10 @@ static void test_kat(void) {
     key.v[1] = kat[row][5];
 
     cpu = sq_philox_raw_cpu(ctr, key);
-    sprintf(what, "Philox4x32-10 KAT row %d on CPU", row);
+    (void)snprintf(what, sizeof what, "Philox4x32-10 KAT row %d on CPU", row);
     check(same_ctr(cpu, expected), what);
 
-    sprintf(what, "Philox4x32-10 KAT row %d on GPU", row);
+    (void)snprintf(what, sizeof what, "Philox4x32-10 KAT row %d on GPU", row);
     if (cuda_ok(sq_philox_raw_cuda(ctr, key, &gpu), what)) {
       check(same_ctr(gpu, expected), what);
     }
@@ -114,8 +115,8 @@ static void test_geometry(void) {
   static const int geometry[][2] = {{1, 0},   {32, 1},  {96, 13},
                                     {128, 7}, {256, 0}, {1024, 3}};
   const uint64_t n = 1000003; /* not a multiple of 4 */
-  uint32_t *cpu = malloc(n * sizeof *cpu);
-  uint32_t *gpu = malloc(n * sizeof *gpu);
+  uint32_t *cpu = test_alloc(n, sizeof *cpu);
+  uint32_t *gpu = test_alloc(n, sizeof *gpu);
   sq_rng_stream s;
   size_t g;
 
@@ -124,8 +125,9 @@ static void test_geometry(void) {
 
   for (g = 0; g < sizeof geometry / sizeof geometry[0]; g++) {
     char what[96];
-    sprintf(what, "GPU words match CPU for n=%llu, block=%d, grid=%d",
-            (unsigned long long)n, geometry[g][0], geometry[g][1]);
+    (void)snprintf(what, sizeof what,
+                   "GPU words match CPU for n=%llu, block=%d, grid=%d",
+                   (unsigned long long)n, geometry[g][0], geometry[g][1]);
     memset(gpu, 0, n * sizeof *gpu);
     if (cuda_ok(sq_rng_words_cuda(&s, n, gpu, geometry[g][0], geometry[g][1]),
                 what)) {
@@ -144,7 +146,8 @@ static void test_bernoulli(void) {
   static const float probs[] = {0.0f, 1.0f, 0x1.fffffep-1f, 0.5f};
   enum {
     NW = sizeof words / sizeof words[0],
-    NP = sizeof probs / sizeof probs[0]
+    NP = sizeof probs / sizeof probs[0],
+    N = NW * NP
   };
   uint32_t w[NW * NP];
   float p[NW * NP];
@@ -170,10 +173,10 @@ static void test_bernoulli(void) {
   check(sq_bernoulli_threshold(0.0f) == 0, "threshold(0) = 0");
   check(sq_bernoulli_threshold(1.0f) == 0x100000000ULL, "threshold(1) = 2^32");
 
-  sq_bernoulli_cpu(w, p, NW * NP, cpu);
+  sq_bernoulli_cpu(w, p, N, cpu);
   check(memcmp(cpu, expected, sizeof expected) == 0,
         "CPU Bernoulli at p = 0, 1, 1-2^-24, 0.5");
-  if (cuda_ok(sq_bernoulli_cuda(w, p, NW * NP, gpu), "GPU Bernoulli")) {
+  if (cuda_ok(sq_bernoulli_cuda(w, p, N, gpu), "GPU Bernoulli")) {
     check(memcmp(gpu, expected, sizeof expected) == 0,
           "GPU Bernoulli at p = 0, 1, 1-2^-24, 0.5");
   }

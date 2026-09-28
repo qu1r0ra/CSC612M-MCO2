@@ -11,6 +11,8 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -20,8 +22,8 @@
   do {                                                                         \
     cudaError_t check_error = (call);                                          \
     if (check_error != cudaSuccess) {                                          \
-      fprintf(stderr, "%s failed: %s\n", #call,                                \
-              cudaGetErrorString(check_error));                                \
+      (void)fprintf(stderr, "%s failed: %s\n", #call,                          \
+                    cudaGetErrorString(check_error));                          \
       return 1;                                                                \
     }                                                                          \
   } while (0)
@@ -58,11 +60,19 @@ static int parse_int(int argc, char **argv, int *i, int *out) {
   if (*i + 1 >= argc) {
     return 0;
   }
-  *out = atoi(argv[++*i]);
+  const char *text = argv[++*i];
+  char *end = NULL;
+  errno = 0;
+  const long value = strtol(text, &end, 10);
+  if (errno != 0 || end == text || *end != '\0' || value < INT_MIN ||
+      value > INT_MAX) {
+    return 0;
+  }
+  *out = (int)value;
   return 1;
 }
 
-int main(int argc, char **argv) {
+static int probe(int argc, char **argv) {
   int min_exp = 10, max_exp = 26, reps = 50, discard = 10;
   bool device_only = false;
   for (int i = 1; i < argc; i++) {
@@ -80,15 +90,15 @@ int main(int argc, char **argv) {
       ok = 1;
     }
     if (!ok) {
-      fprintf(stderr,
-              "usage: stream_probe [--min-exp N] [--max-exp N] [--reps N] "
-              "[--discard N]\n");
+      (void)fprintf(
+          stderr, "usage: stream_probe [--min-exp N] [--max-exp N] [--reps N] "
+                  "[--discard N]\n");
       return 2;
     }
   }
   if (min_exp < 2 || max_exp > 30 || min_exp > max_exp || discard < 0 ||
       reps <= discard) {
-    fprintf(stderr, "invalid probe range\n");
+    (void)fprintf(stderr, "invalid probe range\n");
     return 2;
   }
 
@@ -170,8 +180,9 @@ int main(int argc, char **argv) {
         best_ms = kept.front();
         best_grid = grid;
         const size_t half = kept.size() / 2;
-        best_grid_median_ms =
-            kept.size() % 2 ? kept[half] : 0.5f * (kept[half - 1] + kept[half]);
+        best_grid_median_ms = kept.size() % 2 != 0
+                                  ? kept[half]
+                                  : 0.5f * (kept[half - 1] + kept[half]);
       }
     }
     const double bytes = (double)count * sizeof(float);
@@ -187,4 +198,14 @@ int main(int argc, char **argv) {
   CHECK(cudaFree(values));
   CHECK(cudaFree(sink));
   return 0;
+}
+
+// std::vector reports allocation failure by throwing.
+int main(int argc, char **argv) {
+  try {
+    return probe(argc, argv);
+  } catch (const std::exception &error) {
+    (void)fprintf(stderr, "stream_probe: %s\n", error.what());
+    return 1;
+  }
 }

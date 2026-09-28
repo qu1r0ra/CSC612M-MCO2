@@ -29,7 +29,7 @@
 #define SQ_MAX_CPU_THREADS 256
 
 static void usage(FILE *stream) {
-  fprintf(
+  (void)fprintf(
       stream,
       "Usage:\n"
       "  stoquant compress --input INPUT.f32 --output RECORD --seed UINT64\n"
@@ -185,7 +185,7 @@ static int cpu_has_avx2(void) {
 static int default_thread_count(void) {
 #ifdef _WIN32
   DWORD_PTR process_mask, system_mask;
-  int count = 0;
+  long count = 0;
 
   if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask,
                              &system_mask)) {
@@ -465,11 +465,11 @@ static sq_status compress_file(int argc, char **argv) {
       goto done;
     }
     if (timings_seen) {
-      fprintf(stderr,
-              "{\"k1_ms\":%.6f,\"k2_ms\":%.6f,\"k3_ms\":%.6f,"
-              "\"h2d_ms\":%.6f,\"d2h_ms\":%.6f}\n",
-              cuda_timings.k1_ms, cuda_timings.k2_ms, cuda_timings.k3_ms,
-              cuda_timings.h2d_ms, cuda_timings.d2h_ms);
+      (void)fprintf(stderr,
+                    "{\"k1_ms\":%.6f,\"k2_ms\":%.6f,\"k3_ms\":%.6f,"
+                    "\"h2d_ms\":%.6f,\"d2h_ms\":%.6f}\n",
+                    cuda_timings.k1_ms, cuda_timings.k2_ms, cuda_timings.k3_ms,
+                    cuda_timings.h2d_ms, cuda_timings.d2h_ms);
     }
     status = SQ_OK;
     goto done;
@@ -866,7 +866,7 @@ static sq_status bench_file(int argc, char **argv) {
   float scale;
 #endif
   int seed_seen = 0, scale_seen = 0, boundary_seen = 0, policy_seen = 0;
-  int threads_seen = 0, threads, team_size = 0;
+  int threads_seen = 0, threads, team_size = 0, cpu_gpu_origin;
   int transfers;
   int block_size_seen = 0, grid_size_seen = 0, i;
   int k1 = SQ_CUDA_K1_REFERENCE, k1_seen = 0;
@@ -1013,7 +1013,11 @@ static sq_status bench_file(int argc, char **argv) {
     return status;
   }
   if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX ||
-      warmups > UINT64_MAX - reps || (total_runs = warmups + reps) == 0 ||
+      warmups > UINT64_MAX - reps) {
+    return SQ_ERR_ID_OVERFLOW;
+  }
+  total_runs = warmups + reps;
+  if (total_runs == 0 ||
       total_runs - 1 > (uint64_t)UINT32_MAX - invocation_id) {
     return SQ_ERR_ID_OVERFLOW;
   }
@@ -1089,20 +1093,9 @@ static sq_status bench_file(int argc, char **argv) {
     goto done;
   }
 
-  if (strcmp(backend, "cpu") == 0 && strcmp(boundary_name, "gpu-origin") == 0) {
-#ifdef SQ_ENABLE_CUDA
-    status = bench_cpu_gpu_origin(
-        (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
-        scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
-        generated_words, scale_partials, scale_partial_count,
-        strcmp(transfer_policy_name, "pinned") == 0 ? SQ_CUDA_TRANSFER_PINNED
-                                                    : SQ_CUDA_TRANSFER_PAGEABLE,
-        warmups, reps, record, output_path, record_size, samples);
-    if (status != SQ_OK) {
-      goto done;
-    }
-#endif
-  } else if (is_cpu_backend(backend)) {
+  cpu_gpu_origin =
+      strcmp(backend, "cpu") == 0 && strcmp(boundary_name, "gpu-origin") == 0;
+  if (is_cpu_backend(backend) && !cpu_gpu_origin) {
     if (threads != 0) {
       team_size = sq_avx2_team_size(threads);
     }
@@ -1145,8 +1138,20 @@ static sq_status bench_file(int argc, char **argv) {
         samples[run - warmups].wall_ms = stop_ms - start_ms;
       }
     }
-  } else {
+  }
 #ifdef SQ_ENABLE_CUDA
+  else if (cpu_gpu_origin) {
+    status = bench_cpu_gpu_origin(
+        (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
+        scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
+        generated_words, scale_partials, scale_partial_count,
+        strcmp(transfer_policy_name, "pinned") == 0 ? SQ_CUDA_TRANSFER_PINNED
+                                                    : SQ_CUDA_TRANSFER_PAGEABLE,
+        warmups, reps, record, output_path, record_size, samples);
+    if (status != SQ_OK) {
+      goto done;
+    }
+  } else {
     uint8_t *base_payload = record + SQ_HEADER_SIZE;
     if (sq_cuda_select_k1(k1) != 0) {
       status = SQ_ERR_ARGUMENT;
@@ -1175,8 +1180,8 @@ static sq_status bench_file(int argc, char **argv) {
       status = SQ_ERR_IO;
       goto done;
     }
-#endif
   }
+#endif
 
   print_bench_json(backend, boundary_name, transfer_policy_name, (uint8_t)bits,
                    count, seed, tensor_id, invocation_id, warmups, reps,
@@ -1234,8 +1239,8 @@ static sq_status decompress_file(int argc, char **argv) {
     goto done;
   }
   output_size = count * sizeof(uint32_t);
-  output = output_size == 0 ? NULL : (uint8_t *)malloc(output_size);
-  if (output_size != 0 && output == NULL) {
+  output = count == 0 ? NULL : (uint8_t *)malloc(output_size);
+  if (count != 0 && output == NULL) {
     status = SQ_ERR_MEMORY;
     goto done;
   }
@@ -1253,6 +1258,13 @@ done:
   free(values);
   free(record);
   return status;
+}
+
+static uint32_t f32_bits(float value) {
+  uint32_t bits;
+
+  memcpy(&bits, &value, sizeof bits);
+  return bits;
 }
 
 static void store_f64_le(uint8_t bytes[8], double value) {
@@ -1277,6 +1289,7 @@ static sq_status expect_file(int argc, char **argv) {
   uint32_t *words = NULL;
   double *sums = NULL, *squares = NULL;
   size_t input_size = 0, count = 0, payload_size, i_size, decoded_count;
+  size_t output_size;
   float scale = 0.0f;
   uint32_t scale_bits;
   sq_status status;
@@ -1388,7 +1401,7 @@ static sq_status expect_file(int argc, char **argv) {
       if (status != SQ_OK) {
         goto done;
       }
-      if (memcmp(&record_scale, &scale, sizeof scale) != 0) {
+      if (f32_bits(record_scale) != f32_bits(scale)) {
         status = SQ_ERR_SCALE;
         goto done;
       }
@@ -1430,7 +1443,8 @@ static sq_status expect_file(int argc, char **argv) {
     decoded = NULL;
   }
 
-  output = (uint8_t *)malloc(2 * count * sizeof(double));
+  output_size = 2 * count * sizeof(double);
+  output = (uint8_t *)malloc(output_size);
   if (output == NULL) {
     status = SQ_ERR_MEMORY;
     goto done;
@@ -1439,11 +1453,11 @@ static sq_status expect_file(int argc, char **argv) {
     store_f64_le(output + 8 * i_size, sums[i_size]);
     store_f64_le(output + 8 * (count + i_size), squares[i_size]);
   }
-  if (!write_file(output_path, output, 2 * count * sizeof(double))) {
+  if (!write_file(output_path, output, output_size)) {
     status = SQ_ERR_IO;
     goto done;
   }
-  memcpy(&scale_bits, &scale, sizeof scale_bits);
+  scale_bits = f32_bits(scale);
   printf("{\"backend\":\"%s\",\"bits\":%u,\"count\":%llu,\"seeds\":%llu,"
          "\"seed_start\":%llu,\"tensor_id\":%llu,\"invocation_id\":%llu,"
          "\"scale\":%.9g,\"scale_bits\":\"0x%08x\"}\n",
@@ -1485,7 +1499,7 @@ int main(int argc, char **argv) {
     return 2;
   }
   if (status != SQ_OK) {
-    fprintf(stderr, "%s: %s\n", argv[1], sq_status_message(status));
+    (void)fprintf(stderr, "%s: %s\n", argv[1], sq_status_message(status));
     return 1;
   }
   return 0;

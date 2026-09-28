@@ -112,6 +112,8 @@ sq_status sq_compute_scale_with_workspace(const float *values, size_t count,
   }
   for (stride = padded_count / 2; stride != 0; stride /= 2) {
     for (i = 0; i < stride; i++) {
+      // 2 * i + 1 < 2 * stride <= padded_count; the analyzer cannot divide.
+      // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
       partials[i] = partials[2 * i] + partials[2 * i + 1];
     }
   }

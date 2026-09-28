@@ -253,16 +253,20 @@ static void philox_chunk(uint64_t first_group, uint32_t k0, uint32_t k1,
     }
   }
   for (j = 0; j < PHILOX_CHUNK; j++) {
+    // 4 * j < 4 * PHILOX_CHUNK cannot overflow int, and rewriting the index
+    // changes the MSVC vectorization report recorded as evidence.
+    // NOLINTBEGIN(bugprone-implicit-widening-of-multiplication-result)
     out[4 * j] = c0[j];
     out[4 * j + 1] = c1[j];
     out[4 * j + 2] = c2[j];
     out[4 * j + 3] = c3[j];
+    // NOLINTEND(bugprone-implicit-widening-of-multiplication-result)
   }
 }
 
 void sq_avx2_rng_words(const sq_rng_stream *s, uint64_t n, uint32_t *out,
                        int threads) {
-  const uint64_t chunk_words = 4 * PHILOX_CHUNK;
+  const uint64_t chunk_words = (uint64_t)4 * PHILOX_CHUNK;
   const size_t chunks = (size_t)((n + chunk_words - 1) / chunk_words);
   const uint32_t k0 = (uint32_t)s->seed, k1 = (uint32_t)(s->seed >> 32);
   const uint32_t tensor = s->tensor_id, invocation = s->invocation_id;

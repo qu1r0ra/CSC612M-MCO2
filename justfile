@@ -27,18 +27,21 @@ cuda_arch := env("CUDA_ARCH", "native")
 # host build can put -DSQ_ENABLE_CUDA ahead of them.
 cl_includes := "/Inative /Ithird_party/random123/include"
 cc_includes := "-Inative -Ithird_party/random123/include"
-cl_strict_flags := "/W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS"
+cl_strict_flags := "/W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS"
 cl_test_flags := "/nologo " + cl_strict_flags
 cl_host_flags := "/nologo /O2 " + cl_strict_flags
 cc_strict_flags := "-std=c11 -Wall -Wextra -Werror -ffp-contract=off"
 cc_host_flags := "-O2 " + cc_strict_flags
 nvcc_flags := "-O2 -arch=" + cuda_arch + " " + cc_includes
+# Host warnings are errors through nvcc too. C4068 is the unknown-pragma warning
+# for the nvcc diag_suppress pragmas in Random123/array.h.
+nvcc_warn_flags := if os() == "windows" { "--Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068" } else { "--Werror all-warnings" }
 nvcc_fp_flags := "--fmad=false --ftz=false --prec-div=true --prec-sqrt=true"
 rng_sources := "native/rng_cpu.c native/rng_cuda.cu tests/test_rng.c"
 # Only the AVX2 comparator gets vector, OpenMP and non-strict FP flags. Neither
 # /fp:precise nor -ffp-contract=off contracts a*b+c, and its tests pin the bytes.
 # The file reads float storage as uint32_t, so gcc drops type-based aliasing.
-avx2_cl_flags := "/nologo /O2 /W4 /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS " + cl_includes
+avx2_cl_flags := "/nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS " + cl_includes
 avx2_cc_flags := "-O2 -std=c11 -Wall -Wextra -Werror -mavx2 -fopenmp -ffp-contract=off -fno-strict-aliasing " + cc_includes
 
 # Record the CUDA toolkit and GPU used for a build
@@ -58,12 +61,12 @@ toolchain:
 [windows]
 build-rng:
     New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} -Xcompiler /wd4068 {{rng_sources}} -o build/test_rng.exe
+    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_warn_flags}} {{rng_sources}} -o build/test_rng.exe
 
 [unix]
 build-rng:
     mkdir -p build
-    nvcc {{nvcc_flags}} {{rng_sources}} -o build/test_rng
+    nvcc {{nvcc_flags}} {{nvcc_warn_flags}} {{rng_sources}} -o build/test_rng
 
 # Run the RNG checks on CPU and GPU; exits nonzero on any failure
 test-rng: build-rng
@@ -100,7 +103,7 @@ build-cuda:
     ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} /DSQ_ENABLE_CUDA {{cl_includes}} /c native\quantizer.c /Fo:build\quantizer_cuda_host.obj
     ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} /DSQ_ENABLE_CUDA {{cl_includes}} /c native\rng_cpu.c /Fo:build\rng_cpu_cuda.obj
     ./tools/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c native\quantizer_avx2.c /Fo:build\quantizer_avx2_cuda.obj
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_fp_flags}} -Xcompiler /wd4068 -c native\quantizer_cuda.cu -o build\quantizer_cuda.obj
+    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -c native\quantizer_cuda.cu -o build\quantizer_cuda.obj
     ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} build\main_cuda.obj build\codec_cuda.obj build\quantizer_cuda_host.obj build\rng_cpu_cuda.obj build\quantizer_avx2_cuda.obj build\quantizer_cuda.obj -o build\stoquant.exe
 
 [unix]
@@ -111,29 +114,29 @@ build-cuda:
     ${CC:-cc} {{cc_host_flags}} -DSQ_ENABLE_CUDA {{cc_includes}} -c native/quantizer.c -o build/quantizer_cuda_host.o
     ${CC:-cc} {{cc_host_flags}} -DSQ_ENABLE_CUDA {{cc_includes}} -c native/rng_cpu.c -o build/rng_cpu_cuda.o
     ${CC:-cc} {{avx2_cc_flags}} -c native/quantizer_avx2.c -o build/quantizer_avx2_cuda.o
-    nvcc {{nvcc_flags}} {{nvcc_fp_flags}} -c native/quantizer_cuda.cu -o build/quantizer_cuda.o
+    nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -c native/quantizer_cuda.cu -o build/quantizer_cuda.o
     nvcc {{nvcc_flags}} {{nvcc_fp_flags}} build/main_cuda.o build/codec_cuda.o build/quantizer_cuda_host.o build/rng_cpu_cuda.o build/quantizer_avx2_cuda.o build/quantizer_cuda.o -lm -Xcompiler -fopenmp -o build/stoquant
 
 # Build the device-attribute and streaming-read probe for the K1 baseline
 [windows]
 build-stream-probe:
     New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} native\stream_probe.cu -o build\stream_probe.exe
+    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_warn_flags}} native\stream_probe.cu -o build\stream_probe.exe
 
 [unix]
 build-stream-probe:
     mkdir -p build
-    nvcc {{nvcc_flags}} native/stream_probe.cu -o build/stream_probe
+    nvcc {{nvcc_flags}} {{nvcc_warn_flags}} native/stream_probe.cu -o build/stream_probe
 
 [windows]
 build-codec-test:
     New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe /nologo /W4 /std:c11 /D_CRT_SECURE_NO_WARNINGS /Inative tests\test_codec.c native\codec.c /Fe:build\test_codec.exe
+    ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} tests\test_codec.c native\codec.c /Fo:build\ /Fe:build\test_codec.exe
 
 [unix]
 build-codec-test:
     mkdir -p build
-    ${CC:-cc} -std=c11 -Wall -Wextra -Werror -Inative tests/test_codec.c native/codec.c -o build/test_codec
+    ${CC:-cc} {{cc_strict_flags}} {{cc_includes}} tests/test_codec.c native/codec.c -o build/test_codec
 
 # Build the AVX2-versus-scalar differential test
 [windows]
@@ -158,7 +161,7 @@ vec-report:
 [windows]
 build-quantizer-test:
     New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} tests\test_quantizer.c native\quantizer.c native\codec.c native\rng_cpu.c /Fe:build\test_quantizer.exe
+    ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} tests\test_quantizer.c native\quantizer.c native\codec.c native\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer.exe
 
 [unix]
 build-quantizer-test:
