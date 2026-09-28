@@ -141,6 +141,8 @@ CSV_COMPARED_COLUMNS = {
 }  # fmt: skip
 # Rule text names the binary, which stage 1 renames; the name is normalized.
 BINARY_NAME = re.compile(r"\b(mco2|stoquant)\b")
+# Drawn from seed-determined values only, so hashed like any other file.
+SEEDED_FIGURES = {"f_unbiasedness.png"}
 VEC_VERDICT = re.compile(
     r"info C500[12]: (loop vectorized|loop not vectorized due to reason '\d+')"
 )
@@ -198,13 +200,16 @@ def fingerprint_csv(path: Path) -> dict[str, Any]:
     for r, row in enumerate(rows[1:]):
         for column, cell in zip(rows[0], row, strict=True):
             keep = compared is None or column in compared
-            out[f"row/{r}/{column}"] = cell if keep else "<redacted: timing-derived>"
+            value = BINARY_NAME.sub("<binary>", cell)
+            out[f"row/{r}/{column}"] = value if keep else "<redacted: timing-derived>"
     return out
 
 
 def fingerprint_vec_report(path: Path) -> dict[str, Any]:
     """Per-report verdict counts: function names and source paths change in stage 1."""
-    verdicts = Counter(m.group(1) for m in VEC_VERDICT.finditer(path.read_text()))
+    verdicts = Counter(
+        m.group(1) for m in VEC_VERDICT.finditer(path.read_text(encoding="utf-8", errors="replace"))
+    )
     return dict(sorted(verdicts.items()))
 
 
@@ -214,13 +219,13 @@ def fingerprint_live_dir(root: Path) -> dict[str, Any]:
         name = file.relative_to(root).as_posix()
         if file.suffix == ".json":
             flat: dict[str, Any] = {}
-            flatten(json.loads(file.read_text()), "", flat)
+            flatten(json.loads(file.read_text(encoding="utf-8")), "", flat)
             out[name] = flat
         elif file.suffix == ".csv":
             out[name] = fingerprint_csv(file)
         elif file.name.startswith("msvc_vectorization_report"):
             out[name] = fingerprint_vec_report(file)
-        elif file.suffix == ".png":
+        elif file.suffix == ".png" and file.name not in SEEDED_FIGURES:
             out[name] = "<present: drawn from timings>"
         else:
             out[name] = sha256(file)
@@ -252,9 +257,15 @@ def run(argv: list[str], log: Path) -> subprocess.CompletedProcess[str]:
         env=child_env(),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
-    log.write_text(f"$ {argv}\n--- stdout\n{result.stdout}\n--- stderr\n{result.stderr}")
+    command = subprocess.list2cmdline([str(a) for a in argv])
+    log.write_text(
+        f"$ {command}\n--- stdout\n{result.stdout}\n--- stderr\n{result.stderr}",
+        encoding="utf-8",
+    )
     return result
 
 
@@ -322,9 +333,15 @@ def records(work: Path) -> dict[str, Any]:
         for label, args in record_variants():
             record = folder / f"{name}_{label}.rec"
             decoded = folder / f"{name}_{label}.out.f32"
-            log = work / "logs" / f"record_{name}_{label}.log"
-            run_or_fail([binary, "compress", "--input", source, "--output", record, *args], log)
-            run_or_fail([binary, "decompress", "--input", record, "--output", decoded], log)
+            log = work / "logs" / f"record_{name}_{label}"
+            run_or_fail(
+                [binary, "compress", "--input", source, "--output", record, *args],
+                log.with_name(f"{log.name}_compress.log"),
+            )
+            run_or_fail(
+                [binary, "decompress", "--input", record, "--output", decoded],
+                log.with_name(f"{log.name}_decompress.log"),
+            )
             out[f"{name}/{label}/record"] = sha256(record)
             out[f"{name}/{label}/decompressed"] = sha256(decoded)
     return out
@@ -345,8 +362,9 @@ def frozen_snapshots(work: Path) -> dict[str, Any]:
         if (snap / "summary.json").exists() and snap.name.endswith("-k1-ab"):
             copy = renders_root / f"k1-ab-figure/{snap.name}"
             shutil.copytree(snap, copy)
-            (copy / "f5_k1_stages.png").unlink()
-            result = run([*INVOCATION["k1-ab"], "--figure", copy], work / "logs" / "f5.log")
+            (copy / "f5_k1_stages.png").unlink(missing_ok=True)
+            log = work / "logs" / f"f5_{snap.name}.log"
+            result = run([*INVOCATION["k1-ab"], "--figure", copy], log)
             renders[f"k1-ab-figure/{snap.name}"] = outcome(
                 result, copy, work, only="f5_k1_stages.png"
             )
@@ -355,7 +373,7 @@ def frozen_snapshots(work: Path) -> dict[str, Any]:
             key = f"figures-k1-ab/{bench.name}+{ab.name}"
             renders[key] = render(
                 [*INVOCATION["figures"], bench, "--k1-ab", ab],
-                renders_root / f"{bench.name}+k1-ab",
+                renders_root / f"{bench.name}+{ab.name}",
                 work,
             )
     out["renders"] = renders
@@ -374,7 +392,7 @@ def outcome(
 ) -> dict[str, Any]:
     if result.returncode != 0:
         last = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else ""
-        return {"error": scrub_paths(last, work, REPO)}
+        return {"error": BINARY_NAME.sub("<binary>", scrub_paths(last, work, REPO))}
     files = hash_tree(target)
     return {k: v for k, v in files.items() if only is None or k == only}
 
