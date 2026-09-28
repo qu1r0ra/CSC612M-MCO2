@@ -445,3 +445,28 @@ def test_revision_3_frozen_report_remains_byte_identical(tmp_path):
     snapshot = Path(__file__).resolve().parents[1] / "results" / "2026-09-26-a1d2439"
     report = render_report(snapshot, tmp_path / "old-output")["report"]
     assert report.read_bytes() == (snapshot / "report.md").read_bytes()
+
+
+GOLDEN = Path(__file__).resolve().parent / "golden"
+
+
+def render_publication_goldens(root):
+    """Render each publication golden under root; returns {golden name: report path}."""
+    root.mkdir(parents=True)
+    k1 = root / "k1-ab"
+    write_k1_summary(k1)
+    reports = {}
+    for family in ("dense", "sparse", "model"):
+        snapshot = root / family
+        write_snapshot(snapshot, publication_cases(family))
+        out = root / f"{family}-out"
+        reports[f"publication_{family}.md"] = render_report(snapshot, out, k1_ab=k1)["report"]
+    return reports
+
+
+def test_publication_reports_remain_byte_identical(tmp_path):
+    first = render_publication_goldens(tmp_path / "a")
+    elsewhere = render_publication_goldens(tmp_path / "somewhere-else")
+    for name, report in first.items():
+        assert report.read_bytes() == elsewhere[name].read_bytes(), name
+        assert report.read_bytes() == (GOLDEN / name).read_bytes(), name
