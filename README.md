@@ -12,6 +12,7 @@ The C-host/CUDA toolchain, Philox generator, and CUDA 8-bit and 4-bit quantizers
 
 - [Technical contract](docs/technical-contract.md)
 - [Reproduction path](docs/reproduction.md)
+- [Run notifications](docs/run-notifications.md)
 - [Benchmark protocol](docs/benchmark-protocol.md)
 - [Course deliverables](docs/course-deliverables.md)
 - [Architecture ADR](docs/adr/0001-cuda-stochastic-quantization-architecture.md)

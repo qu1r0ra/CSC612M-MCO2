@@ -164,6 +164,8 @@ An evidence sweep refuses to start unless the readiness check passes: a reboot w
 
 ### Running the benchmark matrix
 
+`just bench-matrix` requires the local ntfy settings and sends a preflight notification before it starts the benchmark driver. See [Run notifications](run-notifications.md) to configure the MCO2 topic and token, verify phone delivery, and review what each alert contains. Notification setup does not change the benchmark protocol or results.
+
 ```powershell
 # Pilot: four sizes, both bit widths, into results/pilots/ (never evidence)
 just bench-matrix --pilot
