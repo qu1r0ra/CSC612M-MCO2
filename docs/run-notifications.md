@@ -1,20 +1,20 @@
 # Run notifications
 
-`just bench-matrix` uses ntfy to report whether a benchmark command started, periodic progress, and its terminal result. The notification wrapper performs a configuration and delivery check before starting the benchmark driver. Missing settings or a failed preflight or start notification stops the driver. After launch, notification outages are warnings and do not replace the benchmark command's exit code.
+`just bench-matrix` sends ntfy notifications for preflight, start, hourly progress, and the terminal result. The wrapper checks configuration and delivery before it starts the benchmark driver. A missing setting or failed preflight or start notification prevents the driver from starting. After launch, delivery failures are warnings; the benchmark command's exit code remains authoritative.
 
 ## One-time setup
 
-1. Install the [ntfy phone app](https://docs.ntfy.sh/subscribe/phone/) or use the [ntfy web app](https://ntfy.sh/app).
-2. Choose a fresh MCO2 topic name in the form `<project>-<family-name>-<random-suffix>`. Use a long, unpredictable suffix and keep the complete topic private: ntfy topic names are public and anyone who knows one can subscribe to it.
-3. Subscribe to that topic in the phone app or web app. Topics do not need to be created separately.
-4. Sign in to [ntfy.sh](https://ntfy.sh/) and create a dedicated access token in the web app's Account section, as described in [ntfy's publishing documentation](https://docs.ntfy.sh/publish/#access-tokens). ntfy.sh access tokens currently grant account-level access, so store this token only in the local configuration and revoke it from the account page if it is no longer needed.
-5. From the repository root, copy `.env.example` to `.env` and replace the topic and token placeholders. `.env` is ignored by Git. Keep the real topic and token out of source files, benchmark outputs, screenshots, and issue reports.
+1. Install the [ntfy phone app](https://docs.ntfy.sh/subscribe/phone/) or open the [ntfy web app](https://ntfy.sh/app). Continue when either interface is ready to subscribe.
+2. Choose a fresh MCO2 topic such as `mco2-bunyi-<random-suffix>`. Use a long, unpredictable suffix. Topic names are public: anyone who knows the name can subscribe to or publish on that topic. Continue when you have the exact name to enter in `.env`.
+3. Subscribe to the topic in the phone app or web app. ntfy creates topics on first subscription or publish. Continue when the topic appears in your subscriptions.
+4. Sign in to [ntfy.sh](https://ntfy.sh/) and create a dedicated MCO2 access token in the web app's Account section, following [ntfy's access-token documentation](https://docs.ntfy.sh/publish/#access-tokens). Continue when the token value is ready for step 5; revoke it from Account when it is no longer needed.
+5. From the repository root, copy `.env.example` to `.env` and replace the topic and token placeholders. `.env` is ignored by Git. This step is complete when both values are set locally; keep them out of source files, benchmark outputs, screenshots, and issue reports.
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-The default server is `https://ntfy.sh` and the default heartbeat interval is one hour. Set `NTFY_HEARTBEAT_SECONDS` in `.env` to change the interval.
+The wrapper sends heartbeats once per hour by default. Set `NTFY_HEARTBEAT_SECONDS` in `.env` to change the interval.
 
 ## Verify delivery
 
@@ -24,7 +24,7 @@ Run the notifier preflight before a benchmark. It sends one test notification an
 uv run python mco2_run_notify.py --check
 ```
 
-Confirm that the notification arrives on the subscribed device. A missing configuration or failed send returns a nonzero exit code.
+Setup is complete when the command exits successfully and the test notification arrives on the subscribed device. A missing configuration or failed send returns a nonzero exit code.
 
 ## Alerts and recorded metadata
 
