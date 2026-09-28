@@ -17,7 +17,7 @@ _PHILOX_W1 = 0xBB67AE85
 _BLOCK_SIZE = 256
 _BITS = 8
 _SIGNED_LIMIT = 127
-_HEADER = struct.Struct("<4sBBHQf")
+HEADER_STRUCT = struct.Struct("<4sBBHQf")
 _MAGIC = b"MSQ1"
 _VERSION = 1
 
@@ -249,7 +249,7 @@ def compress_record_fp32(
         if len(codes) % 2 == 1:
             packed[pairs] = int(codes[-1]) & 0x0F
         payload = bytes(packed)
-    header = _HEADER.pack(_MAGIC, _VERSION, bits, 0, len(array), float(scale32))
+    header = HEADER_STRUCT.pack(_MAGIC, _VERSION, bits, 0, len(array), float(scale32))
     return header + payload
 
 
@@ -289,9 +289,9 @@ def reference_fp64(
 def decode_record(record: bytes | bytearray | memoryview) -> np.ndarray:
     """Validate and decode an 8-bit or 4-bit record."""
     data = bytes(record)
-    if len(data) < _HEADER.size:
+    if len(data) < HEADER_STRUCT.size:
         raise ValueError("record is shorter than the 20-byte header")
-    magic, version, bits, reserved, count, scale = _HEADER.unpack_from(data)
+    magic, version, bits, reserved, count, scale = HEADER_STRUCT.unpack_from(data)
     if magic != _MAGIC:
         raise ValueError("bad record magic")
     if version != _VERSION:
@@ -301,17 +301,17 @@ def decode_record(record: bytes | bytearray | memoryview) -> np.ndarray:
     if reserved != 0:
         raise ValueError("reserved header bytes must be zero")
     expected_payload_length = (count + 1) // 2 if bits == 4 else count
-    if len(data) - _HEADER.size != expected_payload_length:
+    if len(data) - HEADER_STRUCT.size != expected_payload_length:
         raise ValueError("payload length does not match element count")
     if not math.isfinite(scale) or scale < 0:
         raise ValueError("scale must be finite and non-negative")
 
     signed_limit = 7 if bits == 4 else 127
     if bits == 8:
-        codes = np.frombuffer(data, dtype=np.uint8, count=count, offset=_HEADER.size)
+        codes = np.frombuffer(data, dtype=np.uint8, count=count, offset=HEADER_STRUCT.size)
     else:
         payload_bytes = np.frombuffer(
-            data, dtype=np.uint8, count=expected_payload_length, offset=_HEADER.size
+            data, dtype=np.uint8, count=expected_payload_length, offset=HEADER_STRUCT.size
         )
         if count % 2 == 1 and (int(payload_bytes[-1]) >> 4) != 0:
             raise ValueError("unused padding nibble must be zero")

@@ -7,7 +7,7 @@ Status: accepted protocol; executable benchmark implemented with frozen course s
 | Name in the protocol text | Current name |
 | --- | --- |
 | `mco2` binary, process and subcommands (`mco2 bench`, `mco2 compress`, `mco2 --threads`) | `stoquant` (`build/stoquant`) |
-| `benchmark_driver.py` | `src/stoquant/driver.py` |
+| `benchmark_driver.py` | `src/stoquant/matrix.py` (entry point), split across `provenance`, `inputs`, `vectorization`, `host` (readiness, `WINDOW_ALLOWLIST`), `design`, `runner`, `correctness`, `stats` and `oracle` |
 | `bench_report.py` | `src/stoquant/report.py` |
 | `scripts/diag_resident.py` | `tools/diag_resident.py` |
 

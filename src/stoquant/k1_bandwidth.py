@@ -36,23 +36,24 @@ from pathlib import Path
 from typing import Any
 
 from stoquant import layout
-from stoquant.driver import (
+from stoquant.design import DEFAULT_BITS, DEFAULT_COUNTS
+from stoquant.inputs import generate_inputs
+from stoquant.provenance import (
     BUILD_RECIPE,
-    DEFAULT_BITS,
-    DEFAULT_COMPRESSION_SEED,
-    DEFAULT_COUNTS,
-    DEFAULT_IN_PROCESS_WARMUP_SECONDS,
     collect_build_commands,
     collect_git_provenance,
     collect_hardware_and_toolchain,
-    compute_case_statistics,
     find_binary,
-    generate_inputs,
-    in_process_warmups,
     query_gpu_state,
+)
+from stoquant.runner import (
+    DEFAULT_COMPRESSION_SEED,
+    DEFAULT_IN_PROCESS_WARMUP_SECONDS,
+    in_process_warmups,
     run_bench_process,
     warm_up_gpu,
 )
+from stoquant.stats import compute_case_statistics
 
 # SQ_CUDA_REDUCTION_THREADS in native/quantizer_cuda.cu.
 REDUCTION_THREADS = 256

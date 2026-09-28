@@ -13,7 +13,7 @@ import sys
 
 COMMANDS = {
     "figures": ("stoquant.report", "Render snapshot figures and the report"),
-    "bench-matrix": ("stoquant.driver", "Run the benchmark matrix"),
+    "bench-matrix": ("stoquant.matrix", "Run the benchmark matrix"),
     "unbiasedness": ("stoquant.unbiasedness", "Run the Layer 3 expectation suite"),
     "k1-baseline": ("stoquant.k1_bandwidth", "Measure K1 against device bandwidth"),
     "k1-ab": ("stoquant.k1_ab", "A/B the reference and optimized K1"),

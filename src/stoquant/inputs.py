@@ -8,9 +8,12 @@ parameter shapes of ResNet-18 for CIFAR-10; they carry no trained values.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -153,3 +156,103 @@ def course_vector() -> tuple[np.ndarray, float]:
         idx += 2
     x[idx:] = np.linspace(-1.95, 1.95, n - idx, dtype=np.float32)
     return x, 2.0
+
+
+def generate_inputs(
+    counts: Sequence[int],
+    directory: Path,
+    seed: int = DEFAULT_INPUT_SEED,
+) -> dict[int, dict[str, Any]]:
+    directory.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+    provenance: dict[int, dict[str, Any]] = {}
+
+    for count in counts:
+        values = rng.normal(size=count).astype(np.float32)
+        bytes_data = values.astype("<f4").tobytes()
+        sha256 = hashlib.sha256(bytes_data).hexdigest()
+        file_path = directory / f"input_n{count}.f32"
+        file_path.write_bytes(bytes_data)
+
+        provenance[count] = {
+            "count": count,
+            "filename": file_path.name,
+            "generator": "numpy.random.default_rng",
+            "bit_generator": type(rng.bit_generator).__name__,
+            "seed": seed,
+            "sha256": sha256,
+            "_path": str(file_path),
+        }
+
+    return provenance
+
+
+def write_input(directory: Path, name: str, values: np.ndarray) -> tuple[str, Path]:
+    bytes_data = values.astype("<f4").tobytes()
+    file_path = directory / name
+    file_path.write_bytes(bytes_data)
+    return hashlib.sha256(bytes_data).hexdigest(), file_path
+
+
+def generate_family_inputs(
+    family: str,
+    counts: Sequence[int],
+    directory: Path,
+    seed: int = DEFAULT_INPUT_SEED,
+    model_tensors: str = "distinct",
+    model_limit: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Inputs of one family keyed by input key; dense keys are `n{count}` as in revision 3."""
+    if family == "dense":
+        return {
+            f"n{count}": {"input_family": "dense", "input_key": f"n{count}", **meta}
+            for count, meta in generate_inputs(counts, directory, seed).items()
+        }
+    directory.mkdir(parents=True, exist_ok=True)
+    provenance: dict[str, dict[str, Any]] = {}
+    if family == "sparse":
+        for count, dense in zip(counts, dense_vectors(counts, seed), strict=True):
+            values, realised = sparsify(dense)
+            key = f"sparse_n{count}"
+            sha256, file_path = write_input(directory, f"input_{key}.f32", values)
+            provenance[key] = {
+                "input_family": "sparse",
+                "input_key": key,
+                "count": count,
+                "filename": file_path.name,
+                "generator": "numpy.random.default_rng",
+                "bit_generator": "PCG64",
+                "seed": seed,
+                "dense_source": "the dense input of the same seed and count",
+                "mask_seed": SPARSE_MASK_SEED,
+                "zero_fraction_target": SPARSE_ZERO_FRACTION,
+                "zero_fraction_realised": realised,
+                "zero_value": "+0.0",
+                "sha256": sha256,
+                "_path": str(file_path),
+            }
+        return provenance
+    if family == "model":
+        for tensor in select_model_tensors(model_tensors, model_limit):
+            key = f"model_{tensor.name}"
+            sha256, file_path = write_input(
+                directory, f"input_{key}.f32", model_tensor_values(tensor, seed)
+            )
+            provenance[key] = {
+                "input_family": "model",
+                "input_key": key,
+                "count": tensor.count,
+                "filename": file_path.name,
+                "generator": "numpy.random.default_rng",
+                "bit_generator": "PCG64",
+                "seed": model_tensor_seed(tensor, seed),
+                "model": MODEL_NAME,
+                "tensor_name": tensor.name,
+                "tensor_shape": list(tensor.shape),
+                "tensor_kind": tensor.kind,
+                "std": model_tensor_std(tensor),
+                "sha256": sha256,
+                "_path": str(file_path),
+            }
+        return provenance
+    raise ValueError(f"unknown input family {family!r}; choose from {INPUT_FAMILIES}")

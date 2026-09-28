@@ -1,6 +1,5 @@
 import json
 import os
-import struct
 import subprocess
 from pathlib import Path
 
@@ -8,11 +7,11 @@ import numpy as np
 import pytest
 
 from stoquant import layout
+from stoquant.oracle import HEADER_STRUCT as HEADER
 from stoquant.oracle import compress_record_fp32, reference_fp64, scale_fp32
 
 ROOT = layout.ROOT
 BINARY = ROOT / "build" / ("stoquant.exe" if os.name == "nt" else "stoquant")
-HEADER = struct.Struct("<4sBBHQf")
 
 pytestmark = pytest.mark.cuda
 

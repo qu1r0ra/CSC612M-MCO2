@@ -34,31 +34,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from stoquant import layout
-from stoquant.driver import (
-    BUILD_RECIPE,
-    DEFAULT_BITS,
-    DEFAULT_COMPRESSION_SEED,
-    DEFAULT_COUNTS,
-    DEFAULT_IN_PROCESS_WARMUP_SECONDS,
+from stoquant.design import DEFAULT_BITS, DEFAULT_COUNTS
+from stoquant.host import (
     EXCLUDED_LOGICAL_CPUS,
     affinity_mask_excluding,
-    claim_support,
-    collect_build_commands,
-    collect_git_provenance,
-    collect_hardware_and_toolchain,
-    compare_speedup,
-    compute_case_statistics,
-    compute_stage_medians,
-    find_binary,
-    generate_inputs,
     get_process_affinity,
-    in_process_warmups,
     probe_readiness_facts,
     process_affinity,
-    query_gpu_state,
-    run_bench_process,
-    warm_up_gpu,
 )
+from stoquant.inputs import generate_inputs
 from stoquant.k1_bandwidth import (
     CALIBRATION_REPS,
     DEFAULT_PROCESSES,
@@ -76,11 +60,32 @@ from stoquant.k1_bandwidth import (
     summarize_cell,
     theoretical_peak_gbps,
 )
+from stoquant.provenance import (
+    BUILD_RECIPE,
+    collect_build_commands,
+    collect_git_provenance,
+    collect_hardware_and_toolchain,
+    find_binary,
+    query_gpu_state,
+)
+from stoquant.runner import (
+    DEFAULT_COMPRESSION_SEED,
+    DEFAULT_IN_PROCESS_WARMUP_SECONDS,
+    in_process_warmups,
+    run_bench_process,
+    warm_up_gpu,
+)
+from stoquant.stats import (
+    claim_support,
+    compare_speedup,
+    compute_case_statistics,
+    compute_stage_medians,
+)
 
 VARIANTS = ("reference", "optimized")
 # SQ_CUDA_K1_TREE_SPAN in native/quantizer_cuda.cu.
 TREE_SPAN = 2048
-PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 25, 1 << 26)
+K1_AB_PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 25, 1 << 26)
 PILOT_PROCESSES = 2
 F5_COUNTS = (1 << 14, 1 << 18, 1 << 22, 1 << 25, 1 << 26)
 F5_STAGES = (
@@ -327,7 +332,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         return
     if args.output_dir is None:
         sys.exit("--output-dir is required unless --figure is given.")
-    counts = args.counts or list(PILOT_COUNTS if args.pilot else DEFAULT_COUNTS)
+    counts = args.counts or list(K1_AB_PILOT_COUNTS if args.pilot else DEFAULT_COUNTS)
     processes = args.processes or (PILOT_PROCESSES if args.pilot else DEFAULT_PROCESSES)
     evidence = not (args.pilot or args.allow_dirty or args.counts or args.processes)
 

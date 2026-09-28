@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from stoquant import layout
+from stoquant.oracle import HEADER_STRUCT as HEADER
 from stoquant.oracle import (
     _round_codes_fp32,
     compress_record_fp32,
@@ -19,7 +20,6 @@ from stoquant.oracle import (
 
 ROOT = layout.ROOT
 BINARY = ROOT / "build" / ("stoquant.exe" if os.name == "nt" else "stoquant")
-HEADER = struct.Struct("<4sBBHQf")
 
 
 def _run(*arguments: str) -> subprocess.CompletedProcess[str]:
