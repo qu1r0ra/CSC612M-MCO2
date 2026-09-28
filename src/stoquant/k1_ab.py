@@ -71,6 +71,7 @@ from stoquant.provenance import (
 from stoquant.runner import (
     DEFAULT_COMPRESSION_SEED,
     DEFAULT_IN_PROCESS_WARMUP_SECONDS,
+    compress_args,
     in_process_warmups,
     run_bench_process,
     warm_up_gpu,
@@ -159,26 +160,17 @@ def keep_decision(cells: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def record_hash(binary: Path, input_path: Path, bits: int, variant: str, out: Path) -> str:
-    command = [
-        str(binary),
-        "compress",
-        "--input",
-        str(input_path),
-        "--output",
-        str(out),
-        "--seed",
-        str(DEFAULT_COMPRESSION_SEED),
-        "--bits",
-        str(bits),
-        "--tensor-id",
-        "0",
-        "--invocation-id",
-        "0",
-        "--backend",
-        "cuda",
-        "--k1",
-        variant,
-    ]
+    command = compress_args(
+        binary,
+        input_path,
+        out,
+        seed=DEFAULT_COMPRESSION_SEED,
+        bits=bits,
+        tensor_id=0,
+        invocation_id=0,
+        backend="cuda",
+        k1=variant,
+    )
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"stoquant compress --k1 {variant} failed: {proc.stderr.strip()}")

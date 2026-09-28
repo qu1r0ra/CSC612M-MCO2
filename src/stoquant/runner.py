@@ -30,6 +30,40 @@ def k1_args(backend: str, k1: str) -> list[str]:
     return ["--k1", k1] if backend == "cuda" else []
 
 
+def compress_args(
+    binary: Path,
+    input_path: Path,
+    output: Path,
+    *,
+    seed: int,
+    bits: int,
+    tensor_id: int,
+    invocation_id: int,
+    backend: str,
+    k1: str = "reference",
+) -> list[str]:
+    """The `compress` command line; `--k1` is passed only for the CUDA backend."""
+    return [
+        str(binary),
+        "compress",
+        "--input",
+        str(input_path),
+        "--output",
+        str(output),
+        "--seed",
+        str(seed),
+        "--bits",
+        str(bits),
+        "--tensor-id",
+        str(tensor_id),
+        "--invocation-id",
+        str(invocation_id),
+        "--backend",
+        backend,
+        *k1_args(backend, k1),
+    ]
+
+
 def warm_up_gpu(
     binary: Path, input_path: Path, seconds: float, k1: str = "reference"
 ) -> dict[str, Any]:
