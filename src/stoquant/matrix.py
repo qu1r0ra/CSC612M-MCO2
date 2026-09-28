@@ -15,9 +15,10 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -334,6 +335,69 @@ def run_benchmark_matrix(
         )
 
 
+@dataclass(frozen=True)
+class SweepSettings:
+    """The sweep parameters `sweep_matrix` receives, shared by its phases."""
+
+    counts: Sequence[int]
+    bit_widths: Sequence[int]
+    backends: Sequence[str]
+    paths: Sequence[BenchPath]
+    transfer_policies: Sequence[str]
+    warmups: int
+    reps: int
+    trials: int
+    input_seed: int
+    compression_seed: int
+    case_order_seed: int
+    gpu_warmup_seconds: float
+    case_warmup_seconds: float
+    in_process_warmup_seconds: float
+    force_fail: bool
+    input_family: str
+    model_tensors: str | None
+    model_limit: int | None
+    k1: str
+
+    @property
+    def cuda(self) -> bool:
+        return "cuda" in self.backends
+
+    @property
+    def has_avx2(self) -> bool:
+        return any(path.backend == "cpu-avx2" for path in self.paths)
+
+    @property
+    def dense(self) -> bool:
+        return self.input_family == "dense"
+
+
+class RunSetup(NamedTuple):
+    binary: Path
+    toolchain_prov: dict[str, Any]
+    build_prov: dict[str, Any]
+    host_tokens: list[str]
+    avx2_tokens: list[str]
+    device_attributes: dict[str, Any] | None
+    gpu_state_start: dict[str, Any] | None
+    temp_dir: Path
+
+
+class SweepInputs(NamedTuple):
+    files: dict[str, Path]
+    # Keys keep the generator's order, which ranks inputs in the summary.
+    clean_meta: dict[str, dict[str, Any]]
+    counts: dict[str, int]
+
+
+class SweepOrder(NamedTuple):
+    orders: list[list[int]]
+    order_labels: list[list[str]]
+    ordered_cases: list[tuple[str, int]]
+    gpu_warmup: dict[str, Any] | None
+    gpu_state_after_warmup: dict[str, Any] | None
+
+
 def sweep_matrix(
     *,
     root: Path,
@@ -361,310 +425,455 @@ def sweep_matrix(
     model_limit: int | None = None,
     k1: str = "reference",
 ) -> Path:
-    binary = find_binary(root)
-    toolchain_prov = collect_hardware_and_toolchain(root)
-    build_prov = collect_build_commands(root)
-    host_tokens = build_prov.pop("_host_tokens")
-    avx2_tokens = build_prov.pop("_avx2_tokens")
-    has_avx2 = any(path.backend == "cpu-avx2" for path in paths)
-    publication = len(paths) == 10 and k1 == "optimized"
-    device_attributes = query_device_attributes(root) if publication else None
-    gpu_state_start = query_gpu_state() if "cuda" in backends else None
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-    temp_dir = target_dir / "_temp"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1. Inputs generation
-    input_meta = generate_family_inputs(
-        input_family,
-        counts,
-        temp_dir / "inputs",
-        input_seed,
-        model_tensors or "distinct",
-        model_limit,
+    settings = SweepSettings(
+        counts=counts,
+        bit_widths=bit_widths,
+        backends=backends,
+        paths=paths,
+        transfer_policies=transfer_policies,
+        warmups=warmups,
+        reps=reps,
+        trials=trials,
+        input_seed=input_seed,
+        compression_seed=compression_seed,
+        case_order_seed=case_order_seed,
+        gpu_warmup_seconds=gpu_warmup_seconds,
+        case_warmup_seconds=case_warmup_seconds,
+        in_process_warmup_seconds=in_process_warmup_seconds,
+        force_fail=force_fail,
+        input_family=input_family,
+        model_tensors=model_tensors,
+        model_limit=model_limit,
+        k1=k1,
     )
-    input_files: dict[str, Path] = {key: Path(meta["_path"]) for key, meta in input_meta.items()}
-    clean_input_meta: dict[str, dict[str, Any]] = {
-        key: {k: v for k, v in meta.items() if not k.startswith("_")}
-        for key, meta in input_meta.items()
-    }
-    input_counts = {key: meta["count"] for key, meta in input_meta.items()}
-    dense = input_family == "dense"
+    setup = set_up_run(root, target_dir, settings)
+    inputs = generate_inputs(setup, settings)
+    vec_report_path = write_vectorization_reports(root, target_dir, setup, settings)
+    order = order_and_warm_up(setup, inputs, settings)
 
-    # 2. Vectorization report, compiled with the comparator's own flags
-    vec_report_path = target_dir / "msvc_vectorization_report.txt"
-    generate_msvc_vectorization_report(root, vec_report_path, host_tokens, temp_dir / "vec_obj")
-    if has_avx2:
-        generate_msvc_vectorization_report(
-            root,
-            target_dir / "msvc_vectorization_report_avx2.txt",
-            avx2_tokens,
-            temp_dir / "vec_obj_avx2",
-            AVX2_SOURCES,
-        )
-
-    orders = trial_orders(paths, trials)
-    order_labels = [[paths[i].label for i in order] for order in orders]
-    ordered_cases = case_order(list(input_meta), bit_widths, case_order_seed)
-    largest_input = max(input_meta, key=lambda key: input_counts[key])
-
-    # Bring the GPU to steady clocks on the largest input before any timed process.
-    gpu_warmup = None
-    gpu_state_after_warmup = None
-    if "cuda" in backends and gpu_warmup_seconds > 0:
-        gpu_warmup = warm_up_gpu(binary, input_files[largest_input], gpu_warmup_seconds, k1)
-        gpu_state_after_warmup = query_gpu_state()
-
-    # 3. Benchmark cases
     case_results: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
-
-    for execution_index, (input_key, bits) in enumerate(ordered_cases):
-        input_path = input_files[input_key]
-        count = input_counts[input_key]
-        payload_bytes = count if bits == 8 else (count + 1) // 2
-
+    for execution_index, (input_key, bits) in enumerate(order.ordered_cases):
         # Gate on correctness once, outside every timed process.
         passed, correctness_info = verify_correctness(
-            binary=binary,
-            input_path=input_path,
-            count=count,
+            binary=setup.binary,
+            input_path=inputs.files[input_key],
+            count=inputs.counts[input_key],
             bits=bits,
             backends=backends,
             paths=paths,
             seed=compression_seed,
             tensor_id=0,
             invocation_id=0,
-            tmp_dir=temp_dir,
+            tmp_dir=setup.temp_dir,
             force_fail=force_fail,
             k1=k1,
         )
-
-        cases: list[dict[str, Any]] = []
-        for path in paths:
-            cases.append(
-                {
-                    "case_id": f"case_{path.backend}_{path.key}_bits{bits}_{input_key}",
-                    "count": count,
-                    "input_family": input_family,
-                    "input_key": input_key,
-                    "bits": bits,
-                    "backend": path.backend,
-                    "timing_boundary": path.boundary,
-                    "transfer_policy": path.policy,
-                    "path_label": path.label,
-                    "configuration": {"k1": k1 if path.backend == "cuda" else None},
-                    "seed": compression_seed,
-                    "tensor_id": 0,
-                    "invocation_id": 0,
-                    "warmup": warmups,
-                    "in_process_warmup": None,
-                    "reps": reps,
-                    "trials": trials,
-                    "header_bytes": HEADER_STRUCT.size,
-                    "payload_bytes": payload_bytes,
-                    "code_revision": git_prov["code_revision"],
-                    "code_revision_short": git_prov["code_revision_short"],
-                    "git_dirty": git_prov["git_dirty"],
-                    "build_flags": {
-                        "comparator_c": build_prov["comparator_c"],
-                        "cuda_nvcc": build_prov["cuda_nvcc"],
-                        **({"avx2_c": build_prov["avx2_c"]} if has_avx2 else {}),
-                    },
-                    "hardware": toolchain_prov["hardware"],
-                    "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
-                    "input_provenance": clean_input_meta[input_key],
-                    "correctness": correctness_info,
-                    "execution_index": execution_index,
-                    "case_warmup": None,
-                    "trial_runs": [],
-                    "samples_ms": [],
-                    "statistics": None,
-                    "stage_medians_ms": None,
-                }
-            )
-
-        if passed and "cuda" in backends and case_warmup_seconds > 0:
-            # Restore GPU clocks after the untimed correctness gate and any
-            # long CPU processes of the previous case.
-            case_warmup = warm_up_gpu(binary, input_path, case_warmup_seconds, k1)
-            case_warmup["gpu_state_after"] = query_gpu_state()
-            for case in cases:
-                case["case_warmup"] = case_warmup
-
-        if passed and in_process_warmup_seconds > 0:
-            # Revision 2: size each path's in-process warm-up from an untimed probe
-            # so every timed process first runs about the same wall time untimed.
-            for case, path in zip(cases, paths, strict=True):
-                payload, error = run_bench_process(
-                    binary,
-                    input_path,
-                    bits=bits,
-                    backend=path.backend,
-                    extra_args=path.extra_args,
-                    seed=compression_seed,
-                    warmups=warmups,
-                    reps=reps,
-                    k1=k1,
-                )
-                if payload is None:
-                    case["correctness"] = {"status": "failed", "error_message": error}
-                    continue
-                probe_ms = float(np.median(payload.get("samples_ms", [])))
-                case["warmup"] = in_process_warmups(warmups, in_process_warmup_seconds, probe_ms)
-                case["in_process_warmup"] = {
-                    "target_seconds": in_process_warmup_seconds,
-                    "probe_warmup": warmups,
-                    "probe_reps": reps,
-                    "probe_median_ms": probe_ms,
-                    "warmup": case["warmup"],
-                }
-
+        cases = build_case_stubs(
+            setup, git_prov, inputs, input_key, bits, correctness_info, execution_index, settings
+        )
         if passed:
-            # Each trial runs every path as its own process, in a rotated order.
-            # Every trial reuses the same invocation identifiers, so trials are
-            # replicates of an identical workload.
-            for trial_index, order in enumerate(orders):
-                for position, path_index in enumerate(order):
-                    case = cases[path_index]
-                    if case["correctness"]["status"] != "passed":
-                        continue
-                    path = paths[path_index]
-                    payload, error = run_bench_process(
-                        binary,
-                        input_path,
-                        bits=bits,
-                        backend=path.backend,
-                        extra_args=path.extra_args,
-                        seed=compression_seed,
-                        warmups=case["warmup"],
-                        reps=reps,
-                        k1=k1,
-                    )
-                    if payload is None:
-                        case["correctness"] = {"status": "failed", "error_message": error}
-                        continue
-                    configuration = payload.get("configuration", {})
-                    if path.backend == "cuda" and configuration.get("k1") != k1:
-                        raise RuntimeError(
-                            f"{case['case_id']}: stoquant bench ran K1 "
-                            f"{configuration.get('k1')!r}, expected {k1!r}"
-                        )
-                    if configuration.get("transfer_policy") != path.policy:
-                        raise RuntimeError(
-                            f"{case['case_id']}: stoquant bench ran transfer policy "
-                            f"{configuration.get('transfer_policy')!r}, expected {path.policy!r}"
-                        )
-                    run: dict[str, Any] = {
-                        "trial": trial_index,
-                        "position": position,
-                        "order": order_labels[trial_index],
-                        "repetition_invocation_ids": configuration.get("repetition_invocation_ids"),
-                        "warmup_invocation_ids": compact_invocation_ids(
-                            configuration.get("warmup_invocation_ids")
-                        ),
-                        "samples_ms": payload.get("samples_ms", []),
-                    }
-                    if "threads" in configuration:
-                        run["threads"] = configuration["threads"]
-                    if "capture_and_instantiate_ms" in payload:
-                        run["capture_and_instantiate_ms"] = payload["capture_and_instantiate_ms"]
-                    for key in STAGE_KEYS:
-                        if key in payload:
-                            run[key] = payload[key]
-                    case["trial_runs"].append(run)
+            warm_up_case(cases, setup.binary, inputs.files[input_key], bits, settings)
+            run_trials(cases, setup.binary, inputs.files[input_key], bits, order, settings)
+        compute_case_group_statistics(cases, paths)
+        summary_rows.extend(
+            write_case_outputs(target_dir, cases, inputs, input_key, bits, settings)
+        )
+        case_results.extend(cases)
 
+    gpu_state_end = query_gpu_state() if settings.cuda else None
+    csv_path = write_summary(target_dir, setup, inputs, case_results, summary_rows, settings)
+    write_manifest(
+        target_dir,
+        date_str=date_str,
+        git_prov=git_prov,
+        run_conditions=run_conditions,
+        setup=setup,
+        inputs=inputs,
+        order=order,
+        gpu_state_end=gpu_state_end,
+        csv_path=csv_path,
+        vec_report_path=vec_report_path,
+        case_results=case_results,
+        settings=settings,
+    )
+    return target_dir
+
+
+def set_up_run(root: Path, target_dir: Path, settings: SweepSettings) -> RunSetup:
+    """Binary, provenance and starting GPU state, then the snapshot and scratch folders."""
+    binary = find_binary(root)
+    toolchain_prov = collect_hardware_and_toolchain(root)
+    build_prov = collect_build_commands(root)
+    host_tokens = build_prov.pop("_host_tokens")
+    avx2_tokens = build_prov.pop("_avx2_tokens")
+    publication = len(settings.paths) == 10 and settings.k1 == "optimized"
+    device_attributes = query_device_attributes(root) if publication else None
+    gpu_state_start = query_gpu_state() if settings.cuda else None
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir = target_dir / "_temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return RunSetup(
+        binary,
+        toolchain_prov,
+        build_prov,
+        host_tokens,
+        avx2_tokens,
+        device_attributes,
+        gpu_state_start,
+        temp_dir,
+    )
+
+
+def generate_inputs(setup: RunSetup, settings: SweepSettings) -> SweepInputs:
+    input_meta = generate_family_inputs(
+        settings.input_family,
+        settings.counts,
+        setup.temp_dir / "inputs",
+        settings.input_seed,
+        settings.model_tensors or "distinct",
+        settings.model_limit,
+    )
+    return SweepInputs(
+        files={key: Path(meta["_path"]) for key, meta in input_meta.items()},
+        clean_meta={
+            key: {k: v for k, v in meta.items() if not k.startswith("_")}
+            for key, meta in input_meta.items()
+        },
+        counts={key: meta["count"] for key, meta in input_meta.items()},
+    )
+
+
+def write_vectorization_reports(
+    root: Path, target_dir: Path, setup: RunSetup, settings: SweepSettings
+) -> Path:
+    """Compile with the comparator's own flags; returns the scalar report's path."""
+    vec_report_path = target_dir / "msvc_vectorization_report.txt"
+    generate_msvc_vectorization_report(
+        root, vec_report_path, setup.host_tokens, setup.temp_dir / "vec_obj"
+    )
+    if settings.has_avx2:
+        generate_msvc_vectorization_report(
+            root,
+            target_dir / "msvc_vectorization_report_avx2.txt",
+            setup.avx2_tokens,
+            setup.temp_dir / "vec_obj_avx2",
+            AVX2_SOURCES,
+        )
+    return vec_report_path
+
+
+def order_and_warm_up(setup: RunSetup, inputs: SweepInputs, settings: SweepSettings) -> SweepOrder:
+    """Trial and case orders, then the pre-loop GPU warm-up."""
+    paths = settings.paths
+    orders = trial_orders(paths, settings.trials)
+    order_labels = [[paths[i].label for i in order] for order in orders]
+    ordered_cases = case_order(
+        list(inputs.clean_meta), settings.bit_widths, settings.case_order_seed
+    )
+    largest_input = max(inputs.clean_meta, key=lambda key: inputs.counts[key])
+
+    # Bring the GPU to steady clocks on the largest input before any timed process.
+    gpu_warmup = None
+    gpu_state_after_warmup = None
+    if settings.cuda and settings.gpu_warmup_seconds > 0:
+        gpu_warmup = warm_up_gpu(
+            setup.binary, inputs.files[largest_input], settings.gpu_warmup_seconds, settings.k1
+        )
+        gpu_state_after_warmup = query_gpu_state()
+    return SweepOrder(orders, order_labels, ordered_cases, gpu_warmup, gpu_state_after_warmup)
+
+
+def build_case_stubs(
+    setup: RunSetup,
+    git_prov: dict[str, Any],
+    inputs: SweepInputs,
+    input_key: str,
+    bits: int,
+    correctness_info: dict[str, Any],
+    execution_index: int,
+    settings: SweepSettings,
+) -> list[dict[str, Any]]:
+    """One case record per path, before any warm-up or trial fills it."""
+    count = inputs.counts[input_key]
+    payload_bytes = count if bits == 8 else (count + 1) // 2
+    build_prov = setup.build_prov
+    toolchain_prov = setup.toolchain_prov
+    k1 = settings.k1
+    cases: list[dict[str, Any]] = []
+    for path in settings.paths:
+        cases.append(
+            {
+                "case_id": f"case_{path.backend}_{path.key}_bits{bits}_{input_key}",
+                "count": count,
+                "input_family": settings.input_family,
+                "input_key": input_key,
+                "bits": bits,
+                "backend": path.backend,
+                "timing_boundary": path.boundary,
+                "transfer_policy": path.policy,
+                "path_label": path.label,
+                "configuration": {"k1": k1 if path.backend == "cuda" else None},
+                "seed": settings.compression_seed,
+                "tensor_id": 0,
+                "invocation_id": 0,
+                "warmup": settings.warmups,
+                "in_process_warmup": None,
+                "reps": settings.reps,
+                "trials": settings.trials,
+                "header_bytes": HEADER_STRUCT.size,
+                "payload_bytes": payload_bytes,
+                "code_revision": git_prov["code_revision"],
+                "code_revision_short": git_prov["code_revision_short"],
+                "git_dirty": git_prov["git_dirty"],
+                "build_flags": {
+                    "comparator_c": build_prov["comparator_c"],
+                    "cuda_nvcc": build_prov["cuda_nvcc"],
+                    **({"avx2_c": build_prov["avx2_c"]} if settings.has_avx2 else {}),
+                },
+                "hardware": toolchain_prov["hardware"],
+                "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
+                "input_provenance": inputs.clean_meta[input_key],
+                "correctness": correctness_info,
+                "execution_index": execution_index,
+                "case_warmup": None,
+                "trial_runs": [],
+                "samples_ms": [],
+                "statistics": None,
+                "stage_medians_ms": None,
+            }
+        )
+    return cases
+
+
+def warm_up_case(
+    cases: list[dict[str, Any]],
+    binary: Path,
+    input_path: Path,
+    bits: int,
+    settings: SweepSettings,
+) -> None:
+    """GPU clock warm-up, then each path's in-process warm-up count from an untimed probe."""
+    if settings.cuda and settings.case_warmup_seconds > 0:
+        # Restore GPU clocks after the untimed correctness gate and any
+        # long CPU processes of the previous case.
+        case_warmup = warm_up_gpu(binary, input_path, settings.case_warmup_seconds, settings.k1)
+        case_warmup["gpu_state_after"] = query_gpu_state()
         for case in cases:
+            case["case_warmup"] = case_warmup
+
+    if settings.in_process_warmup_seconds > 0:
+        # Revision 2: size each path's in-process warm-up from an untimed probe
+        # so every timed process first runs about the same wall time untimed.
+        warmups = settings.warmups
+        reps = settings.reps
+        for case, path in zip(cases, settings.paths, strict=True):
+            payload, error = run_bench_process(
+                binary,
+                input_path,
+                bits=bits,
+                backend=path.backend,
+                extra_args=path.extra_args,
+                seed=settings.compression_seed,
+                warmups=warmups,
+                reps=reps,
+                k1=settings.k1,
+            )
+            if payload is None:
+                case["correctness"] = {"status": "failed", "error_message": error}
+                continue
+            probe_ms = float(np.median(payload.get("samples_ms", [])))
+            case["warmup"] = in_process_warmups(
+                warmups, settings.in_process_warmup_seconds, probe_ms
+            )
+            case["in_process_warmup"] = {
+                "target_seconds": settings.in_process_warmup_seconds,
+                "probe_warmup": warmups,
+                "probe_reps": reps,
+                "probe_median_ms": probe_ms,
+                "warmup": case["warmup"],
+            }
+
+
+def run_trials(
+    cases: list[dict[str, Any]],
+    binary: Path,
+    input_path: Path,
+    bits: int,
+    order: SweepOrder,
+    settings: SweepSettings,
+) -> None:
+    # Each trial runs every path as its own process, in a rotated order.
+    # Every trial reuses the same invocation identifiers, so trials are
+    # replicates of an identical workload.
+    k1 = settings.k1
+    for trial_index, trial_order in enumerate(order.orders):
+        for position, path_index in enumerate(trial_order):
+            case = cases[path_index]
             if case["correctness"]["status"] != "passed":
-                case["trial_runs"] = []
                 continue
-            runs = case["trial_runs"]
-            first = runs[0]
-            for run in runs[1:]:
-                if (
-                    run["repetition_invocation_ids"] != first["repetition_invocation_ids"]
-                    or run["warmup_invocation_ids"] != first["warmup_invocation_ids"]
-                ):
-                    raise RuntimeError(
-                        f"{case['case_id']}: trials used different invocation identifiers"
-                    )
-            if "threads" in first:
-                if any(run.get("threads") != first["threads"] for run in runs):
-                    raise RuntimeError(f"{case['case_id']}: trials ran different thread counts")
-                case["threads"] = first["threads"]
-            case["repetition_invocation_ids"] = first["repetition_invocation_ids"]
-            case["warmup_invocation_ids"] = first["warmup_invocation_ids"]
-            case["samples_ms"] = [s for run in runs for s in run["samples_ms"]]
-            case["statistics"] = compute_case_statistics([run["samples_ms"] for run in runs])
-            case["stage_medians_ms"] = compute_stage_medians(runs)
-
-        # Comparisons and flags, only between cases that all passed.
-        compare_case_group(cases, paths)
-
-        for case in cases:
-            (target_dir / f"{case['case_id']}.json").write_text(
-                json.dumps(case, indent=2), encoding="utf-8"
+            path = settings.paths[path_index]
+            payload, error = run_bench_process(
+                binary,
+                input_path,
+                bits=bits,
+                backend=path.backend,
+                extra_args=path.extra_args,
+                seed=settings.compression_seed,
+                warmups=case["warmup"],
+                reps=settings.reps,
+                k1=k1,
             )
-            case_results.append(case)
-            stats = case["statistics"]
-            if case["correctness"]["status"] != "passed" or stats is None or "verdict" not in stats:
-                summary_rows.append(
-                    failed_row(
-                        count,
-                        bits,
-                        case["backend"],
-                        case["timing_boundary"],
-                        case["warmup"],
-                        reps,
-                        trials,
-                        transfer_policy=case["transfer_policy"],
-                        path_label=case["path_label"],
-                        input_family=input_family,
-                        input_key=input_key,
-                    )
+            if payload is None:
+                case["correctness"] = {"status": "failed", "error_message": error}
+                continue
+            configuration = payload.get("configuration", {})
+            if path.backend == "cuda" and configuration.get("k1") != k1:
+                raise RuntimeError(
+                    f"{case['case_id']}: stoquant bench ran K1 "
+                    f"{configuration.get('k1')!r}, expected {k1!r}"
                 )
-                continue
-            summary_rows.append(
-                {
-                    "count": count,
-                    "input_family": input_family,
-                    "input_key": input_key,
-                    "bits": bits,
-                    "backend": case["backend"],
-                    "boundary": case["timing_boundary"],
-                    "transfer_policy": case["transfer_policy"],
-                    "path_label": case["path_label"],
-                    "correctness": "passed",
-                    "warmup": case["warmup"],
-                    "reps": reps,
-                    "trials": trials,
-                    "median_ms": f"{stats['median_ms']:.6f}",
-                    "iqr_ms": f"{stats['iqr_ms']:.6f}",
-                    "trial_median_min_ms": f"{stats['trial_median_min_ms']:.6f}",
-                    "trial_median_max_ms": f"{stats['trial_median_max_ms']:.6f}",
-                    "spread_ratio": f"{stats['spread_ratio']:.4f}",
-                    "spread_p90_p10": f"{stats['spread_p90_p10']:.4f}",
-                    "stable": csv_flag(stats["stable"]),
-                    "unstable_rev2": csv_flag(stats["unstable_rev2"]),
-                    "baseline": stats["baseline"],
-                    "speedup_vs_c": f"{stats['speedup_vs_cpu']:.4f}",
-                    "speedup_low": f"{stats['speedup_low']:.4f}",
-                    "speedup_high": f"{stats['speedup_high']:.4f}",
-                    "speedup_ci_low": f"{stats['speedup_ci_low']:.4f}",
-                    "speedup_ci_high": f"{stats['speedup_ci_high']:.4f}",
-                    "verdict": stats["verdict"],
-                    "boundary_inversion": csv_flag(stats["boundary_inversion"]),
-                    "direction_supported": csv_flag(stats["direction_supported"]),
-                    "magnitude_supported": csv_flag(stats["magnitude_supported"]),
-                    "claim_supported_rev2": csv_flag(stats["claim_supported_rev2"]),
-                }
+            if configuration.get("transfer_policy") != path.policy:
+                raise RuntimeError(
+                    f"{case['case_id']}: stoquant bench ran transfer policy "
+                    f"{configuration.get('transfer_policy')!r}, expected {path.policy!r}"
+                )
+            run: dict[str, Any] = {
+                "trial": trial_index,
+                "position": position,
+                "order": order.order_labels[trial_index],
+                "repetition_invocation_ids": configuration.get("repetition_invocation_ids"),
+                "warmup_invocation_ids": compact_invocation_ids(
+                    configuration.get("warmup_invocation_ids")
+                ),
+                "samples_ms": payload.get("samples_ms", []),
+            }
+            if "threads" in configuration:
+                run["threads"] = configuration["threads"]
+            if "capture_and_instantiate_ms" in payload:
+                run["capture_and_instantiate_ms"] = payload["capture_and_instantiate_ms"]
+            for key in STAGE_KEYS:
+                if key in payload:
+                    run[key] = payload[key]
+            case["trial_runs"].append(run)
+
+
+def compute_case_group_statistics(cases: list[dict[str, Any]], paths: Sequence[BenchPath]) -> None:
+    """Pooled statistics per passing case, then comparisons across the group."""
+    for case in cases:
+        if case["correctness"]["status"] != "passed":
+            case["trial_runs"] = []
+            continue
+        runs = case["trial_runs"]
+        first = runs[0]
+        for run in runs[1:]:
+            if (
+                run["repetition_invocation_ids"] != first["repetition_invocation_ids"]
+                or run["warmup_invocation_ids"] != first["warmup_invocation_ids"]
+            ):
+                raise RuntimeError(
+                    f"{case['case_id']}: trials used different invocation identifiers"
+                )
+        if "threads" in first:
+            if any(run.get("threads") != first["threads"] for run in runs):
+                raise RuntimeError(f"{case['case_id']}: trials ran different thread counts")
+            case["threads"] = first["threads"]
+        case["repetition_invocation_ids"] = first["repetition_invocation_ids"]
+        case["warmup_invocation_ids"] = first["warmup_invocation_ids"]
+        case["samples_ms"] = [s for run in runs for s in run["samples_ms"]]
+        case["statistics"] = compute_case_statistics([run["samples_ms"] for run in runs])
+        case["stage_medians_ms"] = compute_stage_medians(runs)
+
+    # Comparisons and flags, only between cases that all passed.
+    compare_case_group(cases, paths)
+
+
+def write_case_outputs(
+    target_dir: Path,
+    cases: list[dict[str, Any]],
+    inputs: SweepInputs,
+    input_key: str,
+    bits: int,
+    settings: SweepSettings,
+) -> list[dict[str, Any]]:
+    """Write each case's JSON; returns the case group's summary rows."""
+    count = inputs.counts[input_key]
+    input_family = settings.input_family
+    reps = settings.reps
+    trials = settings.trials
+    rows: list[dict[str, Any]] = []
+    for case in cases:
+        (target_dir / f"{case['case_id']}.json").write_text(
+            json.dumps(case, indent=2), encoding="utf-8"
+        )
+        stats = case["statistics"]
+        if case["correctness"]["status"] != "passed" or stats is None or "verdict" not in stats:
+            rows.append(
+                failed_row(
+                    count,
+                    bits,
+                    case["backend"],
+                    case["timing_boundary"],
+                    case["warmup"],
+                    reps,
+                    trials,
+                    transfer_policy=case["transfer_policy"],
+                    path_label=case["path_label"],
+                    input_family=input_family,
+                    input_key=input_key,
+                )
             )
+            continue
+        rows.append(
+            {
+                "count": count,
+                "input_family": input_family,
+                "input_key": input_key,
+                "bits": bits,
+                "backend": case["backend"],
+                "boundary": case["timing_boundary"],
+                "transfer_policy": case["transfer_policy"],
+                "path_label": case["path_label"],
+                "correctness": "passed",
+                "warmup": case["warmup"],
+                "reps": reps,
+                "trials": trials,
+                "median_ms": f"{stats['median_ms']:.6f}",
+                "iqr_ms": f"{stats['iqr_ms']:.6f}",
+                "trial_median_min_ms": f"{stats['trial_median_min_ms']:.6f}",
+                "trial_median_max_ms": f"{stats['trial_median_max_ms']:.6f}",
+                "spread_ratio": f"{stats['spread_ratio']:.4f}",
+                "spread_p90_p10": f"{stats['spread_p90_p10']:.4f}",
+                "stable": csv_flag(stats["stable"]),
+                "unstable_rev2": csv_flag(stats["unstable_rev2"]),
+                "baseline": stats["baseline"],
+                "speedup_vs_c": f"{stats['speedup_vs_cpu']:.4f}",
+                "speedup_low": f"{stats['speedup_low']:.4f}",
+                "speedup_high": f"{stats['speedup_high']:.4f}",
+                "speedup_ci_low": f"{stats['speedup_ci_low']:.4f}",
+                "speedup_ci_high": f"{stats['speedup_ci_high']:.4f}",
+                "verdict": stats["verdict"],
+                "boundary_inversion": csv_flag(stats["boundary_inversion"]),
+                "direction_supported": csv_flag(stats["direction_supported"]),
+                "magnitude_supported": csv_flag(stats["magnitude_supported"]),
+                "claim_supported_rev2": csv_flag(stats["claim_supported_rev2"]),
+            }
+        )
+    return rows
 
-    gpu_state_end = query_gpu_state() if "cuda" in backends else None
 
-    path_rank = {path.label: i for i, path in enumerate(paths)}
-    input_rank = {key: i for i, key in enumerate(input_meta)}
+def write_summary(
+    target_dir: Path,
+    setup: RunSetup,
+    inputs: SweepInputs,
+    case_results: list[dict[str, Any]],
+    summary_rows: list[dict[str, Any]],
+    settings: SweepSettings,
+) -> Path:
+    """Sort rows and cases in place, drop the scratch folder, then write summary.csv."""
+    path_rank = {path.label: i for i, path in enumerate(settings.paths)}
+    input_rank = {key: i for i, key in enumerate(inputs.clean_meta)}
     summary_rows.sort(
         key=lambda r: (
             r["count"],
@@ -682,16 +891,31 @@ def sweep_matrix(
         )
     )
 
-    shutil.rmtree(temp_dir, ignore_errors=True)
+    shutil.rmtree(setup.temp_dir, ignore_errors=True)
 
-    # 4. Summary CSV
     csv_path = target_dir / "summary.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS)
         writer.writeheader()
         writer.writerows(summary_rows)
+    return csv_path
 
-    # 5. Run manifest
+
+def write_manifest(
+    target_dir: Path,
+    *,
+    date_str: str,
+    git_prov: dict[str, Any],
+    run_conditions: dict[str, Any],
+    setup: RunSetup,
+    inputs: SweepInputs,
+    order: SweepOrder,
+    gpu_state_end: dict[str, Any] | None,
+    csv_path: Path,
+    vec_report_path: Path,
+    case_results: list[dict[str, Any]],
+    settings: SweepSettings,
+) -> None:
     monitoring_provider = os.environ.get("STOQUANT_MONITORING_PROVIDER")
     monitoring = None
     if monitoring_provider:
@@ -708,6 +932,13 @@ def sweep_matrix(
             "heartbeat_interval_seconds": heartbeat_interval,
         }
 
+    toolchain_prov = setup.toolchain_prov
+    device_attributes = setup.device_attributes
+    input_family = settings.input_family
+    input_counts = inputs.counts
+    in_process_warmup_seconds = settings.in_process_warmup_seconds
+    paths = settings.paths
+    dense = settings.dense
     manifest_data = {
         "manifest_version": "3.1",
         "date": date_str,
@@ -717,28 +948,32 @@ def sweep_matrix(
         "hardware": toolchain_prov["hardware"],
         **({"device": device_attributes} if device_attributes is not None else {}),
         "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
-        "build_flags": build_prov,
-        "transfer_policies": list(transfer_policies),
+        "build_flags": setup.build_prov,
+        "transfer_policies": list(settings.transfer_policies),
         "gpu_state": {
             "note": (
                 "Instantaneous nvidia-smi readings before the warm-up, after it, and after "
                 "the last timed process; they describe the GPU around the run, not clock "
                 "stability during it."
             ),
-            "start": gpu_state_start,
-            "warmup": gpu_warmup,
-            "after_warmup": gpu_state_after_warmup,
+            "start": setup.gpu_state_start,
+            "warmup": order.gpu_warmup,
+            "after_warmup": order.gpu_state_after_warmup,
             "end": gpu_state_end,
         },
         "matrix_parameters": {
-            "k1": k1,
+            "k1": settings.k1,
             "input_family": input_family,
-            "counts": list(counts) if input_family != "model" else list(input_counts.values()),
-            "model_tensors": (model_tensors or "distinct") if input_family == "model" else None,
-            "model_limit": model_limit,
-            "bit_widths": list(bit_widths),
-            "backends": list(backends),
-            "warmup": warmups,
+            "counts": (
+                list(settings.counts) if input_family != "model" else list(input_counts.values())
+            ),
+            "model_tensors": (
+                (settings.model_tensors or "distinct") if input_family == "model" else None
+            ),
+            "model_limit": settings.model_limit,
+            "bit_widths": list(settings.bit_widths),
+            "backends": list(settings.backends),
+            "warmup": settings.warmups,
             "in_process_warmup_seconds": in_process_warmup_seconds,
             "in_process_warmup_rule": (
                 "per path: max(warmup, ceil(target_seconds * 1000 / probe median ms)), "
@@ -746,8 +981,8 @@ def sweep_matrix(
                 if in_process_warmup_seconds > 0
                 else "disabled; every path uses the base warmup"
             ),
-            "reps": reps,
-            "trials": trials,
+            "reps": settings.reps,
+            "trials": settings.trials,
             "paths": [path.label for path in paths],
             **(
                 {
@@ -759,24 +994,24 @@ def sweep_matrix(
                         "(Windows; online processors elsewhere)"
                     ),
                 }
-                if has_avx2
+                if settings.has_avx2
                 else {}
             ),
             "trial_design": trial_design(len(paths)),
-            "trial_orders": order_labels,
-            "case_order_seed": case_order_seed,
+            "trial_orders": order.order_labels,
+            "case_order_seed": settings.case_order_seed,
             "case_order": [
                 {"count": input_counts[k], "bits": b}
                 if dense
                 else {"input": k, "count": input_counts[k], "bits": b}
-                for k, b in ordered_cases
+                for k, b in order.ordered_cases
             ],
             "invocation_scheme": (
                 "every trial reuses base invocation 0; identifiers per repetition are "
                 "copied from each stoquant bench configuration"
             ),
-            "input_seed": input_seed,
-            "compression_seed": compression_seed,
+            "input_seed": settings.input_seed,
+            "compression_seed": settings.compression_seed,
         },
         "statistics_method": {
             "pooled": "median and IQR over all measured repetitions of all trials",
@@ -810,7 +1045,7 @@ def sweep_matrix(
         "run_conditions": run_conditions,
         # Dense inputs stay keyed by count, as in revision 3.
         "inputs": {
-            (meta["count"] if dense else key): meta for key, meta in clean_input_meta.items()
+            (meta["count"] if dense else key): meta for key, meta in inputs.clean_meta.items()
         },
         "summary_csv": csv_path.name,
         "msvc_vectorization_report": vec_report_path.name,
@@ -820,8 +1055,6 @@ def sweep_matrix(
 
     manifest_path = target_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
-
-    return target_dir
 
 
 def main(argv: list[str] | None = None, prog: str | None = None) -> None:
