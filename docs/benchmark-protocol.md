@@ -2,7 +2,7 @@
 
 Status: accepted protocol; executable benchmark implemented with frozen course snapshot committed under `results/`.
 
-**Naming note.** The revisions below were fixed before [ADR 0004](adr/0004-stoquant-naming.md) renamed the code, and their text keeps the names they were fixed with. Read those names as the current ones below; every rule they state is unchanged.
+**Naming note.** The revisions below were fixed before [ADR 0004](adr/0004-stoquant-naming.md) renamed the code, and their text keeps the names they were fixed with. Read each old name as its current name from this table; every rule the text states is unchanged.
 
 | Name in the protocol text | Current name |
 | --- | --- |

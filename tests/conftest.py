@@ -41,7 +41,8 @@ def pytest_runtest_call(item):
 
 def pytest_sessionfinish(session):
     config = session.config
-    if config.getoption("--require-cuda") and config.stash[CUDA_TESTS_RUN] == 0:
+    passing = session.exitstatus in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED)
+    if passing and config.getoption("--require-cuda") and config.stash[CUDA_TESTS_RUN] == 0:
         reporter = config.pluginmanager.get_plugin("terminalreporter")
         if reporter is not None:
             reporter.ensure_newline()
