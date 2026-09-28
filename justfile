@@ -218,3 +218,7 @@ k1-ab *args: build-cuda build-stream-probe
 [unix]
 k1-ab *args: build-cuda build-stream-probe
     MCO2_TEST_CUDA=1 uv run python k1_ab.py {{args}}
+
+# Capture or compare the restructure equivalence baseline (issue #47)
+equivalence *args: build-cuda build-stream-probe
+    uv run python scripts/equivalence.py {{args}}

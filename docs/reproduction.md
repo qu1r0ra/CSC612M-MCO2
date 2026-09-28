@@ -208,6 +208,30 @@ Snapshots are stored in `results/<date>-<short_rev>/`:
 Get-Content (Get-ChildItem results -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName\summary.csv
 ```
 
+## Restructure equivalence check
+
+The restructure stages (issue #46) must leave behavior unchanged. `just equivalence` builds the CUDA executable and the stream probe, then runs `scripts/equivalence.py`, which drives only command-line interfaces and imports no project code.
+
+```powershell
+# On the reference commit, with no modified tracked files: write the baseline
+just equivalence capture
+
+# On a later commit: exit 0 when equivalent, exit 1 with the differing leaves listed
+just equivalence compare
+```
+
+`capture` writes `build/equivalence/<sha>.json` under the primary checkout (the parent of the git common directory), so every worktree shares it. It refuses to overwrite an existing baseline and refuses a tree with modified tracked files unless given `--allow-dirty`. `compare` reads the only stored baseline, or the one named by `--baseline`, and never writes to the store. Both accept `--store DIR`. The stage 0 baseline is keyed to `main` at `03b29f3`.
+
+Each run fingerprints:
+
+- short benchmark-matrix sweeps (dense, sparse, and model families, with GPU-origin paths and both transfer policies), a small unbiasedness run, and short K1 baseline and K1 A/B runs, all with warm-ups shortened and readiness overridden;
+- the record bytes and decompressed output of `compress` and `decompress` over fixed inputs, for every backend, both bit widths, two seeds, both K1 variants, and the tensor and invocation identifiers;
+- every frozen snapshot under `results/` except `pilots/`: a content hash of each, plus a report re-rendered from it into a scratch folder. Snapshots that no command can re-render from a stored folder (the unbiasedness and K1 baseline snapshots, the issue #26 diagnosis, and the issue #30 trace) are fingerprinted by content hash alone; the live unbiasedness and K1 baseline runs cover their code.
+
+Measured values are redacted. These include timings, timestamps, and bandwidth and statistics that depend on timing. Subtrees that describe the machine, the tree, or timing-dependent decisions are collapsed, so even their length is ignored: build flags, git provenance, hardware, toolkit and driver, device, GPU state, readiness facts and verdicts, evidence status and its reasons, and the K1 A/B decision lists (the keep rule itself is unit-tested on fixed cells). Paths are scrubbed, and the binary name is normalized. Figures drawn from timings are recorded only as present; the unbiasedness figure is hashed. Redaction rules match key paths from each output file's root, so the output layout is part of the compared behavior. Everything else must match exactly: case lists and order, configuration, correctness results, exit codes, record and file hashes, CSV key columns, and vectorization verdict counts. The run also fails if any file under `results/` changes.
+
+Later stages may change only the `INVOCATION` table at the top of the tool, which holds the binary path, the command that starts each script, and the environment-variable prefixes to scrub. A stage that needs any other change to the tool is not behavior-preserving.
+
 ## Scope boundary
 
 The course implementation does not require full federated training, network transport, or compatibility with other wire formats.
