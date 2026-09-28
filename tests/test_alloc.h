@@ -8,7 +8,8 @@
    branch of its own. */
 static inline void *test_alloc(size_t count, size_t size) {
   void *pointer = calloc(count, size);
-  if (pointer == NULL) {
+  /* calloc may return NULL for a zero-byte request without failing. */
+  if (pointer == NULL && count != 0 && size != 0) {
     (void)fprintf(stderr, "test allocation of %zu x %zu bytes failed\n", count,
                   size);
     exit(2);

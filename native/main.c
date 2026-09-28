@@ -1139,6 +1139,7 @@ static sq_status bench_file(int argc, char **argv) {
       }
     }
   }
+  // CPU-only builds end the chain above; the GPU branches continue it.
 #ifdef SQ_ENABLE_CUDA
   else if (cpu_gpu_origin) {
     status = bench_cpu_gpu_origin(

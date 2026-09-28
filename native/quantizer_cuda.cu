@@ -134,8 +134,11 @@ __global__ static void sum_blocks_kernel(const float *values, uint64_t count,
     for (unsigned int stride = SQ_CUDA_REDUCTION_THREADS / 2; stride != 0;
          stride /= 2) {
       if (lane < stride) {
-        const unsigned int pair = 2 * lane;
-        output[lane] = input[pair] + input[pair + 1];
+        // 2 * lane < SQ_CUDA_REDUCTION_THREADS cannot overflow, and hoisting
+        // the index changes this timed kernel's SASS.
+        // NOLINTBEGIN(bugprone-implicit-widening-of-multiplication-result)
+        output[lane] = input[2 * lane] + input[2 * lane + 1];
+        // NOLINTEND(bugprone-implicit-widening-of-multiplication-result)
       }
       __syncthreads();
       float *temporary = input;
@@ -428,8 +431,11 @@ __global__ static void reduce_tree_kernel(const float *input, float *output,
     __syncthreads();
     for (unsigned int width = span / 2; width != 0; width /= 2) {
       for (unsigned int k = threadIdx.x; k < width; k += blockDim.x) {
-        const unsigned int pair = 2 * k;
-        target[k] = source[pair] + source[pair + 1];
+        // 2 * k < span, the shared-memory length, so it cannot overflow; the
+        // original index form keeps this timed kernel's generated code.
+        // NOLINTBEGIN(bugprone-implicit-widening-of-multiplication-result)
+        target[k] = source[2 * k] + source[2 * k + 1];
+        // NOLINTEND(bugprone-implicit-widening-of-multiplication-result)
       }
       __syncthreads();
       float *temporary = source;
