@@ -8,38 +8,48 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from stoquant import driver, layout
-from stoquant.driver import (
-    BOOTSTRAP_SEED,
+from stoquant import correctness, host, layout, matrix
+from stoquant.correctness import verify_correctness
+from stoquant.design import (
     DEFAULT_COUNTS,
     DEFAULT_TRIALS,
-    EXCLUDED_LOGICAL_CPUS,
-    PILOT_COUNTS,
-    SUMMARY_FIELDS,
     BenchPath,
-    affinity_mask_excluding,
-    bootstrap_speedup_ci,
-    boundary_inversion,
     build_paths,
     case_order,
+    trial_design,
+    trial_orders,
+    williams_rows,
+)
+from stoquant.host import (
+    EXCLUDED_LOGICAL_CPUS,
+    affinity_mask_excluding,
     check_readiness,
-    claim_support,
+    get_process_affinity,
+)
+from stoquant.inputs import (
+    RESNET18_CIFAR_TENSORS,
+    SPARSE_MASK_SEED,
+    generate_family_inputs,
+    generate_inputs,
+    select_model_tensors,
+)
+from stoquant.matrix import (
+    PILOT_COUNTS,
+    SUMMARY_FIELDS,
     compact_invocation_ids,
+    run_benchmark_matrix,
+)
+from stoquant.provenance import find_binary, parse_build_commands
+from stoquant.runner import in_process_warmups
+from stoquant.stats import (
+    BOOTSTRAP_SEED,
+    bootstrap_speedup_ci,
+    boundary_inversion,
+    claim_support,
     compare_case_group,
     compare_to_comparator,
     compute_case_statistics,
-    generate_family_inputs,
-    generate_inputs,
-    get_process_affinity,
-    in_process_warmups,
-    parse_build_commands,
-    run_benchmark_matrix,
-    trial_design,
-    trial_orders,
-    verify_correctness,
-    williams_rows,
 )
-from stoquant.inputs import RESNET18_CIFAR_TENSORS, SPARSE_MASK_SEED, select_model_tensors
 
 ROOT = layout.ROOT
 
@@ -942,16 +952,16 @@ def test_readiness_names_each_failure(change, reason):
 
 
 def test_readiness_fails_while_a_stoquant_process_runs(monkeypatch):
-    monkeypatch.setattr(driver, "query_gpu_state", lambda: {"clocks_event_reasons.active": "0x1"})
-    monkeypatch.setattr(driver, "uptime_seconds", lambda: 600.0)
-    monkeypatch.setattr(driver, "list_app_windows", list)
-    monkeypatch.setattr(driver, "list_launcher_processes", list)
-    monkeypatch.setattr(driver, "collect_git_provenance", lambda root: {"dirty_files": []})
-    monkeypatch.setattr(driver, "query_power_plan", lambda: "Balanced")
-    monkeypatch.setattr(driver, "query_hags", lambda: "unset")
-    monkeypatch.setattr(driver, "list_processes", lambda name: [4242] if name == "stoquant" else [])
+    monkeypatch.setattr(host, "query_gpu_state", lambda: {"clocks_event_reasons.active": "0x1"})
+    monkeypatch.setattr(host, "uptime_seconds", lambda: 600.0)
+    monkeypatch.setattr(host, "list_app_windows", list)
+    monkeypatch.setattr(host, "list_launcher_processes", list)
+    monkeypatch.setattr(host, "collect_git_provenance", lambda root: {"dirty_files": []})
+    monkeypatch.setattr(host, "query_power_plan", lambda: "Balanced")
+    monkeypatch.setattr(host, "query_hags", lambda: "unset")
+    monkeypatch.setattr(host, "list_processes", lambda name: [4242] if name == "stoquant" else [])
 
-    failures = check_readiness(driver.probe_readiness_facts(ROOT))
+    failures = check_readiness(host.probe_readiness_facts(ROOT))
 
     assert failures == ["stoquant already running (pid 4242)"]
 
@@ -1037,7 +1047,7 @@ def test_failed_sweep_restores_the_affinity_mask(tmp_path, monkeypatch):
     def missing_binary(root):
         raise FileNotFoundError("no binary")
 
-    monkeypatch.setattr(driver, "find_binary", missing_binary)
+    monkeypatch.setattr(matrix, "find_binary", missing_binary)
     before = get_process_affinity()
     with pytest.raises(FileNotFoundError):
         run_cpu_snapshot(tmp_path / "out", readiness_facts=READY_FACTS)
@@ -1256,7 +1266,7 @@ def test_correctness_gate_checks_the_avx2_path_without_cuda(tmp_path):
     input_path.write_bytes(values.astype("<f4").tobytes())
     backends = ["cpu", "cpu-avx2"]
     passed, info = verify_correctness(
-        driver.find_binary(ROOT),
+        find_binary(ROOT),
         input_path,
         len(values),
         4,
@@ -1283,10 +1293,10 @@ def test_an_avx2_mismatch_is_not_reported_as_a_cpu_cuda_divergence(tmp_path, mon
             out.write_bytes(bytes(data))
         return result
 
-    monkeypatch.setattr(driver.subprocess, "run", corrupt_avx2)
+    monkeypatch.setattr(correctness.subprocess, "run", corrupt_avx2)
     backends = ["cpu", "cpu-avx2"]
     passed, info = verify_correctness(
-        driver.find_binary(ROOT),
+        find_binary(ROOT),
         input_path,
         len(values),
         4,

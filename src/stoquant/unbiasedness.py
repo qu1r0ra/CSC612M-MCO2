@@ -26,7 +26,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from stoquant import layout
-from stoquant.driver import collect_git_provenance, find_binary
 from stoquant.inputs import (
     DEFAULT_INPUT_SEED,
     MODEL_NAME,
@@ -39,6 +38,7 @@ from stoquant.inputs import (
     model_tensor_values,
     sparsify,
 )
+from stoquant.provenance import collect_git_provenance, find_binary
 
 SUITE_SEEDS = 4096
 SEED_START = 1

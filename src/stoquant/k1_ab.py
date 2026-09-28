@@ -34,31 +34,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from stoquant import layout
-from stoquant.driver import (
-    BUILD_RECIPE,
-    DEFAULT_BITS,
-    DEFAULT_COMPRESSION_SEED,
-    DEFAULT_COUNTS,
-    DEFAULT_IN_PROCESS_WARMUP_SECONDS,
+from stoquant.design import DEFAULT_BITS, DEFAULT_COUNTS
+from stoquant.host import (
     EXCLUDED_LOGICAL_CPUS,
     affinity_mask_excluding,
-    claim_support,
-    collect_build_commands,
-    collect_git_provenance,
-    collect_hardware_and_toolchain,
-    compare_speedup,
-    compute_case_statistics,
-    compute_stage_medians,
-    find_binary,
-    generate_inputs,
     get_process_affinity,
-    in_process_warmups,
     probe_readiness_facts,
     process_affinity,
-    query_gpu_state,
-    run_bench_process,
-    warm_up_gpu,
 )
+from stoquant.inputs import generate_inputs
 from stoquant.k1_bandwidth import (
     CALIBRATION_REPS,
     DEFAULT_PROCESSES,
@@ -75,6 +59,27 @@ from stoquant.k1_bandwidth import (
     run_probe,
     summarize_cell,
     theoretical_peak_gbps,
+)
+from stoquant.provenance import (
+    BUILD_RECIPE,
+    collect_build_commands,
+    collect_git_provenance,
+    collect_hardware_and_toolchain,
+    find_binary,
+    query_gpu_state,
+)
+from stoquant.runner import (
+    DEFAULT_COMPRESSION_SEED,
+    DEFAULT_IN_PROCESS_WARMUP_SECONDS,
+    in_process_warmups,
+    run_bench_process,
+    warm_up_gpu,
+)
+from stoquant.stats import (
+    claim_support,
+    compare_speedup,
+    compute_case_statistics,
+    compute_stage_medians,
 )
 
 VARIANTS = ("reference", "optimized")

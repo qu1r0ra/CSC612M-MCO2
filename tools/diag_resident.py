@@ -23,15 +23,9 @@ from pathlib import Path
 from typing import Any
 
 from stoquant import layout
-from stoquant.driver import (
-    DEFAULT_COMPRESSION_SEED,
-    collect_git_provenance,
-    find_binary,
-    generate_inputs,
-    query_gpu_state,
-    run_bench_process,
-    warm_up_gpu,
-)
+from stoquant.inputs import generate_inputs
+from stoquant.provenance import collect_git_provenance, find_binary, query_gpu_state
+from stoquant.runner import DEFAULT_COMPRESSION_SEED, run_bench_process, warm_up_gpu
 
 SLOW_RATIO = 1.5
 GROUP_SIZE = 6

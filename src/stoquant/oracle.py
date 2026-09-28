@@ -18,6 +18,7 @@ _BLOCK_SIZE = 256
 _BITS = 8
 _SIGNED_LIMIT = 127
 _HEADER = struct.Struct("<4sBBHQf")
+HEADER_STRUCT = struct.Struct("<4sBBHQf")
 _MAGIC = b"MSQ1"
 _VERSION = 1
 

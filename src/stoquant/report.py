@@ -20,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from stoquant.driver import compute_stage_medians
+from stoquant.stats import compute_stage_medians
 
 # "optimized" is the opt-in AVX2 CPU comparator (issue #22): an F1 line and a
 # descriptive F2 line only. It never enters T1, the crossovers or a claim.

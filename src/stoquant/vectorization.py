@@ -11,17 +11,76 @@ inlined copy of it as "loop not vectorized" (info C5002).
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 from stoquant import layout
-from stoquant.driver import (
-    AVX2_SOURCES,
-    collect_build_commands,
-    generate_msvc_vectorization_report,
+from stoquant.provenance import collect_build_commands
+
+COMPARATOR_SOURCES = (
+    "native\\main.c",
+    "native\\codec.c",
+    "native\\quantizer.c",
+    "native\\rng_cpu.c",
 )
+AVX2_SOURCES = ("native\\quantizer_avx2.c",)
+
+
+def generate_msvc_vectorization_report(
+    root: Path,
+    output_file: Path,
+    host_flags: Sequence[str] | None,
+    object_dir: Path,
+    sources: Sequence[str] = COMPARATOR_SOURCES,
+) -> str:
+    """Recompile C sources with their exact build flags plus /Qvec-report:2."""
+    output_text = ""
+    script = root / "tools" / "with-msvc.ps1"
+    if os.name == "nt" and script.is_file() and host_flags is not None:
+        object_dir.mkdir(parents=True, exist_ok=True)
+        # A quoted path ending in "\" escapes its closing quote through the
+        # PowerShell wrapper, so the directory ends in "/" instead.
+        try:
+            object_arg = str(object_dir.resolve().relative_to(root.resolve()))
+        except ValueError:
+            object_arg = str(object_dir.resolve())
+        object_arg = object_arg.replace("\\", "/")
+        compile_args = [
+            "cl.exe",
+            *host_flags,
+            "/Qvec-report:2",
+            "/c",
+            *sources,
+            f"/Fo:{object_arg}/",
+        ]
+        cmd = [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            *compile_args,
+        ]
+        res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=False)
+        diagnostics = (res.stdout + "\n" + res.stderr).strip()
+        # cl reports absolute source paths; keep the published report root-relative.
+        diagnostics = diagnostics.replace(str(root.resolve()) + "\\", "")
+        output_text = (
+            f"Command: {' '.join(compile_args)}\nExit code: {res.returncode}\n\n" + diagnostics
+        )
+
+    if not output_text:
+        output_text = "MSVC vectorization report not available on this platform/configuration."
+
+    output_file.write_text(output_text, encoding="utf-8")
+    return output_text
+
 
 HOT_TAG = "/* avx2-hot */"
 SOURCE_NAME = "quantizer_avx2.c"
