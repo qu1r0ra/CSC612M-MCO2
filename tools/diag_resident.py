@@ -53,7 +53,10 @@ def conditions_for(rep_ms: float, long_warmup_seconds: float) -> dict[str, dict[
 
 
 def kernel_sums(payload: dict[str, Any]) -> list[float]:
-    return [a + b + c for a, b, c in zip(payload["k1_ms"], payload["k2_ms"], payload["k3_ms"])]
+    return [
+        a + b + c
+        for a, b, c in zip(payload["k1_ms"], payload["k2_ms"], payload["k3_ms"], strict=True)
+    ]
 
 
 def run_one(binary: Path, input_path: Path, bits: int, spec: dict[str, Any]) -> dict[str, Any]:

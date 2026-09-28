@@ -6,6 +6,7 @@ import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import cast
 
 
 def runner(root: Path) -> list[str]:
@@ -23,11 +24,12 @@ class CaptureServer(ThreadingHTTPServer):
 
 class CaptureHandler(BaseHTTPRequestHandler):
     def do_POST(self):
+        server = cast(CaptureServer, self.server)
         size = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(size).decode("utf-8")
-        with self.server.messages_lock:
-            request_number = len(self.server.messages) + 1
-            self.server.messages.append(
+        with server.messages_lock:
+            request_number = len(server.messages) + 1
+            server.messages.append(
                 {
                     "path": self.path,
                     "authorization": self.headers.get("Authorization"),
@@ -35,13 +37,13 @@ class CaptureHandler(BaseHTTPRequestHandler):
                     "body": body,
                 }
             )
-        if request_number in self.server.delay_requests:
+        if request_number in server.delay_requests:
             time.sleep(1.3)
-        status = 503 if request_number in self.server.fail_requests else 200
+        status = 503 if request_number in server.fail_requests else 200
         self.send_response(status)
         self.end_headers()
 
-    def log_message(self, _format, *_args):
+    def log_message(self, format, *args):
         pass
 
 

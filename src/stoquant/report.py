@@ -296,7 +296,9 @@ def plot_stages(indexed, stage_counts, bit_widths, out: Path) -> None:
         for offset, path in zip((-width / 2, width / 2), STAGE_PATHS, strict=True):
             for i, count in enumerate(stage_counts):
                 case = indexed.get((count, bits, path))
-                medians = stage_medians(case) if case is not None else None
+                if case is None:
+                    continue
+                medians = stage_medians(case)
                 if not medians:
                     continue
                 parts = {key: max(medians.get(key, 0.0), 0.0) for key, _, _ in STAGES}
@@ -531,7 +533,7 @@ def render_report(
     plot_stages(indexed, chosen, bit_widths, out / FIGURES["f3"])
     plot_graph_vs_resident(indexed, counts, bit_widths, out / FIGURES["f4"])
 
-    present_cuda_paths = [
+    present_cuda_paths: list[str] = [
         p for p in CUDA_PATHS if any(c.get("timing_boundary") == p for c in cases)
     ]
     if not present_cuda_paths:

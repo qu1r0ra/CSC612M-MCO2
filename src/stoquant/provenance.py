@@ -174,7 +174,7 @@ def query_gpu_state() -> dict[str, str]:
     values = [v.strip() for v in proc.stdout.strip().splitlines()[0].split(",")]
     if len(values) != len(GPU_STATE_FIELDS):
         return {"status": "unparsed", "raw": proc.stdout.strip()}
-    state = dict(zip(GPU_STATE_FIELDS, values, strict=True))
+    state: dict[str, str] = dict(zip(GPU_STATE_FIELDS, values, strict=True))
     state["captured_at_utc"] = datetime.now(UTC).isoformat()
     return state
 

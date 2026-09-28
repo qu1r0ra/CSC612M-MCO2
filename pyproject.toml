@@ -34,3 +34,12 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tools"]
+
+[tool.ruff.lint]
+# Ruff's default rule set plus the full import-order, bugbear and pyupgrade families.
+extend-select = ["I", "B", "UP"]
+
+[tool.basedpyright]
+include = ["src", "tools", "tests"]
+typeCheckingMode = "standard"
+pythonVersion = "3.11"

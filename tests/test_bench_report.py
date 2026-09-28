@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -54,7 +55,7 @@ def make_case(
                 "claim_supported_rev2": None,
             }
         )
-    run = {"samples_ms": [median, median]}
+    run: dict[str, Any] = {"samples_ms": [median, median]}
     if boundary == "resident-graph":
         run["capture_and_instantiate_ms"] = 0.5
     elif backend == "cuda" and stages:

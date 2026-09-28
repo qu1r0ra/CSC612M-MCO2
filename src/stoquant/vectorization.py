@@ -103,7 +103,7 @@ def unvectorized_hot_loops(source_text: str, report_text: str) -> list[int]:
 
 
 def main(argv: list[str] | None = None, prog: str | None = None) -> int:
-    parser = argparse.ArgumentParser(prog=prog, description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(prog=prog, description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--output", type=Path, default=Path("build/vec_report_avx2.txt"))
     args = parser.parse_args(argv)
     root = layout.ROOT
