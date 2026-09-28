@@ -7,8 +7,9 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-RUNNER = ROOT / "mco2_run_notify.py"
+
+def runner(root: Path) -> list[str]:
+    return [sys.executable, "-m", "stoquant.notify", "--root", str(root)]
 
 
 class CaptureServer(ThreadingHTTPServer):
@@ -83,7 +84,7 @@ def test_missing_configuration_prevents_child_launch(tmp_path):
         env.pop(key, None)
 
     result = subprocess.run(
-        [sys.executable, str(RUNNER), "--", *child],
+        [*runner(tmp_path), "--", *child],
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -106,7 +107,7 @@ def test_failed_preflight_prevents_child_launch(tmp_path):
     with ntfy_stub() as (server, server_url):
         server.fail_requests.add(1)
         result = subprocess.run(
-            [sys.executable, str(RUNNER), "--", *child],
+            [*runner(tmp_path), "--", *child],
             cwd=tmp_path,
             env=ntfy_environment(server_url),
             capture_output=True,
@@ -131,7 +132,7 @@ def test_failed_start_notification_prevents_child_launch(tmp_path):
     with ntfy_stub() as (server, server_url):
         server.fail_requests.add(2)
         result = subprocess.run(
-            [sys.executable, str(RUNNER), "--", *child],
+            [*runner(tmp_path), "--", *child],
             cwd=tmp_path,
             env=ntfy_environment(server_url),
             capture_output=True,
@@ -149,7 +150,7 @@ def test_failed_start_notification_prevents_child_launch(tmp_path):
 def test_check_option_sends_preflight_without_starting_a_command(tmp_path):
     with ntfy_stub() as (server, server_url):
         result = subprocess.run(
-            [sys.executable, str(RUNNER), "--check"],
+            [*runner(tmp_path), "--check"],
             cwd=tmp_path,
             env=ntfy_environment(server_url),
             capture_output=True,
@@ -159,8 +160,8 @@ def test_check_option_sends_preflight_without_starting_a_command(tmp_path):
 
     assert result.returncode == 0
     assert len(server.messages) == 1
-    assert server.messages[0]["title"] == "MCO2 ntfy preflight"
-    assert server.messages[0]["body"] == "MCO2 ntfy preflight succeeded."
+    assert server.messages[0]["title"] == "stoquant ntfy preflight"
+    assert server.messages[0]["body"] == "stoquant ntfy preflight succeeded."
 
 
 def test_elapsed_duration_excludes_slow_start_notification(tmp_path):
@@ -168,7 +169,7 @@ def test_elapsed_duration_excludes_slow_start_notification(tmp_path):
     with ntfy_stub() as (server, server_url):
         server.delay_requests.add(2)
         result = subprocess.run(
-            [sys.executable, str(RUNNER), "--", *child],
+            [*runner(tmp_path), "--", *child],
             cwd=tmp_path,
             env=ntfy_environment(server_url),
             capture_output=True,
@@ -215,7 +216,7 @@ Path('credential-forwarded').write_text(str('NTFY_TOKEN' in os.environ))
         for key in ("NTFY_SERVER", "NTFY_TOPIC", "NTFY_TOKEN", "NTFY_HEARTBEAT_SECONDS"):
             env.pop(key, None)
         result = subprocess.run(
-            [sys.executable, str(RUNNER), "--", *child],
+            [*runner(tmp_path), "--", *child],
             cwd=tmp_path,
             env=env,
             capture_output=True,
@@ -228,10 +229,10 @@ Path('credential-forwarded').write_text(str('NTFY_TOKEN' in os.environ))
     assert "fake benchmark stderr" in result.stderr
     assert (tmp_path / "credential-forwarded").read_text() == "False"
     assert [message["title"] for message in server.messages] == [
-        "MCO2 ntfy preflight",
-        "MCO2 sparse started",
-        "MCO2 sparse heartbeat",
-        "MCO2 sparse succeeded",
+        "stoquant ntfy preflight",
+        "stoquant sparse started",
+        "stoquant sparse heartbeat",
+        "stoquant sparse succeeded",
     ]
     assert all(message["path"] == "/local-test-topic" for message in server.messages)
     assert all(message["authorization"] == "Bearer test-only-token" for message in server.messages)
@@ -259,7 +260,7 @@ raise SystemExit(7)
     with ntfy_stub() as (server, server_url):
         server.fail_requests.update({3, 4})
         result = subprocess.run(
-            [sys.executable, str(RUNNER), "--", *child],
+            [*runner(tmp_path), "--", *child],
             cwd=tmp_path,
             env=ntfy_environment(server_url, heartbeat_seconds=1),
             capture_output=True,
@@ -272,7 +273,7 @@ raise SystemExit(7)
     assert "failed benchmark stderr" in result.stderr
     assert result.stderr.count("Warning: ntfy notification failed") == 2
     assert "test-only-token" not in result.stderr
-    assert server.messages[0]["title"] == "MCO2 ntfy preflight"
-    assert server.messages[1]["title"] == "MCO2 dense started"
-    assert server.messages[2]["title"] == "MCO2 dense heartbeat"
-    assert server.messages[3]["title"] == "MCO2 dense failed"
+    assert server.messages[0]["title"] == "stoquant ntfy preflight"
+    assert server.messages[1]["title"] == "stoquant dense started"
+    assert server.messages[2]["title"] == "stoquant dense heartbeat"
+    assert server.messages[3]["title"] == "stoquant dense failed"

@@ -56,41 +56,41 @@ static void test_kat(void)
         key.v[0] = kat[row][4];
         key.v[1] = kat[row][5];
 
-        cpu = mco2_philox_raw_cpu(ctr, key);
+        cpu = sq_philox_raw_cpu(ctr, key);
         sprintf(what, "Philox4x32-10 KAT row %d on CPU", row);
         check(same_ctr(cpu, expected), what);
 
         sprintf(what, "Philox4x32-10 KAT row %d on GPU", row);
-        if (cuda_ok(mco2_philox_raw_cuda(ctr, key, &gpu), what))
+        if (cuda_ok(sq_philox_raw_cuda(ctr, key, &gpu), what))
             check(same_ctr(gpu, expected), what);
     }
 }
 
 static void test_mapping(void)
 {
-    mco2_rng_stream s;
+    sq_rng_stream s;
     philox4x32_key_t key;
     philox4x32_ctr_t ctr;
     uint32_t words[16];
     int i, ok = 1;
 
-    mco2_rng_stream_init(&s, 0x0123456789abcdefULL, 7, 9);
-    key = mco2_philox_key(&s);
+    sq_rng_stream_init(&s, 0x0123456789abcdefULL, 7, 9);
+    key = sq_philox_key(&s);
     check(key.v[0] == 0x89abcdef && key.v[1] == 0x01234567,
           "key = {seed lo, seed hi}");
 
-    ctr = mco2_philox_ctr(&s, 13 / 4);
+    ctr = sq_philox_ctr(&s, 13 / 4);
     check(ctr.v[0] == 3 && ctr.v[1] == 0 && ctr.v[2] == 7 && ctr.v[3] == 9,
           "element 13 -> counter {group 3, 0, tensor, invocation}");
 
-    ctr = mco2_philox_ctr(&s, 0x100000002ULL);
+    ctr = sq_philox_ctr(&s, 0x100000002ULL);
     check(ctr.v[0] == 2 && ctr.v[1] == 1, "64-bit group splits into lo/hi words");
 
     /* Element i takes lane i mod 4 of block floor(i/4), built by hand here. */
-    mco2_rng_words_cpu(&s, 16, words);
+    sq_rng_words_cpu(&s, 16, words);
     for (i = 0; i < 16; i++) {
         philox4x32_ctr_t c = {{(uint32_t)(i / 4), 0, 7, 9}};
-        philox4x32_ctr_t r = mco2_philox_raw_cpu(c, key);
+        philox4x32_ctr_t r = sq_philox_raw_cpu(c, key);
         if (words[i] != r.v[i % 4])
             ok = 0;
     }
@@ -99,13 +99,13 @@ static void test_mapping(void)
 
 static void test_overflow(void)
 {
-    mco2_rng_stream s;
+    sq_rng_stream s;
 
-    check(mco2_rng_stream_init(&s, 1, UINT32_MAX, UINT32_MAX) == MCO2_OK,
+    check(sq_rng_stream_init(&s, 1, UINT32_MAX, UINT32_MAX) == SQ_RNG_OK,
           "identifiers at UINT32_MAX accepted");
-    check(mco2_rng_stream_init(&s, 1, (uint64_t)UINT32_MAX + 1, 0) == MCO2_ERR_ID_OVERFLOW,
+    check(sq_rng_stream_init(&s, 1, (uint64_t)UINT32_MAX + 1, 0) == SQ_RNG_ERR_ID_OVERFLOW,
           "tensor identifier above UINT32_MAX rejected");
-    check(mco2_rng_stream_init(&s, 1, 0, (uint64_t)UINT32_MAX + 1) == MCO2_ERR_ID_OVERFLOW,
+    check(sq_rng_stream_init(&s, 1, 0, (uint64_t)UINT32_MAX + 1) == SQ_RNG_ERR_ID_OVERFLOW,
           "invocation identifier above UINT32_MAX rejected");
 }
 
@@ -116,18 +116,18 @@ static void test_geometry(void)
     const uint64_t n = 1000003; /* not a multiple of 4 */
     uint32_t *cpu = malloc(n * sizeof *cpu);
     uint32_t *gpu = malloc(n * sizeof *gpu);
-    mco2_rng_stream s;
+    sq_rng_stream s;
     size_t g;
 
-    mco2_rng_stream_init(&s, 0xfeedfacecafebeefULL, 3, 42);
-    mco2_rng_words_cpu(&s, n, cpu);
+    sq_rng_stream_init(&s, 0xfeedfacecafebeefULL, 3, 42);
+    sq_rng_words_cpu(&s, n, cpu);
 
     for (g = 0; g < sizeof geometry / sizeof geometry[0]; g++) {
         char what[96];
         sprintf(what, "GPU words match CPU for n=%llu, block=%d, grid=%d",
                 (unsigned long long)n, geometry[g][0], geometry[g][1]);
         memset(gpu, 0, n * sizeof *gpu);
-        if (cuda_ok(mco2_rng_words_cuda(&s, n, gpu, geometry[g][0], geometry[g][1]), what))
+        if (cuda_ok(sq_rng_words_cuda(&s, n, gpu, geometry[g][0], geometry[g][1]), what))
             check(memcmp(cpu, gpu, n * sizeof *cpu) == 0, what);
     }
     free(cpu);
@@ -161,13 +161,13 @@ static void test_bernoulli(void)
         }
     }
 
-    check(mco2_bernoulli_threshold(0.0f) == 0, "threshold(0) = 0");
-    check(mco2_bernoulli_threshold(1.0f) == 0x100000000ULL, "threshold(1) = 2^32");
+    check(sq_bernoulli_threshold(0.0f) == 0, "threshold(0) = 0");
+    check(sq_bernoulli_threshold(1.0f) == 0x100000000ULL, "threshold(1) = 2^32");
 
-    mco2_bernoulli_cpu(w, p, NW * NP, cpu);
+    sq_bernoulli_cpu(w, p, NW * NP, cpu);
     check(memcmp(cpu, expected, sizeof expected) == 0,
           "CPU Bernoulli at p = 0, 1, 1-2^-24, 0.5");
-    if (cuda_ok(mco2_bernoulli_cuda(w, p, NW * NP, gpu), "GPU Bernoulli"))
+    if (cuda_ok(sq_bernoulli_cuda(w, p, NW * NP, gpu), "GPU Bernoulli"))
         check(memcmp(gpu, expected, sizeof expected) == 0,
               "GPU Bernoulli at p = 0, 1, 1-2^-24, 0.5");
 }
@@ -177,7 +177,7 @@ int main(void)
     char name[256];
     int major, minor;
 
-    if (cuda_ok(mco2_cuda_device_info(name, sizeof name, &major, &minor), "device query"))
+    if (cuda_ok(sq_cuda_device_info(name, sizeof name, &major, &minor), "device query"))
         printf("# device: %s (compute capability %d.%d)\n", name, major, minor);
 
     test_kat();

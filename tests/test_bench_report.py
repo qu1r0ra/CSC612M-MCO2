@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from bench_report import FIGURES, STAGE_PATHS, find_crossovers, index_cases, render_report
+from stoquant import layout
+from stoquant.report import FIGURES, STAGE_PATHS, find_crossovers, index_cases, render_report
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -257,7 +258,7 @@ def test_render_report_draws_a_ci_that_excludes_the_point(tmp_path):
 
 
 def test_avx2_comparator_is_drawn_but_stays_out_of_t1_and_crossovers(tmp_path, monkeypatch):
-    import bench_report
+    from stoquant import report as bench_report
 
     cases = sweep_cases()
     for count in (1024, 4096, 16384):
@@ -385,7 +386,7 @@ def write_k1_summary(root):
 
 
 def test_publication_report_includes_extensions_and_bandwidth(tmp_path, monkeypatch):
-    import publication_report
+    from stoquant import publication as publication_report
 
     snapshot = tmp_path / "dense"
     write_snapshot(snapshot, publication_cases())
@@ -442,7 +443,7 @@ def test_publication_bandwidth_rejects_same_name_device_mismatch(tmp_path):
 
 
 def test_revision_3_frozen_report_remains_byte_identical(tmp_path):
-    snapshot = Path(__file__).resolve().parents[1] / "results" / "2026-09-26-a1d2439"
+    snapshot = layout.ROOT / "results" / "2026-09-26-a1d2439"
     report = render_report(snapshot, tmp_path / "old-output")["report"]
     assert report.read_bytes() == (snapshot / "report.md").read_bytes()
 

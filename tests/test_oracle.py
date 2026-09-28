@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from mco2_oracle import (
+from stoquant.oracle import (
     compress_record_fp32,
     decode_record,
     philox4x32_10,

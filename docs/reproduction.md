@@ -6,7 +6,7 @@ This document is the public entry point for reproducing the course implementatio
 
 ## What exists
 
-The repository builds the CPU command-line tool `build/mco2`, the CUDA-enabled command-line tool `build/mco2`, and the CUDA RNG check `build/test_rng`.
+The repository builds the command-line tool `build/stoquant`, as a CPU-only or a CUDA-enabled build, and the CUDA RNG check `build/test_rng`.
 The CPU tool compresses raw little-endian FP32 vectors into version-1 8-bit or 4-bit records. It decodes each record to raw FP32.
 The NumPy oracle independently implements Philox4x32-10 and the CPU quantization path at both 8-bit and 4-bit widths.
 The CUDA tool supports 8-bit and 4-bit compression and shares the CPU decoder. `just test-cuda` checks byte parity, prescribed-scale parity, the FP64 reconstruction bound, launch-geometry independence, determinism, invalid inputs, and timing output on a local CUDA device.
@@ -31,7 +31,7 @@ The `/wd4068` flag silences MSVC warnings about CUDA-only pragmas in the vendore
 ## Build and RNG check
 
 Requires `just`, the CUDA toolkit, and an NVIDIA GPU.
-On Windows, also install Visual Studio with the x64 C++ tools; `scripts/with-msvc.ps1` enters its developer environment, so no developer prompt is needed.
+On Windows, also install Visual Studio with the x64 C++ tools; `tools/with-msvc.ps1` enters its developer environment, so no developer prompt is needed.
 
 ```powershell
 just toolchain
@@ -56,7 +56,7 @@ It checks:
 
 ## CPU pipeline
 
-Requires `just`, Python 3.11 or newer, `uv`, and a C compiler. On Windows, `scripts/with-msvc.ps1` enters the x64 MSVC environment.
+Requires `just`, Python 3.11 or newer, `uv`, and a C compiler. On Windows, `tools/with-msvc.ps1` enters the x64 MSVC environment.
 
 ```powershell
 just test-cpu
@@ -70,19 +70,19 @@ The CLI consumes and produces raw little-endian FP32 files. A seeded compression
 just build-cpu
 
 # 8-bit compression (default) and decompression
-build\mco2.exe compress --input input.f32 --output tensor_q8.msq --bits 8 --seed 123 --tensor-id 7 --invocation-id 9
-build\mco2.exe decompress --input tensor_q8.msq --output reconstructed_q8.f32
+build\stoquant.exe compress --input input.f32 --output tensor_q8.msq --bits 8 --seed 123 --tensor-id 7 --invocation-id 9
+build\stoquant.exe decompress --input tensor_q8.msq --output reconstructed_q8.f32
 
 # 4-bit compression and decompression
-build\mco2.exe compress --input input.f32 --output tensor_q4.msq --bits 4 --seed 123 --tensor-id 7 --invocation-id 9
-build\mco2.exe decompress --input tensor_q4.msq --output reconstructed_q4.f32
+build\stoquant.exe compress --input input.f32 --output tensor_q4.msq --bits 4 --seed 123 --tensor-id 7 --invocation-id 9
+build\stoquant.exe decompress --input tensor_q4.msq --output reconstructed_q4.f32
 ```
 
 For layer-1 checks, pass a prescribed FP32 scale and a raw little-endian uint32 word file containing one word per input element:
 
 ```powershell
-build\mco2.exe compress --input input.f32 --output tensor_q8.msq --bits 8 --seed 123 --scale 2.0 --words prescribed-words.u32
-build\mco2.exe compress --input input.f32 --output tensor_q4.msq --bits 4 --seed 123 --scale 2.0 --words prescribed-words.u32
+build\stoquant.exe compress --input input.f32 --output tensor_q8.msq --bits 8 --seed 123 --scale 2.0 --words prescribed-words.u32
+build\stoquant.exe compress --input input.f32 --output tensor_q4.msq --bits 4 --seed 123 --scale 2.0 --words prescribed-words.u32
 ```
 
 The CLI requires `--seed` for every compression command. `--words` supplies the random decisions for prescribed-scale tests. `--bits` accepts `4` or `8` (defaulting to `8`). The exact header layout, 4-bit nibble packing, pairwise FP32 reduction, and layer-2 bounds are in [the technical contract](technical-contract.md).
@@ -93,10 +93,10 @@ The CUDA backend is selected with `--backend cuda`; it supports both 8-bit and 4
 
 ```powershell
 # 8-bit CUDA compression with timings
-build\mco2.exe compress --input input-2m22.f32 --output tensor-q8.msq --bits 8 --seed 123 --backend cuda --timings
+build\stoquant.exe compress --input input-2m22.f32 --output tensor-q8.msq --bits 8 --seed 123 --backend cuda --timings
 
 # 4-bit CUDA compression with timings
-build\mco2.exe compress --input input-2m22.f32 --output tensor-q4.msq --bits 4 --seed 123 --backend cuda --timings
+build\stoquant.exe compress --input input-2m22.f32 --output tensor-q4.msq --bits 4 --seed 123 --backend cuda --timings
 ```
 
 Recorded acceptance runs on 2026-09-25: the input was generated with NumPy `default_rng(2026).normal(size=2^22).astype(float32)`. On the RTX 5060 with driver 610.88, compute capability 12.0, CUDA 13.4 V13.4.59, and MSVC 19.51.36260:
@@ -112,7 +112,7 @@ Run the full CPU verification suite or run specific components directly:
    ```powershell
    just test-cpu
    ```
-   Builds `build/mco2`, `build/test_codec`, and `build/test_quantizer`, executes the native C test binaries, and runs the pytest test suites.
+   Builds `build/stoquant`, `build/test_codec`, and `build/test_quantizer`, executes the native C test binaries, and runs the pytest test suites.
 
 2. **C unit tests (codec and quantizer)**:
    ```powershell
@@ -158,13 +158,13 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 
 ## Benchmark matrix and frozen snapshot
 
-The benchmark driver measures in-process throughput with `mco2 bench` for the C comparator and the CUDA resident, resident-graph, and host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (102 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of 24 trials, one per ordering of the four paths. Each timed process first runs about one second of untimed repetitions of its path. The driver excludes physical core 0 from its own affinity before starting any process (protocol revision 3); children inherit the mask.
+The benchmark driver measures in-process throughput with `stoquant bench` for the C comparator and the CUDA resident, resident-graph, and host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (102 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of 24 trials, one per ordering of the four paths. Each timed process first runs about one second of untimed repetitions of its path. The driver excludes physical core 0 from its own affinity before starting any process (protocol revision 3); children inherit the mask.
 
-An evidence sweep refuses to start unless the readiness check passes: a reboot within 30 minutes, no application windows other than the Windows shell and the session that launched the sweep, no running `mco2`, a clean git tree, and no GPU clock-event reason other than `GpuIdle`. `--ignore-readiness` runs anyway and marks the snapshot non-evidence; a dirty tree needs `--allow-dirty` as well. Earlier snapshots came from earlier revisions of the driver; reproduce each from its recorded revision. The course snapshot `results/2026-09-25-59c8967` was produced by revision `59c8967`, whose driver ran the four course sizes in ascending order without a warm-up.
+An evidence sweep refuses to start unless the readiness check passes: a reboot within 30 minutes, no application windows other than the Windows shell and the session that launched the sweep, no running `stoquant`, a clean git tree, and no GPU clock-event reason other than `GpuIdle`. Start evidence commands through `just` or `uv run python -m stoquant <command>`; the installed `stoquant` console command runs as a process of that name and so fails the check. `--ignore-readiness` runs anyway and marks the snapshot non-evidence; a dirty tree needs `--allow-dirty` as well. Earlier snapshots came from earlier revisions of the driver; reproduce each from its recorded revision. The course snapshot `results/2026-09-25-59c8967` was produced by revision `59c8967`, whose driver ran the four course sizes in ascending order without a warm-up.
 
 ### Running the benchmark matrix
 
-`just bench-matrix` requires the local ntfy settings and sends a preflight notification before it starts the benchmark driver. See [Run notifications](run-notifications.md) to configure the MCO2 topic and token, verify phone delivery, and review what each alert contains. Notification setup does not change the benchmark protocol or results.
+`just bench-matrix` requires the local ntfy settings and sends a preflight notification before it starts the benchmark driver. See [Run notifications](run-notifications.md) to configure the benchmark topic and token, verify phone delivery, and review what each alert contains. Notification setup does not change the benchmark protocol or results.
 
 ```powershell
 # Pilot: four sizes, both bit widths, into results/pilots/ (never evidence)
@@ -203,6 +203,8 @@ Snapshots are stored in `results/<date>-<short_rev>/`:
 - `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`, for host-origin `h2d_ms` and `d2h_ms`, for GPU-origin `d2h_ms`, and for CPU GPU-origin `cpu_ms`) with each trial's path order and invocation identifiers, the case's `execution_index`, pooled samples, statistics, `stage_medians_ms`, configuration, and correctness validation results.
 - `msvc_vectorization_report.txt`: MSVC `/Qvec-report:2` diagnostics from recompiling the comparator sources with the exact benchmarked host flags; the command is at the top of the file.
 
+**Names across the `stoquant` rename.** Snapshots written after [ADR 0004](adr/0004-stoquant-naming.md) record the `stoquant` binary, `native/` sources, `tools/with-msvc.ps1`, the `SQ_ENABLE_CUDA` build flag, and the readiness fact `stoquant_pids`. Earlier snapshots record `mco2`, `src/`, `scripts/`, `MCO2_ENABLE_CUDA`, and `mco2_pids`. Compare these provenance values within one side of the rename, and reproduce an earlier snapshot from its recorded revision.
+
 ```powershell
 # View summary table of latest snapshot
 Get-Content (Get-ChildItem results -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName\summary.csv
@@ -210,7 +212,7 @@ Get-Content (Get-ChildItem results -Directory | Sort-Object LastWriteTime -Desce
 
 ## Restructure equivalence check
 
-The restructure stages (issue #46) must leave behavior unchanged. `just equivalence` builds the CUDA executable and the stream probe, then runs `scripts/equivalence.py`, which drives only command-line interfaces and imports no project code.
+The restructure stages (issue #46) must leave behavior unchanged. `just equivalence` builds the CUDA executable and the stream probe, then runs `tools/equivalence.py`, which drives only command-line interfaces and imports no project code.
 
 ```powershell
 # On the reference commit, with no modified tracked files: write the baseline

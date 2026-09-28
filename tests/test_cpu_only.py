@@ -1,15 +1,16 @@
 import os
 import subprocess
-from pathlib import Path
 
 import numpy as np
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "build" / ("mco2.exe" if os.name == "nt" else "mco2")
+from stoquant import layout
+
+ROOT = layout.ROOT
+BINARY = ROOT / "build" / ("stoquant.exe" if os.name == "nt" else "stoquant")
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("MCO2_EXPECT_CPU_ONLY") != "1",
+    os.environ.get("STOQUANT_EXPECT_CPU_ONLY") != "1",
     reason="run with `just test-cpu` to check the CPU-only executable",
 )
 
