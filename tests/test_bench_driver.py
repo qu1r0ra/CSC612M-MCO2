@@ -34,7 +34,7 @@ from stoquant.inputs import (
     select_model_tensors,
 )
 from stoquant.matrix import (
-    PILOT_COUNTS,
+    MATRIX_PILOT_COUNTS,
     SUMMARY_FIELDS,
     compact_invocation_ids,
     run_benchmark_matrix,
@@ -967,8 +967,8 @@ def test_readiness_fails_while_a_stoquant_process_runs(monkeypatch):
 
 
 def test_pilot_is_four_sizes_from_the_sweep_grid():
-    assert len(PILOT_COUNTS) == 4
-    assert set(PILOT_COUNTS) <= set(DEFAULT_COUNTS)
+    assert len(MATRIX_PILOT_COUNTS) == 4
+    assert set(MATRIX_PILOT_COUNTS) <= set(DEFAULT_COUNTS)
 
 
 def test_affinity_mask_excludes_core_zero():

@@ -97,7 +97,7 @@ from stoquant.vectorization import AVX2_SOURCES, generate_msvc_vectorization_rep
 
 # The pilot runs the sweep's code path on four sizes: the smallest, the
 # launch-bound 2^14, a mid size, and the largest.
-PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 26)
+MATRIX_PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 26)
 
 
 def compact_invocation_ids(ids: Sequence[int] | None) -> dict[str, int] | list[int] | None:
@@ -956,7 +956,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         snapshot_dir = run_benchmark_matrix(
             root=root,
             output_dir=args.output_dir,
-            counts=PILOT_COUNTS if args.pilot else args.counts,
+            counts=MATRIX_PILOT_COUNTS if args.pilot else args.counts,
             bit_widths=DEFAULT_BITS if args.pilot else args.bits,
             backends=args.backends,
             warmups=args.warmup,

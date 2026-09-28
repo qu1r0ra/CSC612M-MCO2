@@ -85,7 +85,7 @@ from stoquant.stats import (
 VARIANTS = ("reference", "optimized")
 # SQ_CUDA_K1_TREE_SPAN in native/quantizer_cuda.cu.
 TREE_SPAN = 2048
-PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 25, 1 << 26)
+K1_AB_PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 25, 1 << 26)
 PILOT_PROCESSES = 2
 F5_COUNTS = (1 << 14, 1 << 18, 1 << 22, 1 << 25, 1 << 26)
 F5_STAGES = (
@@ -332,7 +332,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         return
     if args.output_dir is None:
         sys.exit("--output-dir is required unless --figure is given.")
-    counts = args.counts or list(PILOT_COUNTS if args.pilot else DEFAULT_COUNTS)
+    counts = args.counts or list(K1_AB_PILOT_COUNTS if args.pilot else DEFAULT_COUNTS)
     processes = args.processes or (PILOT_PROCESSES if args.pilot else DEFAULT_PROCESSES)
     evidence = not (args.pilot or args.allow_dirty or args.counts or args.processes)
 
