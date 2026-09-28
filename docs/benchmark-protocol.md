@@ -2,6 +2,15 @@
 
 Status: accepted protocol; executable benchmark implemented with frozen course snapshot committed under `results/`.
 
+**Naming note.** The revisions below were fixed before [ADR 0004](adr/0004-stoquant-naming.md) renamed the code, and their text keeps the names they were fixed with. Read those names as the current ones below; every rule they state is unchanged.
+
+| Name in the protocol text | Current name |
+| --- | --- |
+| `mco2` binary, process and subcommands (`mco2 bench`, `mco2 compress`, `mco2 --threads`) | `stoquant` (`build/stoquant`) |
+| `benchmark_driver.py` | `src/stoquant/driver.py` |
+| `bench_report.py` | `src/stoquant/report.py` |
+| `scripts/diag_resident.py` | `tools/diag_resident.py` |
+
 The benchmark must expose the cost of normalization, random-number generation, rounding, packing, and required transfers.
 Do not headline a CUDA speedup from Python interpreter overhead or from separately timed stages summed into a complete path.
 

@@ -68,7 +68,7 @@ build-cpu:
     ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native\quantizer.c /Fo:build\quantizer.obj
     ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native\rng_cpu.c /Fo:build\rng_cpu.obj
     ./tools/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c native\quantizer_avx2.c /Fo:build\quantizer_avx2.obj
-    ./tools/with-msvc.ps1 cl.exe /nologo build\main.obj build\codec.obj build\quantizer.obj build\rng_cpu.obj build\quantizer_avx2.obj /Fe:build\mco2.exe
+    ./tools/with-msvc.ps1 cl.exe /nologo build\main.obj build\codec.obj build\quantizer.obj build\rng_cpu.obj build\quantizer_avx2.obj /Fe:build\stoquant.exe
 
 [unix]
 build-cpu:
@@ -78,31 +78,31 @@ build-cpu:
     ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -Inative -Ithird_party/random123/include -c native/quantizer.c -o build/quantizer.o
     ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -Inative -Ithird_party/random123/include -c native/rng_cpu.c -o build/rng_cpu.o
     ${CC:-cc} {{avx2_cc_flags}} -c native/quantizer_avx2.c -o build/quantizer_avx2.o
-    ${CC:-cc} -fopenmp build/main.o build/codec.o build/quantizer.o build/rng_cpu.o build/quantizer_avx2.o -lm -o build/mco2
+    ${CC:-cc} -fopenmp build/main.o build/codec.o build/quantizer.o build/rng_cpu.o build/quantizer_avx2.o -lm -o build/stoquant
 
 # Build the CUDA-enabled 8-bit compression CLI. Keep host sources in C mode
 # so the CPU and CUDA paths share the same C implementation and ABI.
 [windows]
 build-cuda:
     New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native\main.c /Fo:build\main_cuda.obj
-    ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native\codec.c /Fo:build\codec_cuda.obj
-    ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native\quantizer.c /Fo:build\quantizer_cuda_host.obj
-    ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DMCO2_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native\rng_cpu.c /Fo:build\rng_cpu_cuda.obj
+    ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native\main.c /Fo:build\main_cuda.obj
+    ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native\codec.c /Fo:build\codec_cuda.obj
+    ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native\quantizer.c /Fo:build\quantizer_cuda_host.obj
+    ./tools/with-msvc.ps1 cl.exe /nologo /O2 /W4 /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native\rng_cpu.c /Fo:build\rng_cpu_cuda.obj
     ./tools/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c native\quantizer_avx2.c /Fo:build\quantizer_avx2_cuda.obj
     ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} --fmad=false --ftz=false --prec-div=true --prec-sqrt=true -Xcompiler /wd4068 -c native\quantizer_cuda.cu -o build\quantizer_cuda.obj
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} build\main_cuda.obj build\codec_cuda.obj build\quantizer_cuda_host.obj build\rng_cpu_cuda.obj build\quantizer_avx2_cuda.obj build\quantizer_cuda.obj -o build\mco2.exe
+    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} build\main_cuda.obj build\codec_cuda.obj build\quantizer_cuda_host.obj build\rng_cpu_cuda.obj build\quantizer_avx2_cuda.obj build\quantizer_cuda.obj -o build\stoquant.exe
 
 [unix]
 build-cuda:
     mkdir -p build
-    ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -DMCO2_ENABLE_CUDA -Inative -Ithird_party/random123/include -c native/main.c -o build/main_cuda.o
-    ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -DMCO2_ENABLE_CUDA -Inative -Ithird_party/random123/include -c native/codec.c -o build/codec_cuda.o
-    ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -DMCO2_ENABLE_CUDA -Inative -Ithird_party/random123/include -c native/quantizer.c -o build/quantizer_cuda_host.o
-    ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -DMCO2_ENABLE_CUDA -Inative -Ithird_party/random123/include -c native/rng_cpu.c -o build/rng_cpu_cuda.o
+    ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -DSQ_ENABLE_CUDA -Inative -Ithird_party/random123/include -c native/main.c -o build/main_cuda.o
+    ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -DSQ_ENABLE_CUDA -Inative -Ithird_party/random123/include -c native/codec.c -o build/codec_cuda.o
+    ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -DSQ_ENABLE_CUDA -Inative -Ithird_party/random123/include -c native/quantizer.c -o build/quantizer_cuda_host.o
+    ${CC:-cc} -O2 -std=c11 -Wall -Wextra -Werror -ffp-contract=off -DSQ_ENABLE_CUDA -Inative -Ithird_party/random123/include -c native/rng_cpu.c -o build/rng_cpu_cuda.o
     ${CC:-cc} {{avx2_cc_flags}} -c native/quantizer_avx2.c -o build/quantizer_avx2_cuda.o
     nvcc {{nvcc_flags}} --fmad=false --ftz=false --prec-div=true --prec-sqrt=true -c native/quantizer_cuda.cu -o build/quantizer_cuda.o
-    nvcc {{nvcc_flags}} --fmad=false --ftz=false --prec-div=true --prec-sqrt=true build/main_cuda.o build/codec_cuda.o build/quantizer_cuda_host.o build/rng_cpu_cuda.o build/quantizer_avx2_cuda.o build/quantizer_cuda.o -lm -Xcompiler -fopenmp -o build/mco2
+    nvcc {{nvcc_flags}} --fmad=false --ftz=false --prec-div=true --prec-sqrt=true build/main_cuda.o build/codec_cuda.o build/quantizer_cuda_host.o build/rng_cpu_cuda.o build/quantizer_avx2_cuda.o build/quantizer_cuda.o -lm -Xcompiler -fopenmp -o build/stoquant
 
 # Build the device-attribute and streaming-read probe for the K1 baseline
 [windows]
@@ -161,23 +161,23 @@ test-cpu: build-cpu build-codec-test build-quantizer-test build-avx2-test
     ./build/test_codec.exe
     ./build/test_quantizer.exe
     ./build/test_quantizer_avx2.exe
-    $env:MCO2_EXPECT_CPU_ONLY = '1'; uv run --group dev pytest
+    $env:STOQUANT_EXPECT_CPU_ONLY = '1'; uv run --group dev pytest
 
 [unix]
 test-cpu: build-cpu build-codec-test build-quantizer-test build-avx2-test
     ./build/test_codec
     ./build/test_quantizer
     ./build/test_quantizer_avx2
-    MCO2_EXPECT_CPU_ONLY=1 uv run --group dev pytest
+    STOQUANT_EXPECT_CPU_ONLY=1 uv run --group dev pytest
 
 # Run the CUDA quantizer acceptance suite on the local GPU
 [windows]
 test-cuda: build-cuda
-    $env:MCO2_TEST_CUDA = '1'; uv run --group dev pytest tests\test_cuda.py tests\test_bench_driver.py
+    $env:STOQUANT_TEST_CUDA = '1'; uv run --group dev pytest --require-cuda tests\test_cuda.py tests\test_bench_driver.py
 
 [unix]
 test-cuda: build-cuda
-    MCO2_TEST_CUDA=1 uv run --group dev pytest tests/test_cuda.py tests/test_bench_driver.py
+    STOQUANT_TEST_CUDA=1 uv run --group dev pytest --require-cuda tests/test_cuda.py tests/test_bench_driver.py
 
 # Render F1-F3, T1 and the crossover report into a snapshot folder
 figures snapshot *args:
@@ -186,38 +186,38 @@ figures snapshot *args:
 # Build the CUDA-enabled tool and run the full course benchmark matrix
 [windows]
 bench-matrix *args: build-cuda build-stream-probe
-    $env:MCO2_TEST_CUDA = '1'; uv run python -m stoquant.notify -- python -m stoquant bench-matrix {{args}}
+    $env:STOQUANT_TEST_CUDA = '1'; uv run python -m stoquant.notify -- python -m stoquant bench-matrix {{args}}
 
 [unix]
 bench-matrix *args: build-cuda build-stream-probe
-    MCO2_TEST_CUDA=1 uv run python -m stoquant.notify -- python -m stoquant bench-matrix {{args}}
+    STOQUANT_TEST_CUDA=1 uv run python -m stoquant.notify -- python -m stoquant bench-matrix {{args}}
 
 # Build the CUDA-enabled tool and run the Layer 3 expectation suite and its figure
 [windows]
 unbiasedness *args: build-cuda
-    $env:MCO2_TEST_CUDA = '1'; uv run python -m stoquant unbiasedness {{args}}
+    $env:STOQUANT_TEST_CUDA = '1'; uv run python -m stoquant unbiasedness {{args}}
 
 [unix]
 unbiasedness *args: build-cuda
-    MCO2_TEST_CUDA=1 uv run python -m stoquant unbiasedness {{args}}
+    STOQUANT_TEST_CUDA=1 uv run python -m stoquant unbiasedness {{args}}
 
 # Measure the reference K1 against the device bandwidth (issue #23 baseline)
 [windows]
 k1-baseline *args: build-cuda build-stream-probe
-    $env:MCO2_TEST_CUDA = '1'; uv run python -m stoquant k1-baseline {{args}}
+    $env:STOQUANT_TEST_CUDA = '1'; uv run python -m stoquant k1-baseline {{args}}
 
 [unix]
 k1-baseline *args: build-cuda build-stream-probe
-    MCO2_TEST_CUDA=1 uv run python -m stoquant k1-baseline {{args}}
+    STOQUANT_TEST_CUDA=1 uv run python -m stoquant k1-baseline {{args}}
 
 # A/B the reference and optimized K1 on the same tree, or re-render F5 (issue #23)
 [windows]
 k1-ab *args: build-cuda build-stream-probe
-    $env:MCO2_TEST_CUDA = '1'; uv run python -m stoquant k1-ab {{args}}
+    $env:STOQUANT_TEST_CUDA = '1'; uv run python -m stoquant k1-ab {{args}}
 
 [unix]
 k1-ab *args: build-cuda build-stream-probe
-    MCO2_TEST_CUDA=1 uv run python -m stoquant k1-ab {{args}}
+    STOQUANT_TEST_CUDA=1 uv run python -m stoquant k1-ab {{args}}
 
 # Capture or compare the restructure equivalence baseline (issue #47)
 equivalence *args: build-cuda build-stream-probe

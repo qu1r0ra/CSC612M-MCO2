@@ -43,10 +43,7 @@ from stoquant.inputs import RESNET18_CIFAR_TENSORS, SPARSE_MASK_SEED, select_mod
 
 ROOT = layout.ROOT
 
-CUDA_SKIP = pytest.mark.skipif(
-    os.environ.get("MCO2_TEST_CUDA") != "1",
-    reason="run with `just test-cuda` on a CUDA device",
-)
+CUDA_TEST = pytest.mark.cuda
 
 
 def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
@@ -112,7 +109,7 @@ def test_driver_rejects_unknown_k1_variant(tmp_path):
         run_benchmark_matrix(root=ROOT, output_dir=tmp_path / "invalid", k1="other")
 
 
-@CUDA_SKIP
+@CUDA_TEST
 def test_optimized_k1_reaches_all_cuda_paths_and_is_recorded(tmp_path):
     snapshot = run_benchmark_matrix(
         root=ROOT,
@@ -142,7 +139,7 @@ def test_optimized_k1_reaches_all_cuda_paths_and_is_recorded(tmp_path):
         assert case["configuration"]["k1"] == expected
 
 
-@CUDA_SKIP
+@CUDA_TEST
 def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     snapshot_dir = tmp_path / "path with space" / "test-snapshot"
     result_dir = run_benchmark_matrix(
@@ -184,7 +181,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert "build_flags" in manifest
     for key in ("source", "commands", "comparator_c", "cuda_nvcc"):
         assert key in manifest["build_flags"]
-    assert "/DMCO2_ENABLE_CUDA" in manifest["build_flags"]["comparator_c"]
+    assert "/DSQ_ENABLE_CUDA" in manifest["build_flags"]["comparator_c"]
     assert "--fmad=false" in manifest["build_flags"]["cuda_nvcc"]
     assert manifest["transfer_policies"] == ["pageable"]
     assert "transfer_policy" not in manifest["toolkit_and_driver"]
@@ -240,7 +237,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     vec_report_path = snapshot_dir / manifest["msvc_vectorization_report"]
     assert vec_report_path.is_file()
     vec_report = vec_report_path.read_text(encoding="utf-8")
-    assert "/DMCO2_ENABLE_CUDA" in vec_report
+    assert "/DSQ_ENABLE_CUDA" in vec_report
     assert "/Qvec-report:2" in vec_report
     assert "Exit code: 0" in vec_report
     assert str(ROOT.resolve()) not in vec_report
@@ -405,7 +402,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         assert int(row["warmup"]) == warmup_by_case[key]
 
 
-@CUDA_SKIP
+@CUDA_TEST
 def test_driver_extension_matrix_adds_gpu_origin_and_pinned_paths(tmp_path):
     snapshot_dir = tmp_path / "extension"
     run_benchmark_matrix(
@@ -493,7 +490,7 @@ def test_driver_extension_matrix_adds_gpu_origin_and_pinned_paths(tmp_path):
     assert rows[6]["baseline"] == "cpu-gpu-origin"
 
 
-@CUDA_SKIP
+@CUDA_TEST
 def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
     snapshot_dir = tmp_path / "failed-snapshot"
     result_dir = run_benchmark_matrix(
@@ -900,7 +897,7 @@ READY_FACTS = {
         {"process": "TextInputHost", "title": "Windows Input Experience"},
     ],
     "launcher_processes": ["python", "uv", "just", "pwsh", "WindowsTerminal", "explorer"],
-    "mco2_pids": [],
+    "stoquant_pids": [],
     "git_dirty_files": [],
     "gpu_clock_event_reasons": "0x0000000000000001",
     "power_plan": "Balanced",
@@ -931,7 +928,7 @@ def test_readiness_passes_with_only_shell_windows_and_no_launcher_chain():
         ),
         # The terminal window passes only because the terminal launched the sweep.
         ({"launcher_processes": []}, "open app window: WindowsTerminal"),
-        ({"mco2_pids": [4242]}, "mco2 already running (pid 4242)"),
+        ({"stoquant_pids": [4242]}, "stoquant already running (pid 4242)"),
         ({"git_dirty_files": [" M benchmark_driver.py"]}, "dirty git tree"),
         ({"gpu_clock_event_reasons": "0x0000000000000024"}, "SwPowerCap, SwThermalSlowdown"),
         ({"gpu_clock_event_reasons": None}, "clock-event reasons unavailable"),
@@ -942,6 +939,21 @@ def test_readiness_names_each_failure(change, reason):
     failures = check_readiness({**READY_FACTS, **change})
     assert len(failures) == 1
     assert reason in failures[0]
+
+
+def test_readiness_fails_while_a_stoquant_process_runs(monkeypatch):
+    monkeypatch.setattr(driver, "query_gpu_state", lambda: {"clocks_event_reasons.active": "0x1"})
+    monkeypatch.setattr(driver, "uptime_seconds", lambda: 600.0)
+    monkeypatch.setattr(driver, "list_app_windows", list)
+    monkeypatch.setattr(driver, "list_launcher_processes", list)
+    monkeypatch.setattr(driver, "collect_git_provenance", lambda root: {"dirty_files": []})
+    monkeypatch.setattr(driver, "query_power_plan", lambda: "Balanced")
+    monkeypatch.setattr(driver, "query_hags", lambda: "unset")
+    monkeypatch.setattr(driver, "list_processes", lambda name: [4242] if name == "stoquant" else [])
+
+    failures = check_readiness(driver.probe_readiness_facts(ROOT))
+
+    assert failures == ["stoquant already running (pid 4242)"]
 
 
 def test_pilot_is_four_sizes_from_the_sweep_grid():
@@ -981,7 +993,7 @@ def test_failed_readiness_stops_the_sweep_before_any_process(tmp_path):
 
 
 def test_readiness_override_marks_the_snapshot_non_evidence(tmp_path):
-    busy = {**READY_FACTS, "mco2_pids": [4242]}
+    busy = {**READY_FACTS, "stoquant_pids": [4242]}
     before = get_process_affinity()
     out = run_cpu_snapshot(tmp_path / "out", readiness_facts=busy, ignore_readiness=True)
     assert get_process_affinity() == before
@@ -1004,8 +1016,8 @@ def test_pilot_records_readiness_without_enforcing_it(tmp_path):
 
 
 def test_manifest_records_monitoring_without_topic_or_token(tmp_path, monkeypatch):
-    monkeypatch.setenv("MCO2_MONITORING_PROVIDER", "ntfy")
-    monkeypatch.setenv("MCO2_MONITORING_HEARTBEAT_SECONDS", "3600")
+    monkeypatch.setenv("STOQUANT_MONITORING_PROVIDER", "ntfy")
+    monkeypatch.setenv("STOQUANT_MONITORING_HEARTBEAT_SECONDS", "3600")
     monkeypatch.setenv("NTFY_TOPIC", "manifest-must-not-contain-topic")
     monkeypatch.setenv("NTFY_TOKEN", "manifest-must-not-contain-token")
 
@@ -1224,16 +1236,16 @@ def test_avx2_path_is_descriptive_and_never_an_inversion():
 def test_build_flags_are_selected_by_source_file():
     commands = [
         "New-Item -ItemType Directory -Force build | Out-Null",
-        r"./tools/with-msvc.ps1 cl.exe /O2 /fp:strict /DMCO2_ENABLE_CUDA /c native\main.c /Fo:x",
-        r"./tools/with-msvc.ps1 cl.exe /O2 /fp:strict /DMCO2_ENABLE_CUDA /c native\quantizer.c",
+        r"./tools/with-msvc.ps1 cl.exe /O2 /fp:strict /DSQ_ENABLE_CUDA /c native\main.c /Fo:x",
+        r"./tools/with-msvc.ps1 cl.exe /O2 /fp:strict /DSQ_ENABLE_CUDA /c native\quantizer.c",
         r"./tools/with-msvc.ps1 cl.exe /O2 /fp:precise /arch:AVX2 /openmp /c native\quantizer_avx2.c",
         r"./tools/with-msvc.ps1 nvcc -O3 --fmad=false -c native\quantizer_cuda.cu -o build\k.obj",
     ]
     flags = parse_build_commands(commands)
-    assert flags["comparator_c"] == "/O2 /fp:strict /DMCO2_ENABLE_CUDA"
+    assert flags["comparator_c"] == "/O2 /fp:strict /DSQ_ENABLE_CUDA"
     assert flags["avx2_c"] == "/O2 /fp:precise /arch:AVX2 /openmp"
     assert flags["cuda_nvcc"] == "-O3 --fmad=false"
-    assert flags["_host_tokens"] == ["/O2", "/fp:strict", "/DMCO2_ENABLE_CUDA"]
+    assert flags["_host_tokens"] == ["/O2", "/fp:strict", "/DSQ_ENABLE_CUDA"]
     assert flags["_avx2_tokens"] == ["/O2", "/fp:precise", "/arch:AVX2", "/openmp"]
     assert parse_build_commands([])["avx2_c"] == "unknown"
 

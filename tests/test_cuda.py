@@ -11,13 +11,10 @@ from stoquant import layout
 from stoquant.oracle import compress_record_fp32, reference_fp64, scale_fp32
 
 ROOT = layout.ROOT
-BINARY = ROOT / "build" / ("mco2.exe" if os.name == "nt" else "mco2")
+BINARY = ROOT / "build" / ("stoquant.exe" if os.name == "nt" else "stoquant")
 HEADER = struct.Struct("<4sBBHQf")
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("MCO2_TEST_CUDA") != "1",
-    reason="run with `just test-cuda` on a CUDA device",
-)
+pytestmark = pytest.mark.cuda
 
 
 def _run(*arguments: str) -> subprocess.CompletedProcess[str]:

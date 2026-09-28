@@ -1,4 +1,4 @@
-"""Benchmark driver for in-process mco2 CPU comparator and CUDA pipelines.
+"""Benchmark driver for in-process stoquant CPU comparator and CUDA pipelines.
 
 Orchestrates input generation, per-case correctness gating, timed benchmark
 runs, provenance collection, statistical summary computation, and snapshot
@@ -265,11 +265,11 @@ BUILD_RECIPE = "build-cuda"
 
 
 def find_binary(root: Path) -> Path:
-    binary_name = "mco2.exe" if os.name == "nt" else "mco2"
+    binary_name = "stoquant.exe" if os.name == "nt" else "stoquant"
     path = root / "build" / binary_name
     if not path.is_file():
         raise FileNotFoundError(
-            f"mco2 binary not found at {path}. Build it first with just build-cuda."
+            f"stoquant binary not found at {path}. Build it first with just build-cuda."
         )
     return path
 
@@ -1343,7 +1343,7 @@ def probe_readiness_facts(root: Path) -> dict[str, Any]:
         "uptime_seconds": uptime_seconds(),
         "app_windows": list_app_windows(),
         "launcher_processes": list_launcher_processes(),
-        "mco2_pids": list_processes("mco2"),
+        "stoquant_pids": list_processes("stoquant"),
         "git_dirty_files": collect_git_provenance(root)["dirty_files"],
         "gpu_clock_event_reasons": gpu_state.get("clocks_event_reasons.active"),
         "power_plan": query_power_plan(),
@@ -1365,9 +1365,9 @@ def check_readiness(
     for window in facts["app_windows"]:
         if window["process"].lower() not in allowed:
             failures.append(f"open app window: {window['process']} ({window['title']})")
-    if facts["mco2_pids"]:
-        pids = ", ".join(str(pid) for pid in facts["mco2_pids"])
-        failures.append(f"mco2 already running (pid {pids})")
+    if facts["stoquant_pids"]:
+        pids = ", ".join(str(pid) for pid in facts["stoquant_pids"])
+        failures.append(f"stoquant already running (pid {pids})")
     if facts["git_dirty_files"]:
         failures.append("dirty git tree: " + "; ".join(facts["git_dirty_files"]))
     try:
@@ -1547,7 +1547,7 @@ def run_bench_process(
     ]
     proc = subprocess.run(bench_cmd, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
-        return None, f"mco2 bench failed: {proc.stderr.strip()}"
+        return None, f"stoquant bench failed: {proc.stderr.strip()}"
     return json.loads(proc.stdout), None
 
 
@@ -2006,12 +2006,12 @@ def sweep_matrix(
                     configuration = payload.get("configuration", {})
                     if path.backend == "cuda" and configuration.get("k1") != k1:
                         raise RuntimeError(
-                            f"{case['case_id']}: mco2 bench ran K1 "
+                            f"{case['case_id']}: stoquant bench ran K1 "
                             f"{configuration.get('k1')!r}, expected {k1!r}"
                         )
                     if configuration.get("transfer_policy") != path.policy:
                         raise RuntimeError(
-                            f"{case['case_id']}: mco2 bench ran transfer policy "
+                            f"{case['case_id']}: stoquant bench ran transfer policy "
                             f"{configuration.get('transfer_policy')!r}, expected {path.policy!r}"
                         )
                     run: dict[str, Any] = {
@@ -2150,11 +2150,11 @@ def sweep_matrix(
         writer.writerows(summary_rows)
 
     # 5. Run manifest
-    monitoring_provider = os.environ.get("MCO2_MONITORING_PROVIDER")
+    monitoring_provider = os.environ.get("STOQUANT_MONITORING_PROVIDER")
     monitoring = None
     if monitoring_provider:
         try:
-            heartbeat_interval = int(os.environ["MCO2_MONITORING_HEARTBEAT_SECONDS"])
+            heartbeat_interval = int(os.environ["STOQUANT_MONITORING_HEARTBEAT_SECONDS"])
         except (KeyError, ValueError) as exc:
             raise RuntimeError(
                 "Invalid run-monitoring metadata in the process environment."
@@ -2200,7 +2200,7 @@ def sweep_matrix(
             "in_process_warmup_seconds": in_process_warmup_seconds,
             "in_process_warmup_rule": (
                 "per path: max(warmup, ceil(target_seconds * 1000 / probe median ms)), "
-                "probe = one untimed mco2 bench process with the base warmup and reps"
+                "probe = one untimed stoquant bench process with the base warmup and reps"
                 if in_process_warmup_seconds > 0
                 else "disabled; every path uses the base warmup"
             ),
@@ -2213,7 +2213,7 @@ def sweep_matrix(
                         {c["threads"] for c in case_results if "threads" in c}
                     ),
                     "cpu_avx2_threads_rule": (
-                        "mco2 default: logical processors in the inherited affinity mask "
+                        "stoquant default: logical processors in the inherited affinity mask "
                         "(Windows; online processors elsewhere)"
                     ),
                 }
@@ -2231,7 +2231,7 @@ def sweep_matrix(
             ],
             "invocation_scheme": (
                 "every trial reuses base invocation 0; identifiers per repetition are "
-                "copied from each mco2 bench configuration"
+                "copied from each stoquant bench configuration"
             ),
             "input_seed": input_seed,
             "compression_seed": compression_seed,
@@ -2284,7 +2284,7 @@ def sweep_matrix(
 
 def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog=prog, description="mco2 benchmark driver and snapshot creator"
+        prog=prog, description="stoquant benchmark driver and snapshot creator"
     )
     parser.add_argument("--output-dir", type=Path, default=None, help="Directory to save snapshot")
     parser.add_argument(

@@ -1,6 +1,6 @@
 """Correctness layer 3: the full empirical-expectation suite.
 
-For each suite input and bit width, `mco2 expect` decodes the record of every
+For each suite input and bit width, `stoquant expect` decodes the record of every
 seed in 1..T on each backend and returns per-element sums of the decoded values
 and of their squares. The suite checks that the CPU and CUDA sums are
 byte-identical, gates every element's empirical mean on the 5-sigma rule of the
@@ -153,7 +153,9 @@ def run_expect(
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"mco2 expect ({backend}, {bits}-bit) failed: {result.stderr.strip()}")
+        raise RuntimeError(
+            f"stoquant expect ({backend}, {bits}-bit) failed: {result.stderr.strip()}"
+        )
     return json.loads(result.stdout)
 
 

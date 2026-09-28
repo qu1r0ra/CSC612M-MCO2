@@ -26,19 +26,19 @@ static int auto_grid(uint64_t n, int block_size)
 __global__ void philox_raw_kernel(philox4x32_ctr_t ctr, philox4x32_key_t key,
                                   philox4x32_ctr_t *out)
 {
-    *out = philox4x32_R(MCO2_PHILOX_ROUNDS, ctr, key);
+    *out = philox4x32_R(SQ_PHILOX_ROUNDS, ctr, key);
 }
 
 /* Grid-stride loop: the word for element i depends only on i, never on geometry. */
-__global__ void rng_words_kernel(mco2_rng_stream s, uint64_t n, uint32_t *out)
+__global__ void rng_words_kernel(sq_rng_stream s, uint64_t n, uint32_t *out)
 {
-    philox4x32_key_t key = mco2_philox_key(&s);
+    philox4x32_key_t key = sq_philox_key(&s);
     uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
     uint64_t i;
 
     for (i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
-        philox4x32_ctr_t r = philox4x32_R(MCO2_PHILOX_ROUNDS,
-                                          mco2_philox_ctr(&s, i / 4), key);
+        philox4x32_ctr_t r = philox4x32_R(SQ_PHILOX_ROUNDS,
+                                          sq_philox_ctr(&s, i / 4), key);
         out[i] = r.v[i % 4];
     }
 }
@@ -50,10 +50,10 @@ __global__ void bernoulli_kernel(const uint32_t *words, const float *p, uint64_t
     uint64_t i;
 
     for (i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride)
-        out[i] = (uint8_t)mco2_bernoulli(words[i], p[i]);
+        out[i] = (uint8_t)sq_bernoulli(words[i], p[i]);
 }
 
-extern "C" int mco2_cuda_device_info(char *name, int name_len, int *major, int *minor)
+extern "C" int sq_cuda_device_info(char *name, int name_len, int *major, int *minor)
 {
     cudaDeviceProp prop;
     int status = 0;
@@ -67,8 +67,8 @@ done:
     return status;
 }
 
-extern "C" int mco2_philox_raw_cuda(philox4x32_ctr_t ctr, philox4x32_key_t key,
-                                    philox4x32_ctr_t *out)
+extern "C" int sq_philox_raw_cuda(philox4x32_ctr_t ctr, philox4x32_key_t key,
+                                  philox4x32_ctr_t *out)
 {
     philox4x32_ctr_t *d_out = NULL;
     int status = 0;
@@ -82,8 +82,8 @@ done:
     return status;
 }
 
-extern "C" int mco2_rng_words_cuda(const mco2_rng_stream *s, uint64_t n, uint32_t *out,
-                                   int block_size, int grid_size)
+extern "C" int sq_rng_words_cuda(const sq_rng_stream *s, uint64_t n, uint32_t *out,
+                                 int block_size, int grid_size)
 {
     uint32_t *d_out = NULL;
     int status = 0;
@@ -104,8 +104,8 @@ done:
     return status;
 }
 
-extern "C" int mco2_bernoulli_cuda(const uint32_t *words, const float *p, uint64_t n,
-                                   uint8_t *out)
+extern "C" int sq_bernoulli_cuda(const uint32_t *words, const float *p, uint64_t n,
+                                 uint8_t *out)
 {
     uint32_t *d_words = NULL;
     float *d_p = NULL;

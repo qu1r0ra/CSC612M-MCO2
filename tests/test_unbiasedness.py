@@ -7,7 +7,7 @@ from stoquant import layout
 from stoquant.unbiasedness import analyse, expectation, plot_unbiasedness, run_suite
 
 ROOT = layout.ROOT
-BINARY = ROOT / "build" / ("mco2.exe" if os.name == "nt" else "mco2")
+BINARY = ROOT / "build" / ("stoquant.exe" if os.name == "nt" else "stoquant")
 
 
 def _exact_sums(x: np.ndarray, scale: np.float32, s: int, seeds: int):

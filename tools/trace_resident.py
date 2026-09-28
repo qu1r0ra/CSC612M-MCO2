@@ -1,6 +1,6 @@
 """Trace separate resident-path processes under Nsight Systems (issue #30).
 
-Each process runs `mco2 bench --boundary resident` under `nsys profile --trace=cuda`.
+Each process runs `stoquant bench --boundary resident` under `nsys profile --trace=cuda`.
 The report is exported to SQLite and reduced to per-repetition timings for the
 timed repetitions: GPU span, kernel busy time, gaps between GPU operations, and the
 CPU-side launch call duration and launch-to-start latency. Slow and fast processes

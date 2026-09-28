@@ -254,7 +254,7 @@ def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]
     try:
         _publish(
             config,
-            f"MCO2 {family} started",
+            f"stoquant {family} started",
             "\n".join(
                 (
                     "event: start",
@@ -271,8 +271,8 @@ def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]
     child_env = os.environ.copy()
     for key in ("NTFY_SERVER", "NTFY_TOPIC", "NTFY_TOKEN", "NTFY_HEARTBEAT_SECONDS"):
         child_env.pop(key, None)
-    child_env["MCO2_MONITORING_PROVIDER"] = "ntfy"
-    child_env["MCO2_MONITORING_HEARTBEAT_SECONDS"] = str(heartbeat_seconds)
+    child_env["STOQUANT_MONITORING_PROVIDER"] = "ntfy"
+    child_env["STOQUANT_MONITORING_HEARTBEAT_SECONDS"] = str(heartbeat_seconds)
 
     exit_code = 127
     child: subprocess.Popen[bytes] | None = None
@@ -290,7 +290,7 @@ def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]
                 selected = _snapshot_for_run(root, command, previous_snapshots)
                 _notify_best_effort(
                     config,
-                    f"MCO2 {family} heartbeat",
+                    f"stoquant {family} heartbeat",
                     _heartbeat_message(
                         family,
                         elapsed,
@@ -318,7 +318,7 @@ def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]
     outcome = "succeeded" if exit_code == 0 else "failed"
     _notify_best_effort(
         config,
-        f"MCO2 {family} {outcome}",
+        f"stoquant {family} {outcome}",
         _terminal_message(family, exit_code, elapsed, snapshot, root),
     )
     return exit_code
@@ -356,8 +356,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _publish(
             config,
-            "MCO2 ntfy preflight",
-            "MCO2 ntfy preflight succeeded.",
+            "stoquant ntfy preflight",
+            "stoquant ntfy preflight succeeded.",
         )
     except NotificationError as exc:
         print(f"ntfy preflight failed: {exc}", file=sys.stderr)

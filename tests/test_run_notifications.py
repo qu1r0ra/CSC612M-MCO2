@@ -160,8 +160,8 @@ def test_check_option_sends_preflight_without_starting_a_command(tmp_path):
 
     assert result.returncode == 0
     assert len(server.messages) == 1
-    assert server.messages[0]["title"] == "MCO2 ntfy preflight"
-    assert server.messages[0]["body"] == "MCO2 ntfy preflight succeeded."
+    assert server.messages[0]["title"] == "stoquant ntfy preflight"
+    assert server.messages[0]["body"] == "stoquant ntfy preflight succeeded."
 
 
 def test_elapsed_duration_excludes_slow_start_notification(tmp_path):
@@ -229,10 +229,10 @@ Path('credential-forwarded').write_text(str('NTFY_TOKEN' in os.environ))
     assert "fake benchmark stderr" in result.stderr
     assert (tmp_path / "credential-forwarded").read_text() == "False"
     assert [message["title"] for message in server.messages] == [
-        "MCO2 ntfy preflight",
-        "MCO2 sparse started",
-        "MCO2 sparse heartbeat",
-        "MCO2 sparse succeeded",
+        "stoquant ntfy preflight",
+        "stoquant sparse started",
+        "stoquant sparse heartbeat",
+        "stoquant sparse succeeded",
     ]
     assert all(message["path"] == "/local-test-topic" for message in server.messages)
     assert all(message["authorization"] == "Bearer test-only-token" for message in server.messages)
@@ -273,7 +273,7 @@ raise SystemExit(7)
     assert "failed benchmark stderr" in result.stderr
     assert result.stderr.count("Warning: ntfy notification failed") == 2
     assert "test-only-token" not in result.stderr
-    assert server.messages[0]["title"] == "MCO2 ntfy preflight"
-    assert server.messages[1]["title"] == "MCO2 dense started"
-    assert server.messages[2]["title"] == "MCO2 dense heartbeat"
-    assert server.messages[3]["title"] == "MCO2 dense failed"
+    assert server.messages[0]["title"] == "stoquant ntfy preflight"
+    assert server.messages[1]["title"] == "stoquant dense started"
+    assert server.messages[2]["title"] == "stoquant dense heartbeat"
+    assert server.messages[3]["title"] == "stoquant dense failed"

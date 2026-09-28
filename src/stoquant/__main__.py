@@ -1,8 +1,8 @@
 """Command-line entry point: `python -m stoquant <command>`.
 
-Recipes call it through `python -m` rather than the `stoquant` console
-launcher, because the readiness check treats any running process named
-stoquant as a competing benchmark.
+Recipes start commands with `python -m stoquant`: the console launcher runs
+as a process named stoquant, which the readiness check reads as a competing
+benchmark.
 """
 
 from __future__ import annotations

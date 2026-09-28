@@ -18,7 +18,7 @@ from stoquant.oracle import (
 )
 
 ROOT = layout.ROOT
-BINARY = ROOT / "build" / ("mco2.exe" if os.name == "nt" else "mco2")
+BINARY = ROOT / "build" / ("stoquant.exe" if os.name == "nt" else "stoquant")
 HEADER = struct.Struct("<4sBBHQf")
 
 

@@ -54,7 +54,7 @@ from stoquant.driver import (
     warm_up_gpu,
 )
 
-# MCO2_CUDA_REDUCTION_THREADS in native/quantizer_cuda.cu.
+# SQ_CUDA_REDUCTION_THREADS in native/quantizer_cuda.cu.
 REDUCTION_THREADS = 256
 BYTES_PER_VALUE = 4
 K1_INPUT_READS = 2
@@ -265,7 +265,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     cells = [(count, bits) for count in args.counts for bits in args.bits]
     records: list[dict[str, Any]] = []
     gpu_start = query_gpu_state()
-    with tempfile.TemporaryDirectory(prefix="mco2-k1-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="stoquant-k1-") as scratch:
         inputs = generate_inputs(args.counts, Path(scratch))
         paths = {count: Path(inputs[count]["_path"]) for count in args.counts}
         warm = warm_up_gpu(binary, paths[max(args.counts)], args.gpu_warmup_seconds)

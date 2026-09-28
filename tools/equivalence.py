@@ -47,7 +47,7 @@ REPO = Path(__file__).resolve().parents[1]
 # Invocation table: the only part later stages may edit.
 # ---------------------------------------------------------------------------
 INVOCATION = {
-    "binary": REPO / "build" / ("mco2.exe" if os.name == "nt" else "mco2"),
+    "binary": REPO / "build" / ("stoquant.exe" if os.name == "nt" else "stoquant"),
     "bench-matrix": [sys.executable, "-m", "stoquant", "bench-matrix"],
     "unbiasedness": [sys.executable, "-m", "stoquant", "unbiasedness"],
     "k1-baseline": [sys.executable, "-m", "stoquant", "k1-baseline"],

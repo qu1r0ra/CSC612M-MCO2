@@ -18,7 +18,7 @@
 #pragma fp_contract(off)
 #endif
 
-#define BLOCK MCO2_Q8_SCALE_BLOCK_SIZE
+#define BLOCK SQ_SCALE_BLOCK_SIZE
 #define PHILOX_CHUNK 64
 #define MAGNITUDE_MASK 0x7FFFFFFFu
 #define NONFINITE_BITS 0x7F800000u
@@ -57,7 +57,7 @@ static size_t reverse_bits(size_t x, int bits)
     return r;
 }
 
-int mco2_avx2_team_size(int threads)
+int sq_avx2_team_size(int threads)
 {
     int team = 0;
 
@@ -146,7 +146,7 @@ static float block_sum(const float *values, size_t count, size_t start,
     return terms[0];
 }
 
-mco2_q8_status mco2_avx2_compute_scale_with_workspace(
+sq_status sq_avx2_compute_scale_with_workspace(
     const float *values, size_t count, float *scale, float *partials,
     size_t partial_capacity, int threads)
 {
@@ -157,26 +157,26 @@ mco2_q8_status mco2_avx2_compute_scale_with_workspace(
     int padded_bits = 0;
 
     if (scale == NULL || (count != 0 && values == NULL))
-        return MCO2_Q8_ERR_ARGUMENT;
+        return SQ_ERR_ARGUMENT;
     *scale = 0.0f;
     if (count == 0)
-        return MCO2_Q8_OK;
+        return SQ_OK;
 
     max_bits = max_magnitude_bits(values, count, threads);
     if (max_bits >= NONFINITE_BITS)
-        return MCO2_Q8_ERR_NONFINITE;
+        return SQ_ERR_NONFINITE;
     if (max_bits == 0)
-        return MCO2_Q8_OK;
+        return SQ_OK;
     memcpy(&max_abs, &max_bits, sizeof max_abs);
 
-    padded_count = mco2_q8_scale_workspace_elements(count);
+    padded_count = sq_scale_workspace_elements(count);
     if (padded_count == SIZE_MAX)
-        return MCO2_Q8_ERR_MEMORY;
+        return SQ_ERR_MEMORY;
     block_count = count / BLOCK + (count % BLOCK != 0);
     if (padded_count > SIZE_MAX / sizeof *partials)
-        return MCO2_Q8_ERR_MEMORY;
+        return SQ_ERR_MEMORY;
     if (partials == NULL || partial_capacity < padded_count)
-        return MCO2_Q8_ERR_ARGUMENT;
+        return SQ_ERR_ARGUMENT;
     memset(partials, 0, padded_count * sizeof *partials);
     while (((size_t)1 << padded_bits) < padded_count)
         padded_bits++;
@@ -199,10 +199,10 @@ mco2_q8_status mco2_avx2_compute_scale_with_workspace(
         float root = sqrtf(partials[0]);
         float result = max_abs * root;
         if (!isfinite(result))
-            return MCO2_Q8_ERR_SCALE_OVERFLOW;
+            return SQ_ERR_SCALE_OVERFLOW;
         *scale = result;
     }
-    return MCO2_Q8_OK;
+    return SQ_OK;
 }
 
 /* Philox4x32-10 for PHILOX_CHUNK consecutive groups, one lane per group. */
@@ -219,7 +219,7 @@ static void philox_chunk(uint64_t first_group, uint32_t k0, uint32_t k1,
         c2[j] = tensor;
         c3[j] = invocation;
     }
-    for (r = 0; r < MCO2_PHILOX_ROUNDS; r++) {
+    for (r = 0; r < SQ_PHILOX_ROUNDS; r++) {
         uint32_t ka = k0 + (uint32_t)r * 0x9E3779B9u;
         uint32_t kb = k1 + (uint32_t)r * 0xBB67AE85u;
 
@@ -243,8 +243,8 @@ static void philox_chunk(uint64_t first_group, uint32_t k0, uint32_t k1,
     }
 }
 
-void mco2_avx2_rng_words(const mco2_rng_stream *s, uint64_t n, uint32_t *out,
-                         int threads)
+void sq_avx2_rng_words(const sq_rng_stream *s, uint64_t n, uint32_t *out,
+                       int threads)
 {
     const uint64_t chunk_words = 4 * PHILOX_CHUNK;
     const size_t chunks = (size_t)((n + chunk_words - 1) / chunk_words);
@@ -274,7 +274,7 @@ void mco2_avx2_rng_words(const mco2_rng_stream *s, uint64_t n, uint32_t *out,
 
 /*
  * lower = floor(scaled) and threshold = floor(p * 2^32) for p = scaled - lower,
- * as in mco2_bernoulli_threshold. p * 2^32 can exceed INT32_MAX, so it is
+ * as in sq_bernoulli_threshold. p * 2^32 can exceed INT32_MAX, so it is
  * truncated in two halves: q = trunc(t / 2), then t - 2q is 0 or 1, exactly.
  */
 static void split_scaled(const float *restrict x, size_t n, float scale, float limit,
@@ -336,7 +336,7 @@ static void encode_range(uint8_t bit_width, const float *values, size_t begin,
         size_t n = end - base < BLOCK ? end - base : BLOCK;
 
         split_scaled(values + base, n, scale, (float)s, lower, threshold);
-        if (bit_width == MCO2_Q8_BITS) {
+        if (bit_width == SQ_Q8_BITS) {
             combine_codes(words + base, (const uint32_t *)(values + base), lower,
                           threshold, n, s, payload + base);
         } else {
@@ -347,45 +347,45 @@ static void encode_range(uint8_t bit_width, const float *values, size_t begin,
     }
 }
 
-mco2_q8_status mco2_avx2_encode_payload(uint8_t bit_width, const float *values,
-                                        size_t count, float scale,
-                                        const uint32_t *words, uint8_t *payload,
-                                        int threads)
+sq_status sq_avx2_encode_payload(uint8_t bit_width, const float *values,
+                                 size_t count, float scale,
+                                 const uint32_t *words, uint8_t *payload,
+                                 int threads)
 {
     uint32_t s, max_bits = 0;
     int has_nonzero;
 
-    if (bit_width != MCO2_Q4_BITS && bit_width != MCO2_Q8_BITS)
-        return MCO2_Q8_ERR_BIT_WIDTH;
-    s = (bit_width == MCO2_Q4_BITS) ? MCO2_Q4_SIGNED_LIMIT : MCO2_Q8_SIGNED_LIMIT;
+    if (bit_width != SQ_Q4_BITS && bit_width != SQ_Q8_BITS)
+        return SQ_ERR_BIT_WIDTH;
+    s = (bit_width == SQ_Q4_BITS) ? SQ_Q4_SIGNED_LIMIT : SQ_Q8_SIGNED_LIMIT;
 
     if (count != 0 && (values == NULL || words == NULL || payload == NULL))
-        return MCO2_Q8_ERR_ARGUMENT;
+        return SQ_ERR_ARGUMENT;
     if (!isfinite(scale) || scale < 0.0f)
-        return MCO2_Q8_ERR_SCALE;
+        return SQ_ERR_SCALE;
     if (count == 0 && scale != 0.0f)
-        return MCO2_Q8_ERR_SCALE;
+        return SQ_ERR_SCALE;
     if (count != 0)
         max_bits = max_magnitude_bits(values, count, threads);
     if (max_bits >= NONFINITE_BITS)
-        return MCO2_Q8_ERR_NONFINITE;
+        return SQ_ERR_NONFINITE;
     has_nonzero = max_bits != 0;
     if (!has_nonzero && scale != 0.0f)
-        return MCO2_Q8_ERR_SCALE;
+        return SQ_ERR_SCALE;
 
     if (scale == 0.0f) {
         if (has_nonzero)
-            return MCO2_Q8_ERR_SCALE;
+            return SQ_ERR_SCALE;
         if (count == 0)
-            return MCO2_Q8_OK;
-        if (bit_width == MCO2_Q8_BITS) {
+            return SQ_OK;
+        if (bit_width == SQ_Q8_BITS) {
             memset(payload, (int)s, count);
         } else {
             memset(payload, (int)((s & 0x0F) | ((s & 0x0F) << 4)), count / 2);
             if (count % 2 == 1)
                 payload[count / 2] = (uint8_t)(s & 0x0F);
         }
-        return MCO2_Q8_OK;
+        return SQ_OK;
     }
 
     omp_set_dynamic(0);
@@ -396,5 +396,5 @@ mco2_q8_status mco2_avx2_encode_payload(uint8_t bit_width, const float *values,
         unit_range(count, omp_get_thread_num(), omp_get_num_threads(), &begin, &end);
         encode_range(bit_width, values, begin, end, scale, s, words, payload);
     }
-    return MCO2_Q8_OK;
+    return SQ_OK;
 }

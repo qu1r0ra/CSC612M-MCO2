@@ -1,12 +1,12 @@
 # CSC612M-MCO2
 
-Public course implementation repository for the CSC612M MCO2 data-level-parallelism project.
+Public course implementation repository for the CSC612M-MCO2 data-level-parallelism project. The code, including its Python package, command and binary, is named `stoquant` ([ADR 0004](docs/adr/0004-stoquant-naming.md)).
 
 ## Status
 
 The public technical contract, benchmark protocol, and course-deliverables guide define how to implement and measure this course project.
-The CPU 8-bit and 4-bit quantizers, record codec, decoder, and NumPy oracle are implemented.
-The C-host/CUDA toolchain, Philox generator, and CUDA 8-bit and 4-bit quantizers with launch-geometry independence are verified on the RTX 5060. Acceptance timings for 2^22 elements at 8-bit and 4-bit are recorded; the benchmark matrix remains for later work.
+The CPU scalar and AVX2 quantizers, CUDA 8-bit and 4-bit quantizers, record codec, decoder, Philox generator, and NumPy oracle are implemented and verified on the RTX 5060.
+The benchmark matrix with its paper extensions, the Layer 3 unbiasedness suite, and the K1 bandwidth baseline and A/B tools are implemented; their frozen snapshots are under `results/`.
 
 ## Start here
 

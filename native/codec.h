@@ -1,50 +1,50 @@
-#ifndef MCO2_CODEC_H
-#define MCO2_CODEC_H
+#ifndef SQ_CODEC_H
+#define SQ_CODEC_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-#define MCO2_Q8_HEADER_SIZE 20
-#define MCO2_Q8_BITS 8
-#define MCO2_Q4_BITS 4
-#define MCO2_Q8_SIGNED_LIMIT 127
-#define MCO2_Q4_SIGNED_LIMIT 7
+#define SQ_HEADER_SIZE 20
+#define SQ_Q8_BITS 8
+#define SQ_Q4_BITS 4
+#define SQ_Q8_SIGNED_LIMIT 127
+#define SQ_Q4_SIGNED_LIMIT 7
 
 typedef enum {
-    MCO2_Q8_OK = 0,
-    MCO2_Q8_ERR_ARGUMENT,
-    MCO2_Q8_ERR_MAGIC,
-    MCO2_Q8_ERR_VERSION,
-    MCO2_Q8_ERR_BIT_WIDTH,
-    MCO2_Q8_ERR_RESERVED,
-    MCO2_Q8_ERR_COUNT,
-    MCO2_Q8_ERR_PAYLOAD_LENGTH,
-    MCO2_Q8_ERR_SCALE,
-    MCO2_Q8_ERR_CODE,
-    MCO2_Q8_ERR_ZERO_SCALE_CODE,
-    MCO2_Q8_ERR_PADDING_NIBBLE,
-    MCO2_Q8_ERR_NONFINITE,
-    MCO2_Q8_ERR_SCALE_OVERFLOW,
-    MCO2_Q8_ERR_ID_OVERFLOW,
-    MCO2_Q8_ERR_MEMORY,
-    MCO2_Q8_ERR_IO,
-    MCO2_Q8_ERR_CUDA_UNAVAILABLE,
-    MCO2_Q8_ERR_CUDA,
-    MCO2_Q8_ERR_CUDA_BIT_WIDTH,
-    MCO2_Q8_ERR_TIMINGS_BACKEND,
-    MCO2_Q8_ERR_CLOCK,
-    MCO2_Q8_ERR_AVX2_UNAVAILABLE
-} mco2_q8_status;
+    SQ_OK = 0,
+    SQ_ERR_ARGUMENT,
+    SQ_ERR_MAGIC,
+    SQ_ERR_VERSION,
+    SQ_ERR_BIT_WIDTH,
+    SQ_ERR_RESERVED,
+    SQ_ERR_COUNT,
+    SQ_ERR_PAYLOAD_LENGTH,
+    SQ_ERR_SCALE,
+    SQ_ERR_CODE,
+    SQ_ERR_ZERO_SCALE_CODE,
+    SQ_ERR_PADDING_NIBBLE,
+    SQ_ERR_NONFINITE,
+    SQ_ERR_SCALE_OVERFLOW,
+    SQ_ERR_ID_OVERFLOW,
+    SQ_ERR_MEMORY,
+    SQ_ERR_IO,
+    SQ_ERR_CUDA_UNAVAILABLE,
+    SQ_ERR_CUDA,
+    SQ_ERR_CUDA_BIT_WIDTH,
+    SQ_ERR_TIMINGS_BACKEND,
+    SQ_ERR_CLOCK,
+    SQ_ERR_AVX2_UNAVAILABLE
+} sq_status;
 
-const char *mco2_q8_status_message(mco2_q8_status status);
+const char *sq_status_message(sq_status status);
 
-mco2_q8_status mco2_q8_header_encode(uint8_t bit_width, uint64_t count,
-                                     float scale,
-                                     uint8_t header[MCO2_Q8_HEADER_SIZE]);
+sq_status sq_header_encode(uint8_t bit_width, uint64_t count,
+                           float scale,
+                           uint8_t header[SQ_HEADER_SIZE]);
 
 /* Allocate decoded values on success; the caller releases them with free(). */
-mco2_q8_status mco2_q8_decode_record(const uint8_t *record,
-                                     size_t record_size, float **values,
-                                     size_t *count);
+sq_status sq_decode_record(const uint8_t *record,
+                           size_t record_size, float **values,
+                           size_t *count);
 
 #endif

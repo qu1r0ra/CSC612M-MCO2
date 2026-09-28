@@ -1,11 +1,11 @@
-#ifndef MCO2_QUANTIZER_AVX2_H
-#define MCO2_QUANTIZER_AVX2_H
+#ifndef SQ_QUANTIZER_AVX2_H
+#define SQ_QUANTIZER_AVX2_H
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "codec.h"
-#include "mco2_rng.h"
+#include "sq_rng.h"
 
 /*
  * Multithreaded AVX2 CPU comparator (issue #22). Each stage returns the same
@@ -15,16 +15,16 @@
  */
 
 /* Team size a parallel region actually gets for the requested thread count. */
-int mco2_avx2_team_size(int threads);
+int sq_avx2_team_size(int threads);
 
-mco2_q8_status mco2_avx2_compute_scale_with_workspace(
+sq_status sq_avx2_compute_scale_with_workspace(
     const float *values, size_t count, float *scale, float *partials,
     size_t partial_capacity, int threads);
-void mco2_avx2_rng_words(const mco2_rng_stream *s, uint64_t n, uint32_t *out,
-                         int threads);
-mco2_q8_status mco2_avx2_encode_payload(uint8_t bit_width, const float *values,
-                                        size_t count, float scale,
-                                        const uint32_t *words, uint8_t *payload,
-                                        int threads);
+void sq_avx2_rng_words(const sq_rng_stream *s, uint64_t n, uint32_t *out,
+                       int threads);
+sq_status sq_avx2_encode_payload(uint8_t bit_width, const float *values,
+                                 size_t count, float scale,
+                                 const uint32_t *words, uint8_t *payload,
+                                 int threads);
 
 #endif

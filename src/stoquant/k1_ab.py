@@ -78,7 +78,7 @@ from stoquant.k1_bandwidth import (
 )
 
 VARIANTS = ("reference", "optimized")
-# MCO2_CUDA_K1_TREE_SPAN in native/quantizer_cuda.cu.
+# SQ_CUDA_K1_TREE_SPAN in native/quantizer_cuda.cu.
 TREE_SPAN = 2048
 PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 25, 1 << 26)
 PILOT_PROCESSES = 2
@@ -176,7 +176,7 @@ def record_hash(binary: Path, input_path: Path, bits: int, variant: str, out: Pa
     ]
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
-        raise RuntimeError(f"mco2 compress --k1 {variant} failed: {proc.stderr.strip()}")
+        raise RuntimeError(f"stoquant compress --k1 {variant} failed: {proc.stderr.strip()}")
     digest = hashlib.sha256(out.read_bytes()).hexdigest()
     out.unlink()
     return digest
@@ -362,7 +362,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     readiness = probe_readiness_facts(root)
     # Revision 3: every probe and benchmark process runs off physical core 0.
     mask = affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, get_process_affinity())
-    with process_affinity(mask), tempfile.TemporaryDirectory(prefix="mco2-k1ab-") as scratch:
+    with process_affinity(mask), tempfile.TemporaryDirectory(prefix="stoquant-k1ab-") as scratch:
         gpu_start = query_gpu_state()
         inputs = generate_inputs(counts, Path(scratch))
         paths = {count: Path(inputs[count]["_path"]) for count in counts}

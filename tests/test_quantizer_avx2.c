@@ -58,12 +58,12 @@ static int same_float(float a, float b)
 
 static void compare_scale(const float *values, size_t count, int threads, const char *what)
 {
-    size_t capacity = mco2_q8_scale_workspace_elements(count);
+    size_t capacity = sq_scale_workspace_elements(count);
     float *p0 = capacity ? (float *)malloc(capacity * sizeof *p0) : NULL;
     float *p1 = capacity ? (float *)malloc(capacity * sizeof *p1) : NULL;
     float s0 = -1.0f, s1 = -2.0f;
-    mco2_q8_status st0 = mco2_q8_compute_scale_with_workspace(values, count, &s0, p0, capacity);
-    mco2_q8_status st1 = mco2_avx2_compute_scale_with_workspace(values, count, &s1, p1,
+    sq_status st0 = sq_compute_scale_with_workspace(values, count, &s0, p0, capacity);
+    sq_status st1 = sq_avx2_compute_scale_with_workspace(values, count, &s1, p1,
                                                                capacity, threads);
 
     check(st0 == st1 && same_float(s0, s1), what, count, threads);
@@ -74,14 +74,14 @@ static void compare_scale(const float *values, size_t count, int threads, const 
 static void compare_encode(uint8_t bits, const float *values, size_t count, float scale,
                            const uint32_t *words, int threads, const char *what)
 {
-    size_t bytes = bits == MCO2_Q4_BITS ? (count + 1) / 2 : count;
+    size_t bytes = bits == SQ_Q4_BITS ? (count + 1) / 2 : count;
     uint8_t *e0 = (uint8_t *)malloc(bytes + 1), *e1 = (uint8_t *)malloc(bytes + 1);
-    mco2_q8_status st0, st1;
+    sq_status st0, st1;
 
     memset(e0, 0xA5, bytes + 1);
     memset(e1, 0xA5, bytes + 1);
-    st0 = mco2_encode_payload(bits, values, count, scale, words, e0);
-    st1 = mco2_avx2_encode_payload(bits, values, count, scale, words, e1, threads);
+    st0 = sq_encode_payload(bits, values, count, scale, words, e0);
+    st1 = sq_avx2_encode_payload(bits, values, count, scale, words, e1, threads);
     check(st0 == st1 && memcmp(e0, e1, bytes + 1) == 0, what, count, threads);
     free(e0);
     free(e1);
@@ -89,25 +89,25 @@ static void compare_encode(uint8_t bits, const float *values, size_t count, floa
 
 static void compare_all(const float *values, size_t count, int threads, uint64_t seed)
 {
-    mco2_rng_stream stream;
+    sq_rng_stream stream;
     uint32_t *w0 = (uint32_t *)malloc((count + 1) * sizeof *w0);
     uint32_t *w1 = (uint32_t *)malloc((count + 1) * sizeof *w1);
     float scale = 0.0f;
 
-    mco2_rng_stream_init(&stream, seed, 7, 0xFFFFFFFFu);
-    mco2_rng_words_cpu(&stream, count, w0);
+    sq_rng_stream_init(&stream, seed, 7, 0xFFFFFFFFu);
+    sq_rng_words_cpu(&stream, count, w0);
     w0[count] = w1[count] = 0xDEADBEEFu;
-    mco2_avx2_rng_words(&stream, count, w1, threads);
+    sq_avx2_rng_words(&stream, count, w1, threads);
     check(memcmp(w0, w1, (count + 1) * sizeof *w0) == 0, "rng words", count, threads);
 
     compare_scale(values, count, threads, "scale");
-    if (mco2_q8_compute_scale(values, count, &scale) == MCO2_Q8_OK) {
-        compare_encode(MCO2_Q8_BITS, values, count, scale, w0, threads, "8-bit payload");
-        compare_encode(MCO2_Q4_BITS, values, count, scale, w0, threads, "4-bit payload");
+    if (sq_compute_scale(values, count, &scale) == SQ_OK) {
+        compare_encode(SQ_Q8_BITS, values, count, scale, w0, threads, "8-bit payload");
+        compare_encode(SQ_Q4_BITS, values, count, scale, w0, threads, "4-bit payload");
     }
-    compare_encode(MCO2_Q8_BITS, values, count, 1e-30f, w0, threads, "8-bit clamped payload");
-    compare_encode(MCO2_Q4_BITS, values, count, 1e-30f, w0, threads, "4-bit clamped payload");
-    compare_encode(MCO2_Q8_BITS, values, count, 3.0f, w0, threads, "8-bit prescribed payload");
+    compare_encode(SQ_Q8_BITS, values, count, 1e-30f, w0, threads, "8-bit clamped payload");
+    compare_encode(SQ_Q4_BITS, values, count, 1e-30f, w0, threads, "4-bit clamped payload");
+    compare_encode(SQ_Q8_BITS, values, count, 3.0f, w0, threads, "8-bit prescribed payload");
     free(w0);
     free(w1);
 }
@@ -141,9 +141,9 @@ int main(void)
         values[i] = i % 3 == 0 ? -0.0f : 0.0f;
     for (t = 0; t < (int)(sizeof team / sizeof team[0]); t++) {
         compare_scale(values, 1000, team[t], "all-zero scale");
-        compare_encode(MCO2_Q8_BITS, values, 1000, 0.0f, words, team[t], "all-zero 8-bit");
-        compare_encode(MCO2_Q4_BITS, values, 999, 0.0f, words, team[t], "all-zero 4-bit odd");
-        compare_encode(MCO2_Q8_BITS, values, 1000, 1.0f, words, team[t], "all-zero nonzero scale");
+        compare_encode(SQ_Q8_BITS, values, 1000, 0.0f, words, team[t], "all-zero 8-bit");
+        compare_encode(SQ_Q4_BITS, values, 999, 0.0f, words, team[t], "all-zero 4-bit odd");
+        compare_encode(SQ_Q8_BITS, values, 1000, 1.0f, words, team[t], "all-zero nonzero scale");
     }
 
     /* Non-finite values at the head, middle and tail block. */
@@ -156,7 +156,7 @@ int main(void)
             values[at[p]] = probes[k];
             for (t = 0; t < (int)(sizeof team / sizeof team[0]); t++) {
                 compare_scale(values, 1287, team[t], "non-finite scale status");
-                compare_encode(MCO2_Q8_BITS, values, 1287, 1.0f, words, team[t],
+                compare_encode(SQ_Q8_BITS, values, 1287, 1.0f, words, team[t],
                                "non-finite encode status");
             }
         }
@@ -168,14 +168,14 @@ int main(void)
         values[0] = FLT_MAX;
         values[1] = FLT_MAX;
         compare_scale(values, 300, team[t], "scale overflow");
-        compare_encode(MCO2_Q8_BITS, values, 300, -1.0f, words, team[t], "negative scale");
-        compare_encode(MCO2_Q8_BITS, values, 300, NAN, words, team[t], "NaN scale");
-        compare_encode(MCO2_Q8_BITS, values, 300, INFINITY, words, team[t], "infinite scale");
-        compare_encode(MCO2_Q8_BITS, values, 0, 1.0f, words, team[t], "empty with scale");
-        compare_encode(MCO2_Q8_BITS, values, 0, 0.0f, words, team[t], "empty");
-        compare_encode(MCO2_Q8_BITS, values, 300, 0.0f, words, team[t], "zero scale, nonzero");
+        compare_encode(SQ_Q8_BITS, values, 300, -1.0f, words, team[t], "negative scale");
+        compare_encode(SQ_Q8_BITS, values, 300, NAN, words, team[t], "NaN scale");
+        compare_encode(SQ_Q8_BITS, values, 300, INFINITY, words, team[t], "infinite scale");
+        compare_encode(SQ_Q8_BITS, values, 0, 1.0f, words, team[t], "empty with scale");
+        compare_encode(SQ_Q8_BITS, values, 0, 0.0f, words, team[t], "empty");
+        compare_encode(SQ_Q8_BITS, values, 300, 0.0f, words, team[t], "zero scale, nonzero");
         compare_encode(3, values, 300, 1.0f, words, team[t], "bit width");
-        compare_encode(MCO2_Q8_BITS, values, 300, FLT_MIN / 4.0f, words, team[t],
+        compare_encode(SQ_Q8_BITS, values, 300, FLT_MIN / 4.0f, words, team[t],
                        "subnormal scale");
     }
 
@@ -185,13 +185,13 @@ int main(void)
         words[i] = i % 2 ? UINT32_MAX : 0;
     for (t = 0; t < (int)(sizeof team / sizeof team[0]); t++) {
         float scale;
-        mco2_q8_compute_scale(values, 65549, &scale);
-        compare_encode(MCO2_Q8_BITS, values, 65549, scale, words, team[t], "extreme words 8-bit");
-        compare_encode(MCO2_Q4_BITS, values, 65549, scale, words, team[t], "extreme words 4-bit");
+        sq_compute_scale(values, 65549, &scale);
+        compare_encode(SQ_Q8_BITS, values, 65549, scale, words, team[t], "extreme words 8-bit");
+        compare_encode(SQ_Q4_BITS, values, 65549, scale, words, team[t], "extreme words 4-bit");
     }
 
     for (t = 0; t < (int)(sizeof team / sizeof team[0]); t++)
-        check(mco2_avx2_team_size(team[t]) == team[t], "team size", 0, team[t]);
+        check(sq_avx2_team_size(team[t]) == team[t], "team size", 0, team[t]);
 
     free(values);
     free(words);

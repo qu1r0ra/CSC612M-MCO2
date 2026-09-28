@@ -20,7 +20,7 @@ SOURCE = layout.NATIVE_DIR / "quantizer_cuda.cu"
 
 def test_tree_span_matches_the_cuda_source():
     text = SOURCE.read_text(encoding="utf-8")
-    assert re.search(rf"#define MCO2_CUDA_K1_TREE_SPAN {TREE_SPAN}\b", text)
+    assert re.search(rf"#define SQ_CUDA_K1_TREE_SPAN {TREE_SPAN}\b", text)
 
 
 def test_optimized_launch_count_matches_the_protocol():
