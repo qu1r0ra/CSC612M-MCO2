@@ -128,7 +128,17 @@ def verify_correctness(
             "error_message": "Forced failure for testing verification gate",
         }
 
-    run = RecordRun(binary, input_path, tmp_dir, count, bits, seed, tensor_id, invocation_id, k1)
+    run = RecordRun(
+        binary=binary,
+        input_path=input_path,
+        tmp_dir=tmp_dir,
+        count=count,
+        bits=bits,
+        seed=seed,
+        tensor_id=tensor_id,
+        invocation_id=invocation_id,
+        k1=k1,
+    )
     try:
         cpu_comp_bytes, cpu_bench_bytes = check_cpu_reference(run)
         if "cpu-avx2" in backends:
@@ -180,6 +190,7 @@ def check_cpu_reference(run: RecordRun) -> tuple[bytes, bytes]:
 
 
 def check_avx2_comparator(run: RecordRun, cpu_comp_bytes: bytes) -> None:
+    """The AVX2 comparator's compress record must match the scalar CPU one."""
     avx2_comp_path = run.record_path("cpu-avx2_comp")
     res_avx2_comp = run.compress("cpu-avx2", avx2_comp_path)
     if res_avx2_comp.returncode != 0:
@@ -200,6 +211,7 @@ def check_avx2_comparator(run: RecordRun, cpu_comp_bytes: bytes) -> None:
 
 
 def compress_cuda_reference(run: RecordRun) -> bytes:
+    """The CUDA compress record, which CUDA bench paths must reproduce."""
     cuda_comp_path = run.record_path("cuda_comp")
     res_cuda_comp = run.compress("cuda", cuda_comp_path)
     if res_cuda_comp.returncode != 0:
@@ -235,6 +247,7 @@ def record_other_paths(run: RecordRun, paths: Sequence[BenchPath]) -> dict[Bench
 def check_cross_path_identity(
     bench_paths: dict[BenchPath, Path], cpu_comp_bytes: bytes, cuda_comp_bytes: bytes | None
 ) -> None:
+    """Bench records match their backend's compress record, and CPU matches CUDA."""
     # Each path must reproduce its own backend's compress record; the AVX2
     # comparator's is the scalar one, checked above.
     byte_identical_to_compress = all(

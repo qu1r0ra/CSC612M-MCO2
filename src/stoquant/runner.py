@@ -42,6 +42,7 @@ def compress_args(
     backend: str,
     k1: str = "reference",
 ) -> list[str]:
+    """The `compress` command line; `--k1` is passed only for the CUDA backend."""
     return [
         str(binary),
         "compress",
