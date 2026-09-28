@@ -186,11 +186,11 @@ figures snapshot *args:
 # Build the CUDA-enabled tool and run the full course benchmark matrix
 [windows]
 bench-matrix *args: build-cuda build-stream-probe
-    $env:MCO2_TEST_CUDA = '1'; uv run python benchmark_driver.py {{args}}
+    $env:MCO2_TEST_CUDA = '1'; uv run python mco2_run_notify.py -- python benchmark_driver.py {{args}}
 
 [unix]
 bench-matrix *args: build-cuda build-stream-probe
-    MCO2_TEST_CUDA=1 uv run python benchmark_driver.py {{args}}
+    MCO2_TEST_CUDA=1 uv run python mco2_run_notify.py -- python benchmark_driver.py {{args}}
 
 # Build the CUDA-enabled tool and run the Layer 3 expectation suite and its figure
 [windows]

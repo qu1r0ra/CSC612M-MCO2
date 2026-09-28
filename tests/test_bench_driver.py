@@ -1003,6 +1003,24 @@ def test_pilot_records_readiness_without_enforcing_it(tmp_path):
     assert "pilot run" in conditions["non_evidence_reasons"]
 
 
+def test_manifest_records_monitoring_without_topic_or_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("MCO2_MONITORING_PROVIDER", "ntfy")
+    monkeypatch.setenv("MCO2_MONITORING_HEARTBEAT_SECONDS", "3600")
+    monkeypatch.setenv("NTFY_TOPIC", "manifest-must-not-contain-topic")
+    monkeypatch.setenv("NTFY_TOKEN", "manifest-must-not-contain-token")
+
+    snapshot = run_cpu_snapshot(tmp_path / "monitoring", readiness_facts=READY_FACTS)
+    manifest_text = (snapshot / "manifest.json").read_text(encoding="utf-8")
+    manifest = json.loads(manifest_text)
+
+    assert manifest["monitoring"] == {
+        "provider": "ntfy",
+        "heartbeat_interval_seconds": 3600,
+    }
+    assert "manifest-must-not-contain-topic" not in manifest_text
+    assert "manifest-must-not-contain-token" not in manifest_text
+
+
 def test_failed_sweep_restores_the_affinity_mask(tmp_path, monkeypatch):
     def missing_binary(root):
         raise FileNotFoundError("no binary")

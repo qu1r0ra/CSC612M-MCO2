@@ -2144,11 +2144,28 @@ def sweep_matrix(
         writer.writerows(summary_rows)
 
     # 5. Run manifest
+    monitoring_provider = os.environ.get("MCO2_MONITORING_PROVIDER")
+    monitoring = None
+    if monitoring_provider:
+        try:
+            heartbeat_interval = int(os.environ["MCO2_MONITORING_HEARTBEAT_SECONDS"])
+        except (KeyError, ValueError) as exc:
+            raise RuntimeError(
+                "Invalid run-monitoring metadata in the process environment."
+            ) from exc
+        if heartbeat_interval < 1:
+            raise RuntimeError("Invalid run-monitoring metadata in the process environment.")
+        monitoring = {
+            "provider": monitoring_provider,
+            "heartbeat_interval_seconds": heartbeat_interval,
+        }
+
     manifest_data = {
         "manifest_version": "3.1",
         "date": date_str,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,
+        **({"monitoring": monitoring} if monitoring is not None else {}),
         "hardware": toolchain_prov["hardware"],
         **({"device": device_attributes} if device_attributes is not None else {}),
         "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
