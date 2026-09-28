@@ -195,7 +195,7 @@ def sha256(path: Path) -> str:
 
 def fingerprint_csv(path: Path) -> dict[str, Any]:
     compared = CSV_COMPARED_COLUMNS.get(path.name)
-    with path.open(newline="") as handle:
+    with path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.reader(handle))
     out: dict[str, Any] = {"header": rows[0] if rows else []}
     for r, row in enumerate(rows[1:]):
@@ -472,7 +472,7 @@ def capture(args: argparse.Namespace) -> int:
     fingerprint = build_fingerprint(work_dir())
     store.mkdir(parents=True, exist_ok=True)
     payload = {"format": FORMAT_VERSION, "commit": commit, "fingerprint": fingerprint}
-    target.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n")
+    target.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     print(f"baseline written: {target}")
     return 0
 
@@ -485,7 +485,7 @@ def compare(args: argparse.Namespace) -> int:
         if len(stored) != 1:
             raise SystemExit(f"{len(stored)} baselines in {store}; pass --baseline")
         baseline_path = stored[0]
-    baseline = json.loads(baseline_path.read_text())
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     if baseline.get("format") != FORMAT_VERSION:
         raise SystemExit(f"{baseline_path} has format {baseline.get('format')}")
     fresh = json.loads(json.dumps(build_fingerprint(work_dir())))
