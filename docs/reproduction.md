@@ -31,7 +31,7 @@ The `/wd4068` flag silences MSVC warnings about CUDA-only pragmas in the vendore
 ## Build and RNG check
 
 Requires `just`, the CUDA toolkit, and an NVIDIA GPU.
-On Windows, also install Visual Studio with the x64 C++ tools; `scripts/with-msvc.ps1` enters its developer environment, so no developer prompt is needed.
+On Windows, also install Visual Studio with the x64 C++ tools; `tools/with-msvc.ps1` enters its developer environment, so no developer prompt is needed.
 
 ```powershell
 just toolchain
@@ -56,7 +56,7 @@ It checks:
 
 ## CPU pipeline
 
-Requires `just`, Python 3.11 or newer, `uv`, and a C compiler. On Windows, `scripts/with-msvc.ps1` enters the x64 MSVC environment.
+Requires `just`, Python 3.11 or newer, `uv`, and a C compiler. On Windows, `tools/with-msvc.ps1` enters the x64 MSVC environment.
 
 ```powershell
 just test-cpu
@@ -210,7 +210,7 @@ Get-Content (Get-ChildItem results -Directory | Sort-Object LastWriteTime -Desce
 
 ## Restructure equivalence check
 
-The restructure stages (issue #46) must leave behavior unchanged. `just equivalence` builds the CUDA executable and the stream probe, then runs `scripts/equivalence.py`, which drives only command-line interfaces and imports no project code.
+The restructure stages (issue #46) must leave behavior unchanged. `just equivalence` builds the CUDA executable and the stream probe, then runs `tools/equivalence.py`, which drives only command-line interfaces and imports no project code.
 
 ```powershell
 # On the reference commit, with no modified tracked files: write the baseline

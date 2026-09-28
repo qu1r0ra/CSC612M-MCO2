@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import benchmark_driver
-from benchmark_driver import (
+from stoquant import driver, layout
+from stoquant.driver import (
     BOOTSTRAP_SEED,
     DEFAULT_COUNTS,
     DEFAULT_TRIALS,
@@ -39,9 +39,9 @@ from benchmark_driver import (
     verify_correctness,
     williams_rows,
 )
-from input_families import RESNET18_CIFAR_TENSORS, SPARSE_MASK_SEED, select_model_tensors
+from stoquant.inputs import RESNET18_CIFAR_TENSORS, SPARSE_MASK_SEED, select_model_tensors
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = layout.ROOT
 
 CUDA_SKIP = pytest.mark.skipif(
     os.environ.get("MCO2_TEST_CUDA") != "1",
@@ -1025,7 +1025,7 @@ def test_failed_sweep_restores_the_affinity_mask(tmp_path, monkeypatch):
     def missing_binary(root):
         raise FileNotFoundError("no binary")
 
-    monkeypatch.setattr(benchmark_driver, "find_binary", missing_binary)
+    monkeypatch.setattr(driver, "find_binary", missing_binary)
     before = get_process_affinity()
     with pytest.raises(FileNotFoundError):
         run_cpu_snapshot(tmp_path / "out", readiness_facts=READY_FACTS)
@@ -1224,10 +1224,10 @@ def test_avx2_path_is_descriptive_and_never_an_inversion():
 def test_build_flags_are_selected_by_source_file():
     commands = [
         "New-Item -ItemType Directory -Force build | Out-Null",
-        r"./scripts/with-msvc.ps1 cl.exe /O2 /fp:strict /DMCO2_ENABLE_CUDA /c src\main.c /Fo:x",
-        r"./scripts/with-msvc.ps1 cl.exe /O2 /fp:strict /DMCO2_ENABLE_CUDA /c src\quantizer.c",
-        r"./scripts/with-msvc.ps1 cl.exe /O2 /fp:precise /arch:AVX2 /openmp /c src\quantizer_avx2.c",
-        r"./scripts/with-msvc.ps1 nvcc -O3 --fmad=false -c src\quantizer_cuda.cu -o build\k.obj",
+        r"./tools/with-msvc.ps1 cl.exe /O2 /fp:strict /DMCO2_ENABLE_CUDA /c native\main.c /Fo:x",
+        r"./tools/with-msvc.ps1 cl.exe /O2 /fp:strict /DMCO2_ENABLE_CUDA /c native\quantizer.c",
+        r"./tools/with-msvc.ps1 cl.exe /O2 /fp:precise /arch:AVX2 /openmp /c native\quantizer_avx2.c",
+        r"./tools/with-msvc.ps1 nvcc -O3 --fmad=false -c native\quantizer_cuda.cu -o build\k.obj",
     ]
     flags = parse_build_commands(commands)
     assert flags["comparator_c"] == "/O2 /fp:strict /DMCO2_ENABLE_CUDA"
@@ -1244,7 +1244,7 @@ def test_correctness_gate_checks_the_avx2_path_without_cuda(tmp_path):
     input_path.write_bytes(values.astype("<f4").tobytes())
     backends = ["cpu", "cpu-avx2"]
     passed, info = verify_correctness(
-        benchmark_driver.find_binary(ROOT),
+        driver.find_binary(ROOT),
         input_path,
         len(values),
         4,
@@ -1271,10 +1271,10 @@ def test_an_avx2_mismatch_is_not_reported_as_a_cpu_cuda_divergence(tmp_path, mon
             out.write_bytes(bytes(data))
         return result
 
-    monkeypatch.setattr(benchmark_driver.subprocess, "run", corrupt_avx2)
+    monkeypatch.setattr(driver.subprocess, "run", corrupt_avx2)
     backends = ["cpu", "cpu-avx2"]
     passed, info = verify_correctness(
-        benchmark_driver.find_binary(ROOT),
+        driver.find_binary(ROOT),
         input_path,
         len(values),
         4,

@@ -14,6 +14,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from stoquant import layout
+
 DEFAULT_SERVER = "https://ntfy.sh"
 DEFAULT_HEARTBEAT_SECONDS = 3600
 
@@ -330,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
         help="send a preflight notification without starting a command",
     )
     parser.add_argument("--heartbeat-seconds", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--root", type=Path, default=layout.ROOT, help=argparse.SUPPRESS)
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command to run after --")
     args = parser.parse_args(argv)
     command = list(args.command)
@@ -341,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("provide a command after --")
 
     try:
-        config = _configuration(Path.cwd())
+        config = _configuration(args.root)
     except ConfigurationError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -362,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         print("ntfy preflight succeeded.")
         return 0
-    return _run_command(command, Path.cwd(), config)
+    return _run_command(command, args.root, config)
 
 
 if __name__ == "__main__":

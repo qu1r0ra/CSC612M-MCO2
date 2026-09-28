@@ -8,7 +8,7 @@
 
 /*
  * The loops are written for the auto-vectorizer. Loops tagged "avx2-hot" must
- * appear as vectorized in the compiler report (see scripts/vec_report_check.py).
+ * appear as vectorized in the compiler report (see `just vec-report`).
  * Untagged loops drive tagged ones chunk by chunk, or are scalar: the Philox
  * word interleave, the 4-bit nibble pack, and the per-block bit reversal of
  * the scale tree.

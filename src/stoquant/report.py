@@ -20,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from benchmark_driver import compute_stage_medians
+from stoquant.driver import compute_stage_medians
 
 # "optimized" is the opt-in AVX2 CPU comparator (issue #22): an F1 line and a
 # descriptive F2 line only. It never enters T1, the crossovers or a claim.
@@ -514,7 +514,7 @@ def render_report(
         or case.get("transfer_policy") == "pinned"
         for case in cases
     ):
-        from publication_report import render_publication_report
+        from stoquant.publication import render_publication_report
 
         return render_publication_report(
             snapshot, manifest, cases, output_dir, k1_ab, second_platform
@@ -594,15 +594,17 @@ def render_report(
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Render benchmark snapshot figures and report")
+def main(argv: list[str] | None = None, prog: str | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog=prog, description="Render benchmark snapshot figures and report"
+    )
     parser.add_argument("snapshot", type=Path, help="Snapshot directory under results/")
     parser.add_argument(
         "--output-dir", type=Path, default=None, help="Write here instead of the snapshot"
     )
     parser.add_argument("--k1-ab", type=Path, help="K1 A/B snapshot for publication bandwidth")
     parser.add_argument("--second-platform", type=Path, help="optional second-platform snapshot")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     result = render_report(
         args.snapshot,
         args.output_dir,

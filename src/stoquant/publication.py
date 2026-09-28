@@ -9,7 +9,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 
-from bench_report import (
+from stoquant.report import (
     FIGURES,
     REPORT,
     STAGES,

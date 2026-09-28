@@ -1,11 +1,12 @@
 import os
 import subprocess
-from pathlib import Path
 
 import numpy as np
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+from stoquant import layout
+
+ROOT = layout.ROOT
 BINARY = ROOT / "build" / ("mco2.exe" if os.name == "nt" else "mco2")
 
 pytestmark = pytest.mark.skipif(

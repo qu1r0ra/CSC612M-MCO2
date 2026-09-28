@@ -48,11 +48,11 @@ REPO = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 INVOCATION = {
     "binary": REPO / "build" / ("mco2.exe" if os.name == "nt" else "mco2"),
-    "bench-matrix": [sys.executable, str(REPO / "benchmark_driver.py")],
-    "unbiasedness": [sys.executable, str(REPO / "unbiasedness.py")],
-    "k1-baseline": [sys.executable, str(REPO / "k1_bandwidth.py")],
-    "k1-ab": [sys.executable, str(REPO / "k1_ab.py")],
-    "figures": [sys.executable, str(REPO / "bench_report.py")],
+    "bench-matrix": [sys.executable, "-m", "stoquant", "bench-matrix"],
+    "unbiasedness": [sys.executable, "-m", "stoquant", "unbiasedness"],
+    "k1-baseline": [sys.executable, "-m", "stoquant", "k1-baseline"],
+    "k1-ab": [sys.executable, "-m", "stoquant", "k1-ab"],
+    "figures": [sys.executable, "-m", "stoquant", "figures"],
     # Environment variables removed before every run, so each run uses defaults.
     "scrubbed_env_prefixes": ("MCO2_", "STOQUANT_"),
 }

@@ -21,14 +21,12 @@ import random
 import sqlite3
 import statistics
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from benchmark_driver import (
+from stoquant import layout
+from stoquant.driver import (
     DEFAULT_COMPRESSION_SEED,
     collect_git_provenance,
     find_binary,
@@ -159,7 +157,7 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     args.report_dir.mkdir(parents=True, exist_ok=True)
-    root = Path(__file__).resolve().parents[1]
+    root = layout.ROOT
     binary = find_binary(root)
     inputs = generate_inputs(args.counts, args.report_dir / "inputs")
     cores: list[int | None] = list(args.cores) if args.cores else [None]

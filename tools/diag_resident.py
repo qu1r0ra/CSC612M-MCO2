@@ -5,7 +5,7 @@ conditions, interleaved round-robin so slow drift affects every condition
 equally, while `nvidia-smi` logs GPU state in the background. Writes raw
 per-process records, the GPU log, and a summary into the output directory.
 
-    uv run python scripts/diag_resident.py --output-dir results/diag-...
+    uv run python tools/diag_resident.py --output-dir results/diag-...
 """
 
 from __future__ import annotations
@@ -17,15 +17,13 @@ import os
 import random
 import statistics
 import subprocess
-import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from benchmark_driver import (
+from stoquant import layout
+from stoquant.driver import (
     DEFAULT_COMPRESSION_SEED,
     collect_git_provenance,
     find_binary,
@@ -237,7 +235,7 @@ def main() -> None:
     parser.add_argument("--label", default="as-is", help="Desktop state, e.g. as-is or quiet")
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parents[1]
+    root = layout.ROOT
     binary = find_binary(root)
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)

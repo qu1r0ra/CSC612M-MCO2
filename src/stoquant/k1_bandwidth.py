@@ -35,7 +35,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from benchmark_driver import (
+from stoquant import layout
+from stoquant.driver import (
     BUILD_RECIPE,
     DEFAULT_BITS,
     DEFAULT_COMPRESSION_SEED,
@@ -53,7 +54,7 @@ from benchmark_driver import (
     warm_up_gpu,
 )
 
-# MCO2_CUDA_REDUCTION_THREADS in src/quantizer_cuda.cu.
+# MCO2_CUDA_REDUCTION_THREADS in native/quantizer_cuda.cu.
 REDUCTION_THREADS = 256
 BYTES_PER_VALUE = 4
 K1_INPUT_READS = 2
@@ -219,8 +220,8 @@ def run_resident(binary: Path, input_path: Path, bits: int, warmups: int, reps: 
     return payload
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None, prog: str | None = None) -> None:
+    parser = argparse.ArgumentParser(prog=prog, description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--counts", type=int, nargs="+", default=list(DEFAULT_COUNTS))
     parser.add_argument("--bits", type=int, nargs="+", default=list(DEFAULT_BITS))
@@ -233,9 +234,9 @@ def main() -> None:
     parser.add_argument(
         "--allow-dirty", action="store_true", help="Permit a dirty tree (non-evidence runs only)"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    root = Path(__file__).resolve().parent
+    root = layout.ROOT
     git = collect_git_provenance(root)
     if git["git_dirty"] and not args.allow_dirty:
         sys.exit("Working tree is dirty; a baseline must trace to a committed revision.")

@@ -1,11 +1,11 @@
 """Check that MSVC vectorizes every AVX2 hot loop (issue #22).
 
-Recompiles `src/quantizer_avx2.c` with the exact flags of the `build-cuda`
+Recompiles `native/quantizer_avx2.c` with the exact flags of the `build-cuda`
 recipe plus /Qvec-report:2, writes the report, and fails unless each loop
 tagged `/* avx2-hot */` is reported as "loop vectorized" (info C5001) and no
 inlined copy of it as "loop not vectorized" (info C5002).
 
-    uv run python scripts/vec_report_check.py [--output build/vec_report_avx2.txt]
+    uv run python -m stoquant vec-report [--output build/vec_report_avx2.txt]
 """
 
 from __future__ import annotations
@@ -16,9 +16,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from benchmark_driver import (
+from stoquant import layout
+from stoquant.driver import (
     AVX2_SOURCES,
     collect_build_commands,
     generate_msvc_vectorization_report,
@@ -44,11 +43,11 @@ def unvectorized_hot_loops(source_text: str, report_text: str) -> list[int]:
     return [n for n in hot_lines(source_text) if n not in vectorized or n in scalar]
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def main(argv: list[str] | None = None, prog: str | None = None) -> int:
+    parser = argparse.ArgumentParser(prog=prog, description=__doc__.splitlines()[0])
     parser.add_argument("--output", type=Path, default=Path("build/vec_report_avx2.txt"))
-    args = parser.parse_args()
-    root = Path(__file__).resolve().parents[1]
+    args = parser.parse_args(argv)
+    root = layout.ROOT
     flags = collect_build_commands(root)["_avx2_tokens"]
     if flags is None:
         print("no quantizer_avx2.c compile found in the build recipe", file=sys.stderr)
@@ -59,7 +58,7 @@ def main() -> int:
         report = generate_msvc_vectorization_report(
             root, output, flags, Path(objects), AVX2_SOURCES
         )
-    source = (root / "src" / SOURCE_NAME).read_text(encoding="utf-8")
+    source = (layout.NATIVE_DIR / SOURCE_NAME).read_text(encoding="utf-8")
     missing = unvectorized_hot_loops(source, report)
     total = len(hot_lines(source))
     if total == 0:

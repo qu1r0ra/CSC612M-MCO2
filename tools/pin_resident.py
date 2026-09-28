@@ -15,14 +15,12 @@ import os
 import random
 import statistics
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from benchmark_driver import (
+from stoquant import layout
+from stoquant.driver import (
     DEFAULT_COMPRESSION_SEED,
     collect_git_provenance,
     find_binary,
@@ -30,7 +28,7 @@ from benchmark_driver import (
     query_gpu_state,
     warm_up_gpu,
 )
-from scripts.trace_resident import set_affinity
+from trace_resident import set_affinity
 
 NOT_CORE0 = -1
 
@@ -90,7 +88,7 @@ def main() -> None:
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    root = Path(__file__).resolve().parents[1]
+    root = layout.ROOT
     binary = find_binary(root)
     input_path = Path(generate_inputs([args.count], args.input_dir)[args.count]["_path"])
     plan: list[int | None] = [None] * args.unpinned

@@ -21,7 +21,7 @@ The wrapper sends heartbeats once per hour by default. Set `NTFY_HEARTBEAT_SECON
 Run the notifier preflight before a benchmark. It sends one test notification and exits without starting a child process or building CUDA code:
 
 ```powershell
-uv run python mco2_run_notify.py --check
+uv run python -m stoquant.notify --check
 ```
 
 Setup is complete when the command exits successfully and the test notification arrives on the subscribed device. A missing configuration or failed send returns a nonzero exit code.

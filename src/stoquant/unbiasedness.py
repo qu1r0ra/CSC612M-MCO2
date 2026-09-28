@@ -25,8 +25,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from benchmark_driver import collect_git_provenance, find_binary
-from input_families import (
+from stoquant import layout
+from stoquant.driver import collect_git_provenance, find_binary
+from stoquant.inputs import (
     DEFAULT_INPUT_SEED,
     MODEL_NAME,
     SPARSE_MASK_SEED,
@@ -313,8 +314,8 @@ def plot_unbiasedness(
     plt.close(fig)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Correctness layer 3 expectation suite")
+def main(argv: list[str] | None = None, prog: str | None = None) -> None:
+    parser = argparse.ArgumentParser(prog=prog, description="Correctness layer 3 expectation suite")
     parser.add_argument("--output-dir", type=Path, default=None, help="Directory for results")
     parser.add_argument("--seeds", type=int, default=SUITE_SEEDS, help="Seeds per case")
     parser.add_argument(
@@ -327,10 +328,10 @@ def main() -> None:
         action="store_true",
         help="Run from an uncommitted tree (records the dirty files; not for evidence)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.seeds < 1:
         parser.error("--seeds must be at least 1")
-    root = Path(__file__).resolve().parent
+    root = layout.ROOT
 
     git_prov = collect_git_provenance(root)
     now = datetime.now(UTC)

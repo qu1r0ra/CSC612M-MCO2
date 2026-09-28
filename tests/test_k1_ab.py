@@ -1,9 +1,9 @@
 import re
-from pathlib import Path
 
 import pytest
 
-from k1_ab import (
+from stoquant import layout
+from stoquant.k1_ab import (
     TREE_SPAN,
     VARIANTS,
     compare_arms,
@@ -15,7 +15,7 @@ from k1_ab import (
 )
 
 DEVICE = {"memory_clock_khz": 14_001_000, "bus_width_bits": 128, "l2_bytes": 25_165_824}
-SOURCE = Path(__file__).resolve().parents[1] / "src" / "quantizer_cuda.cu"
+SOURCE = layout.NATIVE_DIR / "quantizer_cuda.cu"
 
 
 def test_tree_span_matches_the_cuda_source():

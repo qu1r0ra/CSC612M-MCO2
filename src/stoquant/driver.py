@@ -30,7 +30,8 @@ from typing import Any
 
 import numpy as np
 
-from input_families import (
+from stoquant import layout
+from stoquant.inputs import (
     DEFAULT_INPUT_SEED,
     INPUT_FAMILIES,
     MODEL_NAME,
@@ -44,7 +45,7 @@ from input_families import (
     select_model_tensors,
     sparsify,
 )
-from mco2_oracle import decode_record, reference_fp64
+from stoquant.oracle import decode_record, reference_fp64
 
 HEADER_STRUCT = struct.Struct("<4sBBHQf")
 DEFAULT_COUNTS = tuple(1 << exponent for exponent in range(10, 27))
@@ -461,7 +462,7 @@ def collect_hardware_and_toolchain(root: Path) -> dict[str, Any]:
     c_compiler = "unknown"
     try:
         if os.name == "nt":
-            script = root / "scripts" / "with-msvc.ps1"
+            script = root / "tools" / "with-msvc.ps1"
             if script.is_file():
                 cl_proc = subprocess.run(
                     [
@@ -604,8 +605,13 @@ def generate_family_inputs(
     raise ValueError(f"unknown input family {family!r}; choose from {INPUT_FAMILIES}")
 
 
-COMPARATOR_SOURCES = ("src\\main.c", "src\\codec.c", "src\\quantizer.c", "src\\rng_cpu.c")
-AVX2_SOURCES = ("src\\quantizer_avx2.c",)
+COMPARATOR_SOURCES = (
+    "native\\main.c",
+    "native\\codec.c",
+    "native\\quantizer.c",
+    "native\\rng_cpu.c",
+)
+AVX2_SOURCES = ("native\\quantizer_avx2.c",)
 
 
 def generate_msvc_vectorization_report(
@@ -617,7 +623,7 @@ def generate_msvc_vectorization_report(
 ) -> str:
     """Recompile C sources with their exact build flags plus /Qvec-report:2."""
     output_text = ""
-    script = root / "scripts" / "with-msvc.ps1"
+    script = root / "tools" / "with-msvc.ps1"
     if os.name == "nt" and script.is_file() and host_flags is not None:
         object_dir.mkdir(parents=True, exist_ok=True)
         # A quoted path ending in "\" escapes its closing quote through the
@@ -2276,8 +2282,10 @@ def sweep_matrix(
     return target_dir
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="mco2 benchmark driver and snapshot creator")
+def main(argv: list[str] | None = None, prog: str | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog=prog, description="mco2 benchmark driver and snapshot creator"
+    )
     parser.add_argument("--output-dir", type=Path, default=None, help="Directory to save snapshot")
     parser.add_argument(
         "--counts", type=int, nargs="+", default=DEFAULT_COUNTS, help="Element counts"
@@ -2399,8 +2407,8 @@ def main() -> None:
         help="Run despite a failed readiness check (marks the snapshot non-evidence)",
     )
 
-    args = parser.parse_args()
-    root = Path(__file__).resolve().parent
+    args = parser.parse_args(argv)
+    root = layout.ROOT
 
     try:
         snapshot_dir = run_benchmark_matrix(

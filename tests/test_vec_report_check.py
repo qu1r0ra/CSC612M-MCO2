@@ -1,10 +1,4 @@
-import importlib.util
-from pathlib import Path
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "vec_report_check.py"
-spec = importlib.util.spec_from_file_location("vec_report_check", SCRIPT)
-vec_report_check = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(vec_report_check)
+from stoquant import vectorization as vec_report_check
 
 SOURCE = """int f(void)
 {
@@ -19,9 +13,9 @@ SOURCE = """int f(void)
 
 
 def test_every_tagged_loop_must_be_reported_vectorized():
-    report = r"""src\quantizer_avx2.c(3) : info C5001: loop vectorized
-src\quantizer_avx2.c(6) : info C5002: loop not vectorized due to reason '1203'
-src\quantizer_avx2.c(7) : info C5002: loop not vectorized due to reason '1200'
+    report = r"""native\quantizer_avx2.c(3) : info C5001: loop vectorized
+native\quantizer_avx2.c(6) : info C5002: loop not vectorized due to reason '1203'
+native\quantizer_avx2.c(7) : info C5002: loop not vectorized due to reason '1200'
 """
 
     assert vec_report_check.hot_lines(SOURCE) == [3, 7]
@@ -29,25 +23,25 @@ src\quantizer_avx2.c(7) : info C5002: loop not vectorized due to reason '1200'
 
 
 def test_a_loop_vectorized_in_every_inlined_copy_passes():
-    report = r"""src\quantizer_avx2.c(7) : info C5001: loop vectorized
-src\quantizer_avx2.c(3) : info C5001: loop vectorized
-src\quantizer_avx2.c(3) : info C5001: loop vectorized
+    report = r"""native\quantizer_avx2.c(7) : info C5001: loop vectorized
+native\quantizer_avx2.c(3) : info C5001: loop vectorized
+native\quantizer_avx2.c(3) : info C5001: loop vectorized
 """
 
     assert vec_report_check.unvectorized_hot_loops(SOURCE, report) == []
 
 
 def test_a_scalar_inlined_copy_fails_the_tagged_loop():
-    report = r"""src\quantizer_avx2.c(7) : info C5001: loop vectorized
-src\quantizer_avx2.c(3) : info C5001: loop vectorized
-src\quantizer_avx2.c(3) : info C5002: loop not vectorized due to reason '1200'
+    report = r"""native\quantizer_avx2.c(7) : info C5001: loop vectorized
+native\quantizer_avx2.c(3) : info C5001: loop vectorized
+native\quantizer_avx2.c(3) : info C5002: loop not vectorized due to reason '1200'
 """
 
     assert vec_report_check.unvectorized_hot_loops(SOURCE, report) == [3]
 
 
 def test_other_files_do_not_satisfy_the_check():
-    report = r"""src\other.c(3) : info C5001: loop vectorized
+    report = r"""native\other.c(3) : info C5001: loop vectorized
 tests\test_quantizer_avx2.c(7) : info C5001: loop vectorized
 """
 

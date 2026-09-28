@@ -7,9 +7,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from mco2_oracle import compress_record_fp32, reference_fp64, scale_fp32
+from stoquant import layout
+from stoquant.oracle import compress_record_fp32, reference_fp64, scale_fp32
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = layout.ROOT
 BINARY = ROOT / "build" / ("mco2.exe" if os.name == "nt" else "mco2")
 HEADER = struct.Struct("<4sBBHQf")
 

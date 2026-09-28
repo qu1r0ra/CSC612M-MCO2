@@ -33,7 +33,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from benchmark_driver import (
+from stoquant import layout
+from stoquant.driver import (
     BUILD_RECIPE,
     DEFAULT_BITS,
     DEFAULT_COMPRESSION_SEED,
@@ -58,7 +59,7 @@ from benchmark_driver import (
     run_bench_process,
     warm_up_gpu,
 )
-from k1_bandwidth import (
+from stoquant.k1_bandwidth import (
     CALIBRATION_REPS,
     DEFAULT_PROCESSES,
     DEFAULT_REPS,
@@ -77,7 +78,7 @@ from k1_bandwidth import (
 )
 
 VARIANTS = ("reference", "optimized")
-# MCO2_CUDA_K1_TREE_SPAN in src/quantizer_cuda.cu.
+# MCO2_CUDA_K1_TREE_SPAN in native/quantizer_cuda.cu.
 TREE_SPAN = 2048
 PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 25, 1 << 26)
 PILOT_PROCESSES = 2
@@ -300,8 +301,8 @@ def plot_f5(summary: dict[str, Any], out: Path) -> None:
     plt.close(fig)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None, prog: str | None = None) -> None:
+    parser = argparse.ArgumentParser(prog=prog, description=__doc__)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--figure", type=Path, help="Re-render F5 from an A/B snapshot and stop")
     parser.add_argument(
@@ -318,7 +319,7 @@ def main() -> None:
     parser.add_argument(
         "--allow-dirty", action="store_true", help="Permit a dirty tree (non-evidence runs only)"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.figure is not None:
         summary = json.loads((args.figure / "summary.json").read_text(encoding="utf-8"))
@@ -330,7 +331,7 @@ def main() -> None:
     processes = args.processes or (PILOT_PROCESSES if args.pilot else DEFAULT_PROCESSES)
     evidence = not (args.pilot or args.allow_dirty or args.counts or args.processes)
 
-    root = Path(__file__).resolve().parent
+    root = layout.ROOT
     git = collect_git_provenance(root)
     if git["git_dirty"] and not args.allow_dirty:
         sys.exit("Working tree is dirty; an A/B run must trace to a committed revision.")
