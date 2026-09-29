@@ -4,15 +4,7 @@
 #include <string.h>
 
 #include "codec.h"
-
-static int failures;
-
-static void check(int condition, const char *description) {
-  printf("%s %s\n", condition ? "ok  " : "FAIL", description);
-  if (!condition) {
-    failures++;
-  }
-}
+#include "test_check.h"
 
 int main(void) {
   static const uint8_t expected[SQ_HEADER_SIZE] = {

@@ -8,15 +8,7 @@
 #include "quantizer.h"
 #include "rng_cpu.h"
 #include "test_alloc.h"
-
-static int failures;
-
-static void check(int condition, const char *description) {
-  printf("%s %s\n", condition ? "ok  " : "FAIL", description);
-  if (!condition) {
-    failures++;
-  }
-}
+#include "test_check.h"
 
 int main(void) {
   static const float vector[] = {-2.0f, -1.0f, 0.0f, 1.0f, 2.0f};
@@ -42,15 +34,16 @@ int main(void) {
   check(sq_compute_scale(overflow, 2, &scale) == SQ_ERR_SCALE_OVERFLOW,
         "unrepresentable FP32 norm is rejected");
 
-  check(sq_q8_make_codes(vector, 5, 2.0f, words, codes) == SQ_OK &&
+  check(sq_encode_payload(SQ_Q8_BITS, vector, 5, 2.0f, words, codes) == SQ_OK &&
             memcmp(codes, expected, sizeof expected) == 0,
         "prescribed scale and words produce signed 8-bit codes");
-  check(sq_q8_make_codes(zeros, sizeof zeros / sizeof zeros[0], 0.0f,
-                         (const uint32_t[]){0, 1, 2}, codes) == SQ_OK &&
+  check(sq_encode_payload(SQ_Q8_BITS, zeros, sizeof zeros / sizeof zeros[0],
+                          0.0f, (const uint32_t[]){0, 1, 2}, codes) == SQ_OK &&
             codes[0] == 127 && codes[1] == 127 && codes[2] == 127,
         "zero-scale input maps to the center code");
-  check(sq_q8_make_codes(zeros, sizeof zeros / sizeof zeros[0], 1.0f,
-                         (const uint32_t[]){0, 1, 2}, codes) == SQ_ERR_SCALE,
+  check(sq_encode_payload(SQ_Q8_BITS, zeros, sizeof zeros / sizeof zeros[0],
+                          1.0f, (const uint32_t[]){0, 1, 2},
+                          codes) == SQ_ERR_SCALE,
         "all-zero inputs reject a nonzero scale");
 
   /* 4-bit prescribed scale and word output with odd payload length (5 elements

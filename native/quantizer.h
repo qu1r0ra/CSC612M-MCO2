@@ -17,7 +17,5 @@ sq_status sq_compute_scale_with_workspace(const float *values, size_t count,
 sq_status sq_encode_payload(uint8_t bit_width, const float *values,
                             size_t count, float scale, const uint32_t *words,
                             uint8_t *payload);
-sq_status sq_q8_make_codes(const float *values, size_t count, float scale,
-                           const uint32_t *words, uint8_t *codes);
 
 #endif

@@ -22,7 +22,7 @@ The week-13 course submission requires the protocol below except these later ext
 - The sparse input family and the synthetic collection shaped like reference-model tensors.
 - Crossover analysis (locating the element count where CUDA overtakes the comparator). The course run includes only a between-process stability check; the crossover study is the size sweep below.
 
-The in-process benchmark driver is implemented in `benchmark_driver.py` and can be reproduced with `just bench-matrix`. The course matrix evidence is the frozen snapshot `results/2026-09-25-59c8967`; its `summary.csv` is the source for every reported figure. In that snapshot, `claim_supported` holds for these cases only (speedup vs the C comparator as pooled-median point estimate [trial-median range]):
+The in-process benchmark driver is implemented in `src/stoquant/matrix.py` and can be reproduced with `just bench-matrix`. The course matrix evidence is the frozen snapshot `results/2026-09-25-59c8967`; its `summary.csv` is the source for every reported figure. In that snapshot, `claim_supported` holds for these cases only (speedup vs the C comparator as pooled-median point estimate [trial-median range]):
 
 | Elements | Bits | CUDA boundary | Speedup |
 | --- | --- | --- | --- |
@@ -185,8 +185,8 @@ No GPU clock, power plan, HAGS, or other system setting was changed for this dia
 - **Direction-based crossover.** The crossover rule is unchanged except that it uses `direction_supported` on both sides in place of `claim_supported`. The report also gives the crossover under the revision 2 claim, for comparison.
 - **Readiness check.** An evidence sweep refuses to start unless:
   - uptime is at most 30 minutes (a fresh reboot);
-  - no application window is open other than the Windows shell (`WINDOW_ALLOWLIST` in `benchmark_driver.py`) and the session that launched the sweep (the driver's parent processes, recorded as `launcher_processes`);
-  - no `mco2` process is running;
+  - no application window is open other than the Windows shell (`WINDOW_ALLOWLIST` in `src/stoquant/host.py`) and the session that launched the sweep (the driver's parent processes, recorded as `launcher_processes`);
+  - no `stoquant` process is running;
   - the git tree is clean;
   - the GPU reports no clock-event reason other than `GpuIdle` (idle is not throttling).
   The manifest (version 3.0) records these facts, the power plan, and the HAGS state. `--ignore-readiness` runs anyway and marks the snapshot non-evidence.
@@ -263,7 +263,7 @@ This section adds paths to revision 3; it is not a new revision. The revision 3 
 - **Baselines.** Every path is compared with a CPU baseline of the same transfer policy: the comparator for resident, host-origin and CPU GPU-origin paths, and CPU GPU-origin for CUDA GPU-origin. Pinned paths also report the comparison with their pageable twin (`vs_pageable`). CUDA GPU-origin also reports its ratio to the comparator (`vs_comparator`), which is descriptive and supports no claim.
 - **Inversion.** CUDA boundaries nest by work: resident ⊂ GPU-origin ⊂ host-origin, checked within each policy. CPU GPU-origin must not beat the comparator. An inversion vetoes the direction and magnitude claims of every CUDA path in the inverted policy group (resident paths sit in the pageable group), as in revision 3; a CPU GPU-origin inversion vetoes that path and its CUDA twin.
 - **Trial order.** Above four paths the driver uses a Williams design instead of all orderings, since 9! orderings cannot run. One design is n orders for an even number n of paths and 2n for an odd one, and `--trials` must be a multiple of it. The nine-path matrix needs a multiple of 18, so a nine-path run, pilots included, must pass `--trials` explicitly because the default 24 is rejected; the extension default for #25 is set with that sweep. The manifest (version 3.1) records `paths`, `trial_design`, and `transfer_policies`.
-- **Correctness.** Each path's benchmark record, under each boundary and policy, must be byte-identical to `mco2 compress` before timing.
+- **Correctness.** Each path's benchmark record, under each boundary and policy, must be byte-identical to `stoquant compress` before timing.
 - **Evidence status.** Issue #20 adds tests and a tiny non-evidence matrix only. Extension sweeps feed the publication matrix of issue #25 and follow the pilot rule above.
 
 ### Input families (paper extension)
@@ -273,7 +273,7 @@ This section adds paths to revision 3; it is not a new revision. The revision 3 
 - **Dense.** Standard-normal FP32 values from `numpy.random.default_rng(2026)`, one generator drawn in `--counts` order. Case identifiers end in `n{count}`.
 - **Sparse.** The dense vector of the same seed and count, with each element set to `+0.0` independently with probability 0.9 by a Bernoulli mask from `default_rng(1021)`. The manifest records the mask seed and the target and realised zero fractions. Case identifiers end in `sparse_n{count}`.
 - **Model.** Synthetic tensors with the 62 parameter shapes of ResNet-18 for CIFAR-10 (11,173,962 parameters; names follow the common CIFAR implementation, e.g. `layer2.0.shortcut.0.weight`). No training data or trained weights are used. Convolution and linear weights are He-normal, $N(0, 2/\text{fan\_in})$; biases and batch-norm parameters are $N(0, 0.01^2)$. Tensor `i` in module order uses `default_rng([2026, i])`. `--model-tensors distinct` (default) keeps the first tensor of each distinct (shape, kind), 17 tensors; `all` keeps all 62; `--model-limit N` keeps the first N. The model family ignores `--counts`. Case identifiers end in `model_{tensor name}`.
-- **Snapshots.** A non-pilot run of a non-dense family writes `results/<date>-<short_rev>-<family>/`. Summary rows carry `input_family` and `input_key`. `bench_report.py` keeps revision 3 rendering unchanged and uses a separate publication renderer for extension and non-dense cases.
+- **Snapshots.** A non-pilot run of a non-dense family writes `results/<date>-<short_rev>-<family>/`. Summary rows carry `input_family` and `input_key`. `src/stoquant/report.py` keeps revision 3 rendering unchanged and uses a separate publication renderer for extension and non-dense cases.
 - **Model option guard.** `--model-tensors` and `--model-limit` are rejected with any other family.
 
 ### AVX2 comparator (paper extension)
@@ -281,11 +281,11 @@ This section adds paths to revision 3; it is not a new revision. The revision 3 
 `--backends cpu cuda cpu-avx2` adds `cpu-avx2-optimized`, a multithreaded AVX2 build of the CPU compressor, timed on the comparator's host-host boundary. Spec: [qu1r0ra/CSC612M-MCO2-Paper#22](https://github.com/qu1r0ra/CSC612M-MCO2-Paper/issues/22). It answers how much of the CUDA speedup a tuned CPU recovers; it does not replace the baseline.
 
 - **Opt-in.** A default run has no AVX2 path and records the revision 3 paths and case identifiers. The AVX2 path runs right after the comparator.
-- **Baseline.** Every claim stays against the single-thread scalar comparator. The AVX2 path's ratio to the comparator, and each CUDA path's `vs_cpu_avx2` ratio, are descriptive: `descriptive` is true and the claim fields are null. The AVX2 path never raises a boundary inversion and stays out of T1 and the crossovers; `bench_report.py` draws it as an extra F1 line and a dashed F2 line.
+- **Baseline.** Every claim stays against the single-thread scalar comparator. The AVX2 path's ratio to the comparator, and each CUDA path's `vs_cpu_avx2` ratio, are descriptive: `descriptive` is true and the claim fields are null. The AVX2 path never raises a boundary inversion and stays out of T1 and the crossovers; `src/stoquant/report.py` draws it as an extra F1 line and a dashed F2 line.
 - **Correctness.** Its `compress` output and bench record must be byte-identical to the scalar comparator's before timing. `tests/test_quantizer_avx2.c` checks each stage against its scalar counterpart bit for bit across sizes, team sizes, zeros, subnormals, non-finite inputs, and extreme random words.
-- **Build flags.** Only `src/quantizer_avx2.c` is compiled with `/O2 /fp:precise /arch:AVX2 /openmp` (`-mavx2 -fopenmp -ffp-contract=off` elsewhere); the scalar comparator keeps `/fp:strict`. Neither setting contracts `a*b+c`. Each case records both as `build_flags.comparator_c` and `build_flags.avx2_c`.
+- **Build flags.** Only `native/quantizer_avx2.c` is compiled with `/O2 /fp:precise /arch:AVX2 /openmp` (`-mavx2 -fopenmp -ffp-contract=off` elsewhere); the scalar comparator keeps `/fp:strict`. Neither setting contracts `a*b+c`. Each case records both as `build_flags.comparator_c` and `build_flags.avx2_c`.
 - **Vectorization.** `just vec-report` recompiles the AVX2 source with its build flags plus `/Qvec-report:2` and fails unless every loop tagged `/* avx2-hot */` is reported as vectorized and none of their inlined copies is reported as not vectorized. The tagged loops are the max|x| scan, the scale terms, the scale tree, the Philox counter setup and rounds, the threshold split and the code combine. The Philox word interleave, the 4-bit nibble pack, and the per-block bit reversal stay scalar, so the report does not show that the whole path is vector code. A run with the AVX2 path saves that report as `msvc_vectorization_report_avx2.txt`. The check is MSVC-only; the gcc build is covered by the byte-identity test alone.
-- **Threads.** `mco2 --threads N` (1–256, `cpu-avx2` only) sets the team; the default is the processor count in the process affinity mask on Windows (the online count elsewhere), which the driver's pinning sets to every logical processor off physical core 0 (logical 0 and 1). Each run, case and bench line records the team size it ran, and the manifest records `cpu_avx2_threads`.
+- **Threads.** `stoquant --threads N` (1–256, `cpu-avx2` only) sets the team; the default is the processor count in the process affinity mask on Windows (the online count elsewhere), which the driver's pinning sets to every logical processor off physical core 0 (logical 0 and 1). Each run, case and bench line records the team size it ran, and the manifest records `cpu_avx2_threads`.
 - **Trial order.** Five paths need a Williams design of 10 orders, so the default 24 trials is rejected and the run must pass `--trials` explicitly.
 - **Threat.** All-core turbo and thermal limits make a multithreaded CPU time more sensitive to machine state than the single-thread comparator. The stability readings and pilot rule apply unchanged.
 - **Evidence status.** Issue #22 adds the path, its tests, and a tiny non-evidence run only. Its timed evidence comes from the publication matrix of issue #25.
@@ -344,6 +344,7 @@ This section fixes the publication matrix before its pilots. The revision 3 snap
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.
 - The course sequential/parallel comparison is the single-thread C comparator against CUDA. Record compiler vectorization settings and identify a scalar configuration for that comparison.
 - The opt-in multithreaded AVX2 comparator (above) is an additional, descriptive CPU row; the scalar comparator stays the headline baseline.
+- The scalar comparator keeps two passes over the input that a fused implementation would drop. Its scale step scans the input for finiteness while it takes the maximum, and its encoder then scans it again for finiteness (`sq_validate_input`) and for the first nonzero element (which stops at that element). Both passes are inside the timed comparator interval, so the baseline is a little slower than a fused scalar loop and speedups against it are correspondingly a little larger. Neither is timed separately.
 - The scalar Python reference is the correctness oracle; its timings may appear as an additional row but never as the headline baseline. A vectorized Python implementation may be useful for comparison.
 
 ## Timing boundaries
@@ -357,6 +358,8 @@ This section fixes the publication matrix before its pilots. The revision 3 snap
 Use synchronized wall-clock timing for complete paths and CUDA events for device-stage diagnosis.
 Keep allocation, warmup, transfer-buffer type, synchronization policy, process startup, and file-I/O treatment explicit.
 Verify decoding outside the measured compression interval.
+
+Timed CUDA repetitions do not copy or inspect the device status or the validation flags. The untimed preflight run and, for `resident-graph`, the readback after timing establish that the result is correct; a wrong result inside a timed repetition that raises no CUDA error is not detected there. The exact contents of each wall window are in the [technical contract](technical-contract.md#in-process-benchmark-timing-paths-and-boundaries).
 
 ## Matrix
 

@@ -4,39 +4,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sq_status.h"
+
 #define SQ_HEADER_SIZE 20
 #define SQ_Q8_BITS 8
 #define SQ_Q4_BITS 4
 #define SQ_Q8_SIGNED_LIMIT 127
 #define SQ_Q4_SIGNED_LIMIT 7
 
-typedef enum {
-  SQ_OK = 0,
-  SQ_ERR_ARGUMENT,
-  SQ_ERR_MAGIC,
-  SQ_ERR_VERSION,
-  SQ_ERR_BIT_WIDTH,
-  SQ_ERR_RESERVED,
-  SQ_ERR_COUNT,
-  SQ_ERR_PAYLOAD_LENGTH,
-  SQ_ERR_SCALE,
-  SQ_ERR_CODE,
-  SQ_ERR_ZERO_SCALE_CODE,
-  SQ_ERR_PADDING_NIBBLE,
-  SQ_ERR_NONFINITE,
-  SQ_ERR_SCALE_OVERFLOW,
-  SQ_ERR_ID_OVERFLOW,
-  SQ_ERR_MEMORY,
-  SQ_ERR_IO,
-  SQ_ERR_CUDA_UNAVAILABLE,
-  SQ_ERR_CUDA,
-  SQ_ERR_CUDA_BIT_WIDTH,
-  SQ_ERR_TIMINGS_BACKEND,
-  SQ_ERR_CLOCK,
-  SQ_ERR_AVX2_UNAVAILABLE
-} sq_status;
-
-const char *sq_status_message(sq_status status);
+/* Payload bytes for a record of count codes; Q4 packs two codes per byte. */
+static inline size_t sq_payload_size(uint8_t bit_width, size_t count) {
+  return bit_width == SQ_Q4_BITS ? count / 2 + (count & 1) : count;
+}
 
 sq_status sq_header_encode(uint8_t bit_width, uint64_t count, float scale,
                            uint8_t header[SQ_HEADER_SIZE]);

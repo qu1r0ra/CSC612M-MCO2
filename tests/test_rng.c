@@ -5,15 +5,7 @@
 #include "rng_cpu.h"
 #include "rng_cuda.h"
 #include "test_alloc.h"
-
-static int failures;
-
-static void check(int ok, const char *what) {
-  printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-  if (!ok) {
-    failures++;
-  }
-}
+#include "test_check.h"
 
 static int cuda_ok(int status, const char *what) {
   if (status != 0) {
@@ -55,7 +47,7 @@ static void test_kat(void) {
     key.v[0] = kat[row][4];
     key.v[1] = kat[row][5];
 
-    cpu = sq_philox_raw_cpu(ctr, key);
+    cpu = philox4x32_R(SQ_PHILOX_ROUNDS, ctr, key);
     (void)snprintf(what, sizeof what, "Philox4x32-10 KAT row %d on CPU", row);
     check(same_ctr(cpu, expected), what);
 
@@ -89,7 +81,7 @@ static void test_mapping(void) {
   sq_rng_words_cpu(&s, 16, words);
   for (i = 0; i < 16; i++) {
     philox4x32_ctr_t c = {{(uint32_t)(i / 4), 0, 7, 9}};
-    philox4x32_ctr_t r = sq_philox_raw_cpu(c, key);
+    philox4x32_ctr_t r = philox4x32_R(SQ_PHILOX_ROUNDS, c, key);
     if (words[i] != r.v[i % 4]) {
       ok = 0;
     }
@@ -173,7 +165,9 @@ static void test_bernoulli(void) {
   check(sq_bernoulli_threshold(0.0f) == 0, "threshold(0) = 0");
   check(sq_bernoulli_threshold(1.0f) == 0x100000000ULL, "threshold(1) = 2^32");
 
-  sq_bernoulli_cpu(w, p, N, cpu);
+  for (i = 0; i < N; i++) {
+    cpu[i] = (uint8_t)sq_bernoulli(w[i], p[i]);
+  }
   check(memcmp(cpu, expected, sizeof expected) == 0,
         "CPU Bernoulli at p = 0, 1, 1-2^-24, 0.5");
   if (cuda_ok(sq_bernoulli_cuda(w, p, N, gpu), "GPU Bernoulli")) {

@@ -11,16 +11,18 @@
 #include "quantizer_avx2.h"
 #include "rng_cpu.h"
 #include "test_alloc.h"
+#define TEST_CHECK_QUIET
+#include "test_check.h"
 
-static int failures;
-static int checks;
-
-static void check(int condition, const char *description, size_t count,
-                  int threads) {
-  checks++;
+static void check_at(int condition, const char *description, size_t count,
+                     int threads) {
+  char what[160];
   if (!condition) {
-    printf("FAIL %s (count %zu, threads %d)\n", description, count, threads);
-    failures++;
+    (void)snprintf(what, sizeof what, "%s (count %zu, threads %d)", description,
+                   count, threads);
+    check(0, what);
+  } else {
+    check(1, description);
   }
 }
 
@@ -72,7 +74,7 @@ static void compare_scale(const float *values, size_t count, int threads,
   sq_status st1 = sq_avx2_compute_scale_with_workspace(values, count, &s1, p1,
                                                        capacity, threads);
 
-  check(st0 == st1 && same_float(s0, s1), what, count, threads);
+  check_at(st0 == st1 && same_float(s0, s1), what, count, threads);
   free(p0);
   free(p1);
 }
@@ -80,7 +82,7 @@ static void compare_scale(const float *values, size_t count, int threads,
 static void compare_encode(uint8_t bits, const float *values, size_t count,
                            float scale, const uint32_t *words, int threads,
                            const char *what) {
-  size_t bytes = bits == SQ_Q4_BITS ? (count + 1) / 2 : count;
+  size_t bytes = sq_payload_size(bits, count);
   uint8_t *e0 = (uint8_t *)test_alloc(bytes + 1, 1),
           *e1 = (uint8_t *)test_alloc(bytes + 1, 1);
   sq_status st0, st1;
@@ -89,7 +91,7 @@ static void compare_encode(uint8_t bits, const float *values, size_t count,
   memset(e1, 0xA5, bytes + 1);
   st0 = sq_encode_payload(bits, values, count, scale, words, e0);
   st1 = sq_avx2_encode_payload(bits, values, count, scale, words, e1, threads);
-  check(st0 == st1 && memcmp(e0, e1, bytes + 1) == 0, what, count, threads);
+  check_at(st0 == st1 && memcmp(e0, e1, bytes + 1) == 0, what, count, threads);
   free(e0);
   free(e1);
 }
@@ -105,8 +107,8 @@ static void compare_all(const float *values, size_t count, int threads,
   sq_rng_words_cpu(&stream, count, w0);
   w0[count] = w1[count] = 0xDEADBEEFu;
   sq_avx2_rng_words(&stream, count, w1, threads);
-  check(memcmp(w0, w1, (count + 1) * sizeof *w0) == 0, "rng words", count,
-        threads);
+  check_at(memcmp(w0, w1, (count + 1) * sizeof *w0) == 0, "rng words", count,
+           threads);
 
   compare_scale(values, count, threads, "scale");
   if (sq_compute_scale(values, count, &scale) == SQ_OK) {
@@ -230,7 +232,7 @@ int main(void) {
   }
 
   for (t = 0; t < (int)(sizeof team / sizeof team[0]); t++) {
-    check(sq_avx2_team_size(team[t]) == team[t], "team size", 0, team[t]);
+    check_at(sq_avx2_team_size(team[t]) == team[t], "team size", 0, team[t]);
   }
 
   free(values);

@@ -1,7 +1,7 @@
 """Render the size-sweep figures, the T1 summary table and the crossover report.
 
 Reads a frozen snapshot (manifest.json plus one JSON per case) and writes
-F1-F3 as PNG files and ``report.md`` into the output directory, which defaults
+F1-F4 as PNG files and ``report.md`` into the output directory, which defaults
 to the snapshot itself. Nothing in the snapshot is rewritten.
 """
 
