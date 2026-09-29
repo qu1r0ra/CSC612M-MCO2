@@ -19,10 +19,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 
 from stoquant import layout
@@ -39,6 +35,7 @@ from stoquant.inputs import (
     sparsify,
 )
 from stoquant.oracle import SIGNED_LIMITS
+from stoquant.plotting import pyplot
 from stoquant.provenance import collect_git_provenance, find_binary
 
 SUITE_SEEDS = 4096
@@ -278,6 +275,7 @@ def envelope(u: np.ndarray, seeds: int) -> np.ndarray:
 def plot_unbiasedness(
     plot_data: dict[tuple[str, int], dict[str, Any]], seeds: int, out: Path
 ) -> None:
+    plt = pyplot()
     fig, axes = plt.subplots(len(BIT_WIDTHS), 2, figsize=(11.0, 4.0 * len(BIT_WIDTHS)))
     for row, bits in enumerate(BIT_WIDTHS):
         left, right = axes[row]

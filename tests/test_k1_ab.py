@@ -16,7 +16,7 @@ from stoquant.k1_ab import (
     summarize_ab_cell,
     variant_order,
 )
-from stoquant.k1_bandwidth import DEFAULT_PROCESSES, DEFAULT_REPS
+from stoquant.k1_bandwidth import DEFAULT_PROCESSES, DEFAULT_REPS, REDUCTION_THREADS
 
 DEVICE = {"memory_clock_khz": 14_001_000, "bus_width_bits": 128, "l2_bytes": 25_165_824}
 SOURCE = layout.NATIVE_DIR / "quantizer_cuda.cu"
@@ -25,6 +25,7 @@ SOURCE = layout.NATIVE_DIR / "quantizer_cuda.cu"
 def test_tree_span_matches_the_cuda_source():
     text = SOURCE.read_text(encoding="utf-8")
     assert re.search(rf"#define SQ_CUDA_K1_TREE_SPAN {TREE_SPAN}\b", text)
+    assert re.search(rf"#define SQ_CUDA_REDUCTION_THREADS {REDUCTION_THREADS}\b", text)
 
 
 def test_optimized_launch_count_matches_the_protocol():

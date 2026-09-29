@@ -14,12 +14,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 
+from stoquant.plotting import pyplot
 from stoquant.stats import compute_stage_medians
 
 # "optimized" is the opt-in AVX2 CPU comparator (issue #22): an F1 line and a
@@ -178,6 +175,7 @@ def find_crossovers(
 
 
 def plot_time(indexed, counts, bit_widths, out: Path) -> None:
+    plt = pyplot()
     fig, axes = plt.subplots(
         1, len(bit_widths), figsize=(5.5 * len(bit_widths), 4.2), sharey=True, squeeze=False
     )
@@ -232,6 +230,7 @@ def plot_descriptive_speedup(ax, indexed, counts, bits) -> None:
 
 
 def plot_speedup(indexed, counts, bit_widths, out: Path) -> None:
+    plt = pyplot()
     fig, axes = plt.subplots(
         1, len(bit_widths), figsize=(5.5 * len(bit_widths), 4.2), sharey=True, squeeze=False
     )
@@ -288,6 +287,7 @@ def plot_speedup(indexed, counts, bit_widths, out: Path) -> None:
 
 
 def plot_stages(indexed, stage_counts, bit_widths, out: Path) -> None:
+    plt = pyplot()
     fig, axes = plt.subplots(
         1, len(bit_widths), figsize=(5.5 * len(bit_widths), 4.4), sharey=True, squeeze=False
     )
@@ -347,6 +347,7 @@ def plot_stages(indexed, stage_counts, bit_widths, out: Path) -> None:
 
 
 def plot_graph_vs_resident(indexed, counts, bit_widths, out: Path) -> None:
+    plt = pyplot()
     fig, axes = plt.subplots(
         1, len(bit_widths), figsize=(5.5 * len(bit_widths), 4.2), sharey=True, squeeze=False
     )

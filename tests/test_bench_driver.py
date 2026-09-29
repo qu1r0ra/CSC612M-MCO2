@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from stoquant import correctness, host, layout, matrix
+from stoquant import host, layout, matrix
 from stoquant.correctness import verify_correctness
 from stoquant.design import (
     DEFAULT_COUNTS,
@@ -40,14 +40,14 @@ from stoquant.matrix import (
     run_benchmark_matrix,
 )
 from stoquant.provenance import find_binary, parse_build_commands
-from stoquant.runner import in_process_warmups
+from stoquant.runner import REAL_BENCH_PROCESS, FakeBenchProcess, in_process_warmups
 from stoquant.stats import (
     BOOTSTRAP_SEED,
     bootstrap_speedup_ci,
     boundary_inversion,
     claim_support,
     compare_case_group,
-    compare_to_comparator,
+    compare_speedup,
     compute_case_statistics,
 )
 
@@ -514,7 +514,9 @@ def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
         trials=2,
         gpu_warmup_seconds=0,
         case_warmup_seconds=0,
-        force_fail=True,
+        bench_process=FakeBenchProcess(
+            [subprocess.CompletedProcess(["stoquant", "compress"], 1, "", "forced failure")]
+        ),
         allow_existing=True,
         allow_dirty=True,
         readiness_facts=READY_FACTS,
@@ -623,9 +625,9 @@ def test_speedup_verdicts_use_trial_median_ranges():
     slow = compute_case_statistics([[20.0, 20.0], [22.0, 22.0]])
     overlap = compute_case_statistics([[9.0, 9.0], [12.0, 12.0]])
 
-    assert compare_to_comparator(cpu, fast)["verdict"] == "faster"
-    assert compare_to_comparator(cpu, slow)["verdict"] == "slower"
-    result = compare_to_comparator(cpu, overlap)
+    assert compare_speedup(cpu, fast, "speedup_vs_cpu")["verdict"] == "faster"
+    assert compare_speedup(cpu, slow, "speedup_vs_cpu")["verdict"] == "slower"
+    result = compare_speedup(cpu, overlap, "speedup_vs_cpu")
     assert result["verdict"] == "inconclusive"
     assert result["speedup_low"] < 1.0 < result["speedup_high"]
     assert cpu["spread_ratio"] == pytest.approx(1.1)
@@ -651,7 +653,7 @@ def test_direction_claim_survives_instability_but_magnitude_does_not():
     cpu = compute_case_statistics([[10.0], [10.2], [10.1], [10.3]])
     # Always faster than the comparator, but its trial medians spread 2x.
     noisy = compute_case_statistics([[1.0], [2.0], [1.0], [2.0]])
-    comparison = compare_to_comparator(cpu, noisy)
+    comparison = compare_speedup(cpu, noisy, "speedup_vs_cpu")
     assert comparison["verdict"] == "faster"
     assert noisy["stable"] is False
 
@@ -682,8 +684,10 @@ def test_bootstrap_ci_is_deterministic_and_brackets_the_point_estimate():
     assert low < 10.05 / 2.025 < high
     assert bootstrap_speedup_ci(cpu, cuda, seed=BOOTSTRAP_SEED + 1) != first
 
-    comparison = compare_to_comparator(
-        compute_case_statistics([[m] for m in cpu]), compute_case_statistics([[m] for m in cuda])
+    comparison = compare_speedup(
+        compute_case_statistics([[m] for m in cpu]),
+        compute_case_statistics([[m] for m in cuda]),
+        "speedup_vs_cpu",
     )
     assert (comparison["speedup_ci_low"], comparison["speedup_ci_high"]) == first
 
@@ -1278,22 +1282,21 @@ def test_correctness_gate_checks_the_avx2_path_without_cuda(tmp_path):
     assert info["byte_identical_to_compress"] is True
 
 
-def test_an_avx2_mismatch_is_not_reported_as_a_cpu_cuda_divergence(tmp_path, monkeypatch):
+def test_an_avx2_mismatch_is_not_reported_as_a_cpu_cuda_divergence(tmp_path):
     values = np.linspace(-3.0, 3.0, 1287, dtype=np.float32)
     input_path = tmp_path / "input.f32"
     input_path.write_bytes(values.astype("<f4").tobytes())
-    real_run = subprocess.run
 
-    def corrupt_avx2(args, **kwargs):
-        result = real_run(args, **kwargs)
-        if "compress" in args and args[-1] == "cpu-avx2":
-            out = Path(args[args.index("--output") + 1])
-            data = bytearray(out.read_bytes())
-            data[-1] ^= 1
-            out.write_bytes(bytes(data))
-        return result
+    class CorruptingRecordProcess:
+        def run(self, argv, *, creationflags=0):
+            result = REAL_BENCH_PROCESS.run(argv, creationflags=creationflags)
+            if "compress" in argv and argv[-1] == "cpu-avx2":
+                out = Path(argv[argv.index("--output") + 1])
+                data = bytearray(out.read_bytes())
+                data[-1] ^= 1
+                out.write_bytes(bytes(data))
+            return result
 
-    monkeypatch.setattr(correctness.subprocess, "run", corrupt_avx2)
     backends = ["cpu", "cpu-avx2"]
     passed, info = verify_correctness(
         find_binary(ROOT),
@@ -1303,6 +1306,7 @@ def test_an_avx2_mismatch_is_not_reported_as_a_cpu_cuda_divergence(tmp_path, mon
         backends=backends,
         paths=build_paths(backends),
         tmp_dir=tmp_path,
+        process=CorruptingRecordProcess(),
     )
     assert not passed
     assert info["cpu_avx2_byte_identical"] is False

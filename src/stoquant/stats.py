@@ -141,17 +141,6 @@ def compare_speedup(
     }
 
 
-def compare_to_comparator(cpu_stats: dict[str, Any], cuda_stats: dict[str, Any]) -> dict[str, Any]:
-    return compare_speedup(cpu_stats, cuda_stats, "speedup_vs_cpu")
-
-
-def compare_to_resident(
-    resident_stats: dict[str, Any], graph_stats: dict[str, Any]
-) -> dict[str, Any]:
-    """Resident-graph measured against plain resident under the comparator rules."""
-    return compare_speedup(resident_stats, graph_stats, "speedup_vs_resident")
-
-
 def claim_support(
     verdict: str, inversion: bool, baseline: dict[str, Any], candidate: dict[str, Any]
 ) -> dict[str, bool]:
@@ -238,7 +227,7 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         if base_stats is None:
             continue
         stats["baseline"] = base_label
-        stats.update(compare_to_comparator(base_stats, stats))
+        stats.update(compare_speedup(base_stats, stats, "speedup_vs_cpu"))
         stats["boundary_inversion"] = inversion
         if path.backend == "cpu-avx2":
             # Descriptive only: the paper's claims stay against the scalar comparator.
@@ -281,7 +270,7 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
     graph = stats_by_label.get("cuda-resident-graph")
     if resident is not None and graph is not None:
         inversion = cuda_inversion["pageable"]
-        vs_res = compare_to_resident(resident, graph)
+        vs_res = compare_speedup(resident, graph, "speedup_vs_resident")
         graph["vs_resident"] = {
             **vs_res,
             "boundary_inversion": inversion,

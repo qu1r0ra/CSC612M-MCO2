@@ -1,3 +1,7 @@
+import subprocess
+
+import pytest
+
 from stoquant import vectorization as vec_report_check
 
 SOURCE = """int f(void)
@@ -46,3 +50,31 @@ tests\test_quantizer_avx2.c(7) : info C5001: loop vectorized
 """
 
     assert vec_report_check.unvectorized_hot_loops(SOURCE, report) == [3, 7]
+
+
+def test_unsupported_platform_is_an_error(tmp_path):
+    with pytest.raises(RuntimeError, match="requires Windows"):
+        vec_report_check.generate_msvc_vectorization_report(
+            tmp_path, tmp_path / "report.txt", [], tmp_path / "objects", platform="posix"
+        )
+
+
+def test_failed_compile_is_an_error(tmp_path):
+    script = tmp_path / "tools" / "with-msvc.ps1"
+    script.parent.mkdir()
+    script.write_text("", encoding="utf-8")
+
+    def failed_compile(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 1, "", "compiler failure")
+
+    report = tmp_path / "report.txt"
+    with pytest.raises(RuntimeError, match="compile failed"):
+        vec_report_check.generate_msvc_vectorization_report(
+            tmp_path,
+            report,
+            [],
+            tmp_path / "objects",
+            runner=failed_compile,
+            platform="nt",
+        )
+    assert "compiler failure" in report.read_text(encoding="utf-8")

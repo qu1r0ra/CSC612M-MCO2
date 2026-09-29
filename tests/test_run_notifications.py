@@ -18,6 +18,7 @@ class CaptureServer(ThreadingHTTPServer):
         super().__init__(address, CaptureHandler)
         self.messages = []
         self.fail_requests = set()
+        self.redirect_requests = set()
         self.delay_requests = set()
         self.messages_lock = threading.Lock()
 
@@ -39,8 +40,16 @@ class CaptureHandler(BaseHTTPRequestHandler):
             )
         if request_number in server.delay_requests:
             time.sleep(1.3)
-        status = 503 if request_number in server.fail_requests else 200
+        status = (
+            302
+            if request_number in server.redirect_requests
+            else 503
+            if request_number in server.fail_requests
+            else 200
+        )
         self.send_response(status)
+        if status == 302:
+            self.send_header("Location", "https://example.invalid/redirected")
         self.end_headers()
 
     def log_message(self, format, *args):
@@ -122,6 +131,51 @@ def test_failed_preflight_prevents_child_launch(tmp_path):
     assert len(server.messages) == 1
     assert "preflight" in result.stderr.lower()
     assert "test-only-token" not in result.stderr
+
+
+def test_non_local_http_server_is_refused_before_launch(tmp_path):
+    result = subprocess.run(
+        [*runner(tmp_path), "--", sys.executable, "-c", "pass"],
+        cwd=tmp_path,
+        env=ntfy_environment("http://example.invalid"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "https" in result.stderr
+
+
+def test_redirect_is_refused_without_forwarding_authorization(tmp_path):
+    with ntfy_stub() as (server, server_url):
+        server.redirect_requests.add(1)
+        result = subprocess.run(
+            [*runner(tmp_path), "--check"],
+            cwd=tmp_path,
+            env=ntfy_environment(server_url),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert result.returncode == 2
+    assert len(server.messages) == 1
+    assert server.messages[0]["authorization"] == "Bearer test-only-token"
+    assert "302" in result.stderr
+
+
+def test_python_child_uses_the_current_interpreter(tmp_path):
+    child = ["python", "-c", "import sys; print(sys.executable)"]
+    with ntfy_stub() as (_, server_url):
+        result = subprocess.run(
+            [*runner(tmp_path), "--", *child],
+            cwd=tmp_path,
+            env=ntfy_environment(server_url),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert result.returncode == 0
+    assert str(Path(sys.executable).resolve()).lower() in result.stdout.lower()
 
 
 def test_failed_start_notification_prevents_child_launch(tmp_path):

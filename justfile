@@ -238,38 +238,38 @@ figures snapshot *args:
 # Build the CUDA-enabled tool and run the full course benchmark matrix
 [windows]
 bench-matrix *args: build-cuda build-stream-probe
-    $env:STOQUANT_TEST_CUDA = '1'; uv run python -m stoquant.notify -- python -m stoquant bench-matrix {{args}}
+    uv run python -m stoquant.notify -- python -m stoquant bench-matrix {{args}}
 
 [unix]
 bench-matrix *args: build-cuda build-stream-probe
-    STOQUANT_TEST_CUDA=1 uv run python -m stoquant.notify -- python -m stoquant bench-matrix {{args}}
+    uv run python -m stoquant.notify -- python -m stoquant bench-matrix {{args}}
 
 # Build the CUDA-enabled tool and run the Layer 3 expectation suite and its figure
 [windows]
 unbiasedness *args: build-cuda
-    $env:STOQUANT_TEST_CUDA = '1'; uv run python -m stoquant unbiasedness {{args}}
+    uv run python -m stoquant unbiasedness {{args}}
 
 [unix]
 unbiasedness *args: build-cuda
-    STOQUANT_TEST_CUDA=1 uv run python -m stoquant unbiasedness {{args}}
+    uv run python -m stoquant unbiasedness {{args}}
 
 # Measure the reference K1 against the device bandwidth (issue #23 baseline)
 [windows]
 k1-baseline *args: build-cuda build-stream-probe
-    $env:STOQUANT_TEST_CUDA = '1'; uv run python -m stoquant k1-baseline {{args}}
+    uv run python -m stoquant k1-baseline {{args}}
 
 [unix]
 k1-baseline *args: build-cuda build-stream-probe
-    STOQUANT_TEST_CUDA=1 uv run python -m stoquant k1-baseline {{args}}
+    uv run python -m stoquant k1-baseline {{args}}
 
 # A/B the reference and optimized K1 on the same tree, or re-render F5 (issue #23)
 [windows]
 k1-ab *args: build-cuda build-stream-probe
-    $env:STOQUANT_TEST_CUDA = '1'; uv run python -m stoquant k1-ab {{args}}
+    uv run python -m stoquant k1-ab {{args}}
 
 [unix]
 k1-ab *args: build-cuda build-stream-probe
-    STOQUANT_TEST_CUDA=1 uv run python -m stoquant k1-ab {{args}}
+    uv run python -m stoquant k1-ab {{args}}
 
 # Capture or compare the restructure equivalence baseline (issue #47)
 equivalence *args: build-cuda build-stream-probe

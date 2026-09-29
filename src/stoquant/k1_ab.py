@@ -29,11 +29,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
 from stoquant import layout
 from stoquant.design import DEFAULT_BITS, DEFAULT_COUNTS
 from stoquant.host import (
@@ -61,6 +56,7 @@ from stoquant.k1_bandwidth import (
     summarize_cell,
     theoretical_peak_gbps,
 )
+from stoquant.plotting import pyplot
 from stoquant.provenance import (
     BUILD_RECIPE,
     collect_build_commands,
@@ -186,7 +182,8 @@ def run_arm(binary: Path, input_path: Path, bits: int, variant: str, warmups: in
         input_path,
         bits=bits,
         backend="cuda",
-        extra_args=["--boundary", "resident", "--k1", variant],
+        extra_args=["--boundary", "resident"],
+        k1=variant,
         seed=DEFAULT_COMPRESSION_SEED,
         warmups=warmups,
         reps=reps,
@@ -242,6 +239,7 @@ def power_label(count: int) -> str:
 
 def plot_f5(summary: dict[str, Any], out: Path) -> None:
     """Stage medians of both arms, as a share of the reference arm's stage total."""
+    plt = pyplot()
     cells = {(c["count"], c["bits"]): c for c in summary["cells"]}
     bit_widths = sorted({c["bits"] for c in summary["cells"]})
     counts = [n for n in F5_COUNTS if any((n, b) in cells for b in bit_widths)]

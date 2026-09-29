@@ -56,10 +56,23 @@ def cuda_units(cuda_path: str) -> list[tuple[str, list[str]]]:
     Random123 detects nvcc through __CUDACC__, which clang does not define, so
     its device qualifier and 64-bit multiply are set to what nvcc would select.
     """
+    arch = just_var("cuda_arch")[0]
+    if arch == "native":
+        device = subprocess.run(
+            ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        capability = device.stdout.splitlines()[0].strip()
+        if not capability.replace(".", "").isdigit():
+            raise RuntimeError(f"cannot resolve native CUDA architecture: {capability!r}")
+        arch = "sm_" + capability.replace(".", "")
     flags = [
         "-xcuda",
         "--cuda-device-only",
-        "--cuda-gpu-arch=sm_120",
+        f"--cuda-gpu-arch={arch}",
         f"--cuda-path={cuda_path}",
         "-std=c++17",
         "-Wno-unknown-cuda-version",

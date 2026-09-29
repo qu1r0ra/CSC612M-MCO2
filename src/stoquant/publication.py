@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 
+from stoquant.plotting import pyplot
 from stoquant.report import (
     FIGURES,
     REPORT,
@@ -36,9 +36,14 @@ PATH_LABELS = {
     "cpu-gpu-origin-pinned": "CPU GPU-origin pinned",
     "cuda-gpu-origin-pinned": "CUDA GPU-origin pinned",
 }
-# The stubs type plt.cm.tab10 as a plain Colormap; it is a ListedColormap of RGB tuples.
-_TAB10: list[Any] = plt.cm.tab10.colors  # pyright: ignore[reportAttributeAccessIssue]
-PATH_COLORS = dict(zip(PATH_LABELS, _TAB10, strict=True))
+
+
+def _path_colors(plt) -> dict[str, Any]:
+    # The stubs type tab10 as a plain Colormap; it is a ListedColormap.
+    colors: list[Any] = plt.cm.tab10.colors  # pyright: ignore[reportAttributeAccessIssue]
+    return dict(zip(PATH_LABELS, colors, strict=True))
+
+
 TRANSFER_PAIRS = (
     ("cuda-host-origin", "cuda-host-origin-pinned"),
     ("cpu-gpu-origin", "cpu-gpu-origin-pinned"),
@@ -95,6 +100,8 @@ def plot_publication_time(
     cases: list[dict[str, Any]], out: Path, second: list[dict[str, Any]] | None
 ) -> None:
     panels = [("primary platform", cases), ("second platform", second)]
+    plt = pyplot()
+    colors = _path_colors(plt)
     fig, axes = plt.subplots(
         len(panels), 2, figsize=(13, 4.6 * len(panels)), squeeze=False, sharey="row"
     )
@@ -118,7 +125,7 @@ def plot_publication_time(
                     continue
                 x = np.array([case["count"] for case in selected])
                 stats = [case["statistics"] for case in selected]
-                color = PATH_COLORS[path]
+                color = colors[path]
                 ax.fill_between(
                     x,
                     [item["trial_median_min_ms"] for item in stats],
@@ -143,6 +150,8 @@ def plot_publication_time(
 
 
 def plot_publication_speedup(cases: list[dict[str, Any]], out: Path) -> None:
+    plt = pyplot()
+    colors = _path_colors(plt)
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
     for ax, bits in zip(axes, (4, 8), strict=True):
         ax.axhline(1, color="black", linewidth=0.8, linestyle="--")
@@ -158,7 +167,7 @@ def plot_publication_speedup(cases: list[dict[str, Any]], out: Path) -> None:
             x = np.array([case["count"] for case in selected])
             y = np.array([item["speedup_vs_cpu"] for item in stats])
             bounds = np.array([speedup_interval(item) for item in stats])
-            color = PATH_COLORS[path]
+            color = colors[path]
             descriptive = path == "cpu-avx2-optimized"
             ax.plot(x, y, color=color, linestyle="--" if descriptive else "-", label=label)
             ax.vlines(x, bounds[:, 0], bounds[:, 1], color=color, linewidth=0.8)
@@ -180,6 +189,7 @@ def plot_publication_speedup(cases: list[dict[str, Any]], out: Path) -> None:
 
 
 def plot_publication_stages(cases: list[dict[str, Any]], out: Path) -> None:
+    plt = pyplot()
     paths = [
         path for path in PATH_LABELS if path.startswith("cuda-") and path != "cuda-resident-graph"
     ]
@@ -273,6 +283,7 @@ def plot_bandwidth(
     if not dram_probe:
         raise ValueError("K1 A/B probe has no DRAM-sized measurement")
     ceiling = max(float(size["best_gbps"]) for size in dram_probe)
+    plt = pyplot()
     fig, ax = plt.subplots(figsize=(8, 4.5))
     resident = [case for case in cases if _path(case) == "cuda-resident"]
     if not resident:

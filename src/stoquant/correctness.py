@@ -13,7 +13,13 @@ import numpy as np
 
 from stoquant.design import BenchPath, build_paths
 from stoquant.oracle import HEADER_STRUCT, decode_record, fp64_error_bounds, reference_fp64
-from stoquant.runner import DEFAULT_COMPRESSION_SEED, compress_args, k1_args
+from stoquant.runner import (
+    DEFAULT_COMPRESSION_SEED,
+    REAL_BENCH_PROCESS,
+    BenchProcess,
+    compress_args,
+    k1_args,
+)
 
 
 class CorrectnessFailure(Exception):
@@ -37,12 +43,13 @@ class RecordRun:
     tensor_id: int
     invocation_id: int
     k1: str
+    process: BenchProcess = REAL_BENCH_PROCESS
 
     def record_path(self, name: str) -> Path:
         return self.tmp_dir / f"{name}_b{self.bits}_n{self.count}.msq"
 
     def compress(self, backend: str, output: Path) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        return self.process.run(
             compress_args(
                 self.binary,
                 self.input_path,
@@ -54,15 +61,12 @@ class RecordRun:
                 backend=backend,
                 k1=self.k1,
             ),
-            capture_output=True,
-            text=True,
-            check=False,
         )
 
     def bench(
         self, backend: str, output: Path, extra_args: Sequence[str] = ()
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        return self.process.run(
             [
                 str(self.binary),
                 "bench",
@@ -87,9 +91,6 @@ class RecordRun:
                 "--reps",
                 "1",
             ],
-            capture_output=True,
-            text=True,
-            check=False,
         )
 
 
@@ -105,7 +106,7 @@ def verify_correctness(
     tensor_id: int = 0,
     invocation_id: int = 0,
     tmp_dir: Path,
-    force_fail: bool = False,
+    process: BenchProcess = REAL_BENCH_PROCESS,
     k1: str = "reference",
 ) -> tuple[bool, dict[str, Any]]:
     """Gating check before timing each case.
@@ -118,16 +119,6 @@ def verify_correctness(
     """
     if paths is None:
         paths = build_paths(backends)
-    if force_fail:
-        return False, {
-            "status": "failed",
-            "byte_identical_to_compress": False,
-            "cpu_cuda_byte_identical": False,
-            "layer2_scale_within_bound": False,
-            "layer2_reconstruction_within_bound": False,
-            "error_message": "Forced failure for testing verification gate",
-        }
-
     run = RecordRun(
         binary=binary,
         input_path=input_path,
@@ -138,6 +129,7 @@ def verify_correctness(
         tensor_id=tensor_id,
         invocation_id=invocation_id,
         k1=k1,
+        process=process,
     )
     try:
         cpu_comp_bytes, cpu_bench_bytes = check_cpu_reference(run)
@@ -149,6 +141,13 @@ def verify_correctness(
         return True, check_fp64_bounds(run, cpu_bench_bytes)
     except CorrectnessFailure as failure:
         return False, failure.details
+    except subprocess.TimeoutExpired:
+        return False, {"status": "failed", "error_message": "stoquant bench timed out"}
+    except OSError as exc:
+        return False, {
+            "status": "failed",
+            "error_message": f"stoquant bench could not start: {exc}",
+        }
 
 
 def check_cpu_reference(run: RecordRun) -> tuple[bytes, bytes]:
