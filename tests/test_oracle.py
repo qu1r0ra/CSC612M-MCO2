@@ -4,10 +4,12 @@ import pytest
 from stoquant.oracle import (
     compress_record_fp32,
     decode_record,
+    fp64_error_bounds,
     philox4x32_10,
     philox_block,
     philox_words,
     scale_fp32,
+    signed_limit_for,
 )
 
 
@@ -104,3 +106,24 @@ def test_fp32_oracle_serializes_and_decodes_4bit_prescribed_word_record():
     assert decoded[0] == -2.0
     assert decoded[2] == 0.0
     assert decoded[4] == 2.0
+
+
+def test_signed_limit_is_one_spec_for_supported_widths():
+    assert signed_limit_for(4) == 7
+    assert signed_limit_for(8) == 127
+    with pytest.raises(ValueError, match="unsupported bit width"):
+        signed_limit_for(6)
+
+
+@pytest.mark.parametrize(
+    ("count", "scale"), [(0, 1.0), (4, 0.0), (4, float("nan")), (4, float("inf"))]
+)
+def test_fp64_error_bounds_reject_empty_zero_and_nonfinite_input(count, scale):
+    with pytest.raises(ValueError, match="undefined"):
+        fp64_error_bounds(count, 8, scale)
+
+
+def test_fp64_error_bounds_are_positive_and_shrink_with_wider_codes():
+    scale_bound, recon8 = fp64_error_bounds(1 << 14, 8, 3.0)
+    _, recon4 = fp64_error_bounds(1 << 14, 4, 3.0)
+    assert 0 < scale_bound < recon8 < recon4

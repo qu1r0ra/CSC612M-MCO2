@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 
 from stoquant.design import BenchPath, build_paths
-from stoquant.oracle import HEADER_STRUCT, decode_record, reference_fp64
+from stoquant.oracle import HEADER_STRUCT, decode_record, fp64_error_bounds, reference_fp64
 from stoquant.runner import DEFAULT_COMPRESSION_SEED, compress_args, k1_args
 
 
@@ -308,20 +308,22 @@ def check_fp64_bounds(run: RecordRun, cpu_bench_bytes: bytes) -> dict[str, Any]:
     header = HEADER_STRUCT.unpack_from(cpu_bench_bytes)
     fp32_scale = header[5]
 
-    block_count = (count + 255) // 256
-    operations = 12 + (block_count - 1).bit_length()
-    unit_roundoff = 2.0**-24
-    epsilon = operations * unit_roundoff / (1.0 - operations * unit_roundoff)
-    epsilon += 4 * count * 2.0**-149 + 2.0**-149 / (2.0 * fp64_scale)
+    try:
+        scale_bound, reconstruction_bound = fp64_error_bounds(count, bits, fp64_scale)
+    except ValueError as exc:
+        raise CorrectnessFailure(
+            {
+                "status": "failed",
+                "byte_identical_to_compress": True,
+                "cpu_cuda_byte_identical": True,
+                "layer2_scale_within_bound": False,
+                "layer2_reconstruction_within_bound": False,
+                "error_message": f"Layer 2 bound check failed: {exc}",
+            }
+        ) from exc
 
     scale_diff = abs(fp32_scale - fp64_scale)
-    scale_bound = fp64_scale * epsilon
     scale_ok = scale_diff <= scale_bound
-
-    s = 7 if bits == 4 else 127
-    reconstruction_bound = fp64_scale * (
-        2.0 / s + 2.0 * epsilon / (1.0 - epsilon) + 5.0 * unit_roundoff
-    )
     max_recon_error = float(np.max(np.abs(decoded.astype(np.float64) - fp64_decoded)))
     reconstruction_ok = max_recon_error <= reconstruction_bound
 

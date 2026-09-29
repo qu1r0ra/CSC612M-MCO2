@@ -15,11 +15,19 @@ _PHILOX_M1 = np.uint64(0xCD9E8D57)
 _PHILOX_W0 = 0x9E3779B9
 _PHILOX_W1 = 0xBB67AE85
 _BLOCK_SIZE = 256
-_BITS = 8
-_SIGNED_LIMIT = 127
+SIGNED_LIMITS = {4: 7, 8: 127}
+_SIGNED_LIMIT = SIGNED_LIMITS[8]
 HEADER_STRUCT = struct.Struct("<4sBBHQf")
 _MAGIC = b"MSQ1"
 _VERSION = 1
+
+
+def signed_limit_for(bits: int) -> int:
+    """The largest signed magnitude level of a supported bit width."""
+    try:
+        return SIGNED_LIMITS[bits]
+    except (KeyError, TypeError):
+        raise ValueError("unsupported bit width; supported widths are 4 and 8") from None
 
 
 def _unsigned(value: int, bits: int, name: str) -> int:
@@ -229,9 +237,7 @@ def compress_record_fp32(
 ) -> bytes:
     """Return an 8-bit or 4-bit record, using either the mapped stream or prescribed words."""
     bits = _unsigned(bits, 8, "bits")
-    if bits not in (4, 8):
-        raise ValueError("unsupported bit width; supported widths are 4 and 8")
-    signed_limit = 7 if bits == 4 else 127
+    signed_limit = signed_limit_for(bits)
     array = _values_fp32(values)
     scale32 = _resolve_scale_fp32(array, scale)
     random_words = _resolve_words(
@@ -264,9 +270,7 @@ def reference_fp64(
 ) -> tuple[float, np.ndarray]:
     """Return the FP64 scale and reconstruction for the same logical RNG stream."""
     bits = _unsigned(bits, 8, "bits")
-    if bits not in (4, 8):
-        raise ValueError("unsupported bit width; supported widths are 4 and 8")
-    signed_limit = 7 if bits == 4 else 127
+    signed_limit = signed_limit_for(bits)
     array = _values_fp32(values).astype(np.float64)
     scale = scale_fp64(array.astype(np.float32))
     random_words = _resolve_words(
@@ -296,8 +300,7 @@ def decode_record(record: bytes | bytearray | memoryview) -> np.ndarray:
         raise ValueError("bad record magic")
     if version != _VERSION:
         raise ValueError("unsupported record version")
-    if bits not in (4, 8):
-        raise ValueError("unsupported bit width; supported widths are 4 and 8")
+    signed_limit = signed_limit_for(bits)
     if reserved != 0:
         raise ValueError("reserved header bytes must be zero")
     expected_payload_length = (count + 1) // 2 if bits == 4 else count
@@ -306,7 +309,6 @@ def decode_record(record: bytes | bytearray | memoryview) -> np.ndarray:
     if not math.isfinite(scale) or scale < 0:
         raise ValueError("scale must be finite and non-negative")
 
-    signed_limit = 7 if bits == 4 else 127
     if bits == 8:
         codes = np.frombuffer(data, dtype=np.uint8, count=count, offset=HEADER_STRUCT.size)
     else:
@@ -332,3 +334,26 @@ def decode_record(record: bytes | bytearray | memoryview) -> np.ndarray:
     signed = codes.astype(np.int16) - signed_limit
     fractions = np.divide(signed.astype(np.float32), np.float32(signed_limit))
     return np.multiply(fractions, np.float32(scale))
+
+
+def fp64_error_bounds(count: int, bits: int, fp64_scale: float) -> tuple[float, float]:
+    """Layer 2 bounds on the FP32 scale error and on the reconstruction error.
+
+    Both are relative to the FP64 scale, so an empty input or a zero scale has no
+    bound and is rejected.
+    """
+    if count < 1:
+        raise ValueError("the FP64 error bound is undefined for empty input")
+    if not math.isfinite(fp64_scale) or fp64_scale <= 0:
+        raise ValueError("the FP64 error bound is undefined for a zero or non-finite scale")
+    s = signed_limit_for(bits)
+    block_count = (count + _BLOCK_SIZE - 1) // _BLOCK_SIZE
+    operations = 12 + (block_count - 1).bit_length()
+    unit_roundoff = 2.0**-24
+    epsilon = operations * unit_roundoff / (1.0 - operations * unit_roundoff)
+    epsilon += 4 * count * 2.0**-149 + 2.0**-149 / (2.0 * fp64_scale)
+    scale_bound = fp64_scale * epsilon
+    reconstruction_bound = fp64_scale * (
+        2.0 / s + 2.0 * epsilon / (1.0 - epsilon) + 5.0 * unit_roundoff
+    )
+    return scale_bound, reconstruction_bound
