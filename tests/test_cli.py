@@ -832,3 +832,62 @@ def test_cpu_avx2_bench_rejects_boundary(tmp_path, boundary):
     assert result.returncode != 0
     assert "invalid argument" in result.stderr
     assert result.stdout == ""
+
+
+_BAD_INTEGERS = [" 1", "+1", " -1", "-1", "0x1", "010x", "1 ", "", "1.0"]
+
+
+@pytest.mark.parametrize("text", _BAD_INTEGERS)
+@pytest.mark.parametrize(
+    ("command", "option"),
+    [
+        ("compress", "--seed"),
+        ("compress", "--tensor-id"),
+        ("compress", "--invocation-id"),
+        ("compress", "--bits"),
+        ("bench", "--seed"),
+        ("bench", "--tensor-id"),
+        ("bench", "--invocation-id"),
+        ("bench", "--bits"),
+        ("bench", "--warmup"),
+        ("bench", "--reps"),
+        ("expect", "--seeds"),
+        ("expect", "--seed-start"),
+        ("expect", "--tensor-id"),
+        ("expect", "--invocation-id"),
+        ("expect", "--bits"),
+    ],
+)
+def test_integer_options_are_decimal_digits_only(tmp_path, command, option, text):
+    input_path = tmp_path / "input.f32"
+    output_path = tmp_path / "out.bin"
+    _write_f32(input_path, np.asarray([1.0, -0.5], dtype=np.float32))
+    arguments = ["--input", str(input_path)]
+    if command != "bench":
+        arguments += ["--output", str(output_path)]
+    if command == "expect":
+        arguments += ["--seeds", "2"]
+    else:
+        arguments += ["--seed", "1"]
+    # The probed option comes last so it overrides the valid default above.
+    result = _run(command, *arguments, option, text)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert not output_path.exists()
+
+
+def test_integer_options_accept_plain_decimal(tmp_path):
+    result, _ = _expect(
+        tmp_path, np.asarray([1.0, -0.5], dtype=np.float32), "--seeds", "2", "--bits", "8"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_cpu_bench_rejects_timings(tmp_path):
+    input_path = tmp_path / "input.f32"
+    _write_f32(input_path, np.ones(3, dtype=np.float32))
+    result = _run("bench", "--input", str(input_path), "--seed", "1", "--timings")
+
+    assert result.returncode != 0
+    assert result.stdout == ""

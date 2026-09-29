@@ -4,11 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "bench_types.h"
 #include "codec.h"
+#include "cuda_limits.h"
 #include "sq_rng.h"
-
-#define SQ_CUDA_MAX_BLOCK_SIZE 1024
-#define SQ_CUDA_MAX_GRID_SIZE 65535
 
 /* Grid for a launch over `work` items. Kernels are grid-stride loops, so
    capping the grid never skips elements. */
@@ -26,27 +25,18 @@ typedef struct {
   float d2h_ms;
 } sq_cuda_timings;
 
-typedef struct {
-  double wall_ms;
-  double k1_ms;
-  double k2_ms;
-  double k3_ms;
-  double h2d_ms;
-  double d2h_ms;
-  double cpu_ms;
-} sq_bench_sample;
-
+/* The driver's boundaries and transfer policies; the values are the neutral
+   ones the CLI parses (bench_types.h). */
 typedef enum {
-  SQ_CUDA_BENCH_RESIDENT = 0,
-  SQ_CUDA_BENCH_HOST_ORIGIN = 1,
-  SQ_CUDA_BENCH_RESIDENT_GRAPH = 2,
-  SQ_CUDA_BENCH_GPU_ORIGIN = 3
+  SQ_CUDA_BENCH_RESIDENT = SQ_BOUNDARY_RESIDENT,
+  SQ_CUDA_BENCH_HOST_ORIGIN = SQ_BOUNDARY_HOST_ORIGIN,
+  SQ_CUDA_BENCH_RESIDENT_GRAPH = SQ_BOUNDARY_RESIDENT_GRAPH,
+  SQ_CUDA_BENCH_GPU_ORIGIN = SQ_BOUNDARY_GPU_ORIGIN
 } sq_cuda_bench_boundary;
 
-/* Host buffers that a timed transfer touches: malloc or cudaHostAlloc. */
 typedef enum {
-  SQ_CUDA_TRANSFER_PAGEABLE = 0,
-  SQ_CUDA_TRANSFER_PINNED = 1
+  SQ_CUDA_TRANSFER_PAGEABLE = SQ_TRANSFER_PAGEABLE,
+  SQ_CUDA_TRANSFER_PINNED = SQ_TRANSFER_PINNED
 } sq_cuda_transfer_policy;
 
 /* Device-resident input for the CPU GPU-origin path, which downloads the input
@@ -57,10 +47,8 @@ typedef struct sq_cuda_staging sq_cuda_staging;
 extern "C" {
 #endif
 
-/* K1 variants (issue #23). Both write the same scale bit for bit. The
-   optimized one needs a 16-byte-aligned input (cudaMalloc pointers are) and
-   returns cudaErrorMisalignedAddress otherwise. */
-enum { SQ_CUDA_K1_REFERENCE = 0, SQ_CUDA_K1_OPTIMIZED = 1 };
+/* The optimized K1 variant needs a 16-byte-aligned input (cudaMalloc pointers
+   are) and returns cudaErrorMisalignedAddress otherwise. */
 
 /* Selects the K1 variant for every later launch in this process; the CLI
    calls it once before any CUDA work. Returns 0 or cudaErrorInvalidValue. */

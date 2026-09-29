@@ -2,14 +2,17 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+#include "bench_report.h"
 #include "byteorder.h"
+#include "cli.h"
 #include "codec.h"
 #include "quantizer.h"
 #include "quantizer_avx2.h"
-#include "quantizer_cuda.h"
 #include "rng_cpu.h"
+#ifdef SQ_ENABLE_CUDA
+#include "quantizer_cuda.h"
+#endif
 
-#include <errno.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,7 +29,11 @@
 #include <intrin.h>
 #endif
 
-#define SQ_MAX_CPU_THREADS 256
+#ifdef SQ_ENABLE_CUDA
+#define SQ_HAS_CUDA 1
+#else
+#define SQ_HAS_CUDA 0
+#endif
 
 static void usage(FILE *stream) {
   (void)fprintf(
@@ -63,96 +70,6 @@ static void usage(FILE *stream) {
       "--k1 (cuda only) picks the scale-stage kernels; both write the same "
       "bytes\n"
       "and reference is the default.\n");
-}
-
-static int read_file(const char *path, uint8_t **bytes, size_t *size) {
-  FILE *file;
-  long length;
-  uint8_t *buffer = NULL;
-  size_t read_count;
-
-  *bytes = NULL;
-  *size = 0;
-  file = fopen(path, "rb");
-  if (file == NULL) {
-    return 0;
-  }
-  if (fseek(file, 0, SEEK_END) != 0) {
-    goto fail;
-  }
-  length = ftell(file);
-  if (length < 0 || (uintmax_t)length > (uintmax_t)SIZE_MAX) {
-    goto fail;
-  }
-  if (fseek(file, 0, SEEK_SET) != 0) {
-    goto fail;
-  }
-  if (length != 0) {
-    buffer = (uint8_t *)malloc((size_t)length);
-    if (buffer == NULL) {
-      goto fail;
-    }
-    read_count = fread(buffer, 1, (size_t)length, file);
-    if (read_count != (size_t)length) {
-      goto fail;
-    }
-  }
-  if (fclose(file) != 0) {
-    free(buffer);
-    return 0;
-  }
-  *bytes = buffer;
-  *size = (size_t)length;
-  return 1;
-
-fail:
-  free(buffer);
-  (void)fclose(file);
-  return 0;
-}
-
-static int write_file(const char *path, const uint8_t *bytes, size_t size) {
-  FILE *file = fopen(path, "wb");
-  int ok;
-
-  if (file == NULL) {
-    return 0;
-  }
-  ok = size == 0 || fwrite(bytes, 1, size, file) == size;
-  if (fclose(file) != 0) {
-    ok = 0;
-  }
-  return ok;
-}
-
-static int parse_u64(const char *text, uint64_t *value) {
-  char *end;
-  unsigned long long parsed;
-
-  if (text[0] == '\0' || text[0] == '-') {
-    return 0;
-  }
-  errno = 0;
-  parsed = strtoull(text, &end, 0);
-  if (errno == ERANGE || end == text || *end != '\0') {
-    return 0;
-  }
-  *value = (uint64_t)parsed;
-  return 1;
-}
-
-static int parse_scale(const char *text, float *scale) {
-  char *end;
-  float parsed;
-
-  errno = 0;
-  parsed = strtof(text, &end);
-  if (errno == ERANGE || end == text || *end != '\0' || !isfinite(parsed) ||
-      parsed < 0.0f) {
-    return 0;
-  }
-  *scale = parsed;
-  return 1;
 }
 
 /* Checked here, outside the /arch:AVX2 translation unit: CPU support plus
@@ -202,32 +119,12 @@ static int default_thread_count(void) {
   return count > SQ_MAX_CPU_THREADS ? SQ_MAX_CPU_THREADS : (int)count;
 }
 
-static int parse_threads(const char *text, uint64_t *threads) {
-  return parse_u64(text, threads) && *threads != 0 &&
-         *threads <= SQ_MAX_CPU_THREADS;
-}
-
-static int parse_k1(const char *text, int *variant) {
-  if (strcmp(text, "reference") == 0) {
-    *variant = SQ_CUDA_K1_REFERENCE;
-  } else if (strcmp(text, "optimized") == 0) {
-    *variant = SQ_CUDA_K1_OPTIMIZED;
-  } else {
-    return 0;
-  }
-  return 1;
-}
-
-static const char *k1_name(int variant) {
-  return variant == SQ_CUDA_K1_OPTIMIZED ? "optimized" : "reference";
-}
-
 /* Sets *threads to 0 for the scalar comparator, else to the requested AVX2 team
  * size. */
-static sq_status resolve_cpu_threads(const char *backend, int threads_seen,
+static sq_status resolve_cpu_threads(sq_backend backend, int threads_seen,
                                      uint64_t requested, int *threads) {
   *threads = 0;
-  if (strcmp(backend, "cpu-avx2") != 0) {
+  if (backend != SQ_BACKEND_CPU_AVX2) {
     return threads_seen ? SQ_ERR_ARGUMENT : SQ_OK;
   }
   if (!cpu_has_avx2()) {
@@ -235,15 +132,6 @@ static sq_status resolve_cpu_threads(const char *backend, int threads_seen,
   }
   *threads = threads_seen ? (int)requested : default_thread_count();
   return SQ_OK;
-}
-
-static int is_backend(const char *name) {
-  return strcmp(name, "cpu") == 0 || strcmp(name, "cpu-avx2") == 0 ||
-         strcmp(name, "cuda") == 0;
-}
-
-static int is_cpu_backend(const char *name) {
-  return strcmp(name, "cpu") == 0 || strcmp(name, "cpu-avx2") == 0;
 }
 
 /* One CPU compression; threads 0 runs the scalar comparator, otherwise the AVX2
@@ -280,14 +168,12 @@ static sq_status cpu_encode_payload(uint8_t bits, const float *values,
 }
 
 static sq_status compress_file(int argc, char **argv) {
-  const char *input_path = NULL, *output_path = NULL, *words_path = NULL;
-  const char *backend = "cpu";
-  uint64_t seed = 0, tensor_id = 0, invocation_id = 0, bits = SQ_Q8_BITS;
-  uint64_t block_size = 256, grid_size = 0, requested_threads = 0;
-  float prescribed_scale = 0.0f, scale;
-  int seed_seen = 0, scale_seen = 0, timings_seen = 0, threads_seen = 0;
-  int block_size_seen = 0, grid_size_seen = 0, threads, i;
-  int k1 = SQ_CUDA_K1_REFERENCE, k1_seen = 0;
+  sq_options options;
+  const char *input_path, *output_path, *words_path;
+  const char *backend;
+  uint64_t seed, tensor_id, invocation_id, bits;
+  float prescribed_scale, scale;
+  int scale_seen, threads;
   uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
   float *values = NULL, *scale_partials = NULL;
   uint32_t *words = NULL;
@@ -296,96 +182,26 @@ static sq_status compress_file(int argc, char **argv) {
   sq_rng_stream stream;
   sq_status status;
 
-  for (i = 2; i < argc; i++) {
-    const char *option = argv[i];
-    const char *value;
-    if (strcmp(option, "--timings") == 0) {
-      timings_seen = 1;
-      continue;
-    }
-    if (i + 1 >= argc) {
-      return SQ_ERR_ARGUMENT;
-    }
-    value = argv[++i];
-    if (strcmp(option, "--input") == 0) {
-      input_path = value;
-    } else if (strcmp(option, "--output") == 0) {
-      output_path = value;
-    } else if (strcmp(option, "--words") == 0) {
-      words_path = value;
-    } else if (strcmp(option, "--seed") == 0) {
-      seed_seen = parse_u64(value, &seed);
-      if (!seed_seen) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--tensor-id") == 0) {
-      if (!parse_u64(value, &tensor_id)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--invocation-id") == 0) {
-      if (!parse_u64(value, &invocation_id)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--bits") == 0) {
-      if (!parse_u64(value, &bits)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--scale") == 0) {
-      scale_seen = parse_scale(value, &prescribed_scale);
-      if (!scale_seen) {
-        return SQ_ERR_SCALE;
-      }
-    } else if (strcmp(option, "--backend") == 0) {
-      if (!is_backend(value)) {
-        return SQ_ERR_ARGUMENT;
-      }
-      backend = value;
-    } else if (strcmp(option, "--threads") == 0) {
-      threads_seen = parse_threads(value, &requested_threads);
-      if (!threads_seen) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--block-size") == 0) {
-      if (!parse_u64(value, &block_size) || block_size == 0 ||
-          block_size > 1024) {
-        return SQ_ERR_ARGUMENT;
-      }
-      block_size_seen = 1;
-    } else if (strcmp(option, "--grid-size") == 0) {
-      if (!parse_u64(value, &grid_size) || grid_size == 0 ||
-          grid_size > 65535) {
-        return SQ_ERR_ARGUMENT;
-      }
-      grid_size_seen = 1;
-    } else if (strcmp(option, "--k1") == 0) {
-      k1_seen = parse_k1(value, &k1);
-      if (!k1_seen) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else {
-      return SQ_ERR_ARGUMENT;
-    }
+  status = sq_cli_parse(SQ_COMMAND_COMPRESS, argc, argv, &options);
+  if (status == SQ_OK) {
+    status = sq_cli_validate(SQ_COMMAND_COMPRESS, &options, SQ_HAS_CUDA);
   }
-  if (input_path == NULL || output_path == NULL || !seed_seen) {
-    return SQ_ERR_ARGUMENT;
+  if (status != SQ_OK) {
+    return status;
   }
-  if (bits != SQ_Q4_BITS && bits != SQ_Q8_BITS) {
-    return SQ_ERR_BIT_WIDTH;
-  }
-  if ((block_size_seen || grid_size_seen || k1_seen) &&
-      strcmp(backend, "cuda") != 0) {
-    return SQ_ERR_ARGUMENT;
-  }
-  if (timings_seen && strcmp(backend, "cuda") != 0) {
-    return SQ_ERR_TIMINGS_BACKEND;
-  }
-#ifndef SQ_ENABLE_CUDA
-  if (strcmp(backend, "cuda") == 0) {
-    return SQ_ERR_CUDA_UNAVAILABLE;
-  }
-#endif
-  status =
-      resolve_cpu_threads(backend, threads_seen, requested_threads, &threads);
+  input_path = options.input_path;
+  output_path = options.output_path;
+  words_path = options.words_path;
+  backend = sq_backend_name(options.backend);
+  seed = options.seed;
+  tensor_id = options.tensor_id;
+  invocation_id = options.invocation_id;
+  bits = options.bits;
+  scale_seen = (options.seen & SQ_SEEN_SCALE) != 0;
+  prescribed_scale = options.scale;
+  status = resolve_cpu_threads(options.backend,
+                               (options.seen & SQ_SEEN_THREADS) != 0,
+                               options.threads, &threads);
   if (status != SQ_OK) {
     return status;
   }
@@ -393,7 +209,7 @@ static sq_status compress_file(int argc, char **argv) {
     return SQ_ERR_ID_OVERFLOW;
   }
 
-  if (!read_file(input_path, &input_bytes, &input_size)) {
+  if (!sq_read_file(input_path, &input_bytes, &input_size)) {
     return SQ_ERR_IO;
   }
   if (input_size % sizeof(uint32_t) != 0) {
@@ -415,10 +231,11 @@ static sq_status compress_file(int argc, char **argv) {
   if (strcmp(backend, "cuda") == 0) {
 #ifdef SQ_ENABLE_CUDA
     sq_cuda_timings cuda_timings = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    const int timings_seen = (options.seen & SQ_SEEN_TIMINGS) != 0;
     size_t payload_size = sq_payload_size((uint8_t)bits, count);
 
     if (words_path != NULL) {
-      if (!read_file(words_path, &word_bytes, &word_size)) {
+      if (!sq_read_file(words_path, &word_bytes, &word_size)) {
         status = SQ_ERR_IO;
         goto done;
       }
@@ -440,14 +257,15 @@ static sq_status compress_file(int argc, char **argv) {
       status = SQ_ERR_MEMORY;
       goto done;
     }
-    if (sq_cuda_select_k1(k1) != 0) {
+    if (sq_cuda_select_k1(options.k1) != 0) {
       status = SQ_ERR_ARGUMENT;
       goto done;
     }
-    status = sq_cuda_compress(
-        (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
-        scale_seen, prescribed_scale, words, (int)block_size, (int)grid_size,
-        record + SQ_HEADER_SIZE, &scale, timings_seen, &cuda_timings);
+    status = sq_cuda_compress((uint8_t)bits, values, count, seed, tensor_id,
+                              invocation_id, scale_seen, prescribed_scale,
+                              words, (int)options.block_size,
+                              (int)options.grid_size, record + SQ_HEADER_SIZE,
+                              &scale, timings_seen, &cuda_timings);
     if (status != SQ_OK) {
       goto done;
     }
@@ -455,7 +273,7 @@ static sq_status compress_file(int argc, char **argv) {
     if (status != SQ_OK) {
       goto done;
     }
-    if (!write_file(output_path, record, SQ_HEADER_SIZE + payload_size)) {
+    if (!sq_write_file(output_path, record, SQ_HEADER_SIZE + payload_size)) {
       status = SQ_ERR_IO;
       goto done;
     }
@@ -501,7 +319,7 @@ static sq_status compress_file(int argc, char **argv) {
   }
 
   if (words_path != NULL) {
-    if (!read_file(words_path, &word_bytes, &word_size)) {
+    if (!sq_read_file(words_path, &word_bytes, &word_size)) {
       status = SQ_ERR_IO;
       goto done;
     }
@@ -545,7 +363,7 @@ static sq_status compress_file(int argc, char **argv) {
     if (status != SQ_OK) {
       goto done;
     }
-    if (!write_file(output_path, record, SQ_HEADER_SIZE + payload_size)) {
+    if (!sq_write_file(output_path, record, SQ_HEADER_SIZE + payload_size)) {
       status = SQ_ERR_IO;
     }
   }
@@ -629,142 +447,14 @@ static sq_status bench_cpu_compress_one(
                             record + SQ_HEADER_SIZE, threads);
 }
 
-typedef enum {
-  BENCH_SAMPLE_WALL_TIME,
-  BENCH_SAMPLE_K1_TIME,
-  BENCH_SAMPLE_K2_TIME,
-  BENCH_SAMPLE_K3_TIME,
-  BENCH_SAMPLE_H2D_TIME,
-  BENCH_SAMPLE_D2H_TIME,
-  BENCH_SAMPLE_CPU_TIME
-} sq_bench_timing_field;
-
-static void print_double_array(const sq_bench_sample *samples, uint64_t reps,
-                               sq_bench_timing_field field) {
-  uint64_t i;
-  putchar('[');
-  for (i = 0; i < reps; i++) {
-    double value;
-    switch (field) {
-    case BENCH_SAMPLE_WALL_TIME:
-      value = samples[i].wall_ms;
-      break;
-    case BENCH_SAMPLE_K1_TIME:
-      value = samples[i].k1_ms;
-      break;
-    case BENCH_SAMPLE_K2_TIME:
-      value = samples[i].k2_ms;
-      break;
-    case BENCH_SAMPLE_K3_TIME:
-      value = samples[i].k3_ms;
-      break;
-    case BENCH_SAMPLE_H2D_TIME:
-      value = samples[i].h2d_ms;
-      break;
-    case BENCH_SAMPLE_D2H_TIME:
-      value = samples[i].d2h_ms;
-      break;
-    case BENCH_SAMPLE_CPU_TIME:
-      value = samples[i].cpu_ms;
-      break;
-    default:
-      value = 0.0;
-      break;
-    }
-    if (i != 0) {
-      putchar(',');
-    }
-    printf("%.9f", value);
-  }
-  putchar(']');
-}
-
-/* A step of 0 prints the base identifier for every run (resident-graph). */
-static void print_invocation_ids(uint64_t base_invocation_id, uint64_t count,
-                                 uint64_t offset, uint64_t step) {
-  uint64_t i;
-  putchar('[');
-  for (i = 0; i < count; i++) {
-    if (i != 0) {
-      putchar(',');
-    }
-    printf("%llu",
-           (unsigned long long)(base_invocation_id + (offset + i) * step));
-  }
-  putchar(']');
-}
-
-static void
-print_bench_json(const char *backend, const char *boundary,
-                 const char *transfer_policy, uint8_t bit_width, size_t count,
-                 uint64_t seed, uint64_t tensor_id, uint64_t invocation_id,
-                 uint64_t warmups, uint64_t reps, int prescribed_scale_seen,
-                 float prescribed_scale, int block_size, int grid_size,
-                 const char *k1, int team_size, size_t payload_bytes,
-                 const sq_bench_sample *samples, double capture_ms) {
-  const uint64_t id_step = strcmp(boundary, "resident-graph") == 0 ? 0 : 1;
-
-  printf("{\"configuration\":{\"backend\":\"%s\",\"bits\":%u,"
-         "\"count\":%llu,\"seed\":%llu,\"tensor_id\":%llu,"
-         "\"invocation_id\":%llu,\"warmup\":%llu,\"reps\":%llu,"
-         "\"repetition_invocation_ids\":",
-         backend, (unsigned int)bit_width, (unsigned long long)count,
-         (unsigned long long)seed, (unsigned long long)tensor_id,
-         (unsigned long long)invocation_id, (unsigned long long)warmups,
-         (unsigned long long)reps);
-  print_invocation_ids(invocation_id, reps, 0, id_step);
-  printf(",\"warmup_invocation_ids\":");
-  print_invocation_ids(invocation_id, warmups, reps, id_step);
-  printf(",\"boundary\":\"%s\",\"transfer_policy\":\"%s\","
-         "\"block_size\":%d,\"grid_size\":%d,",
-         boundary, transfer_policy, block_size, grid_size);
-  if (k1 != NULL) {
-    printf("\"k1\":\"%s\",", k1);
-  }
-  /* The team size OpenMP grants a probe region; with dynamic teams off the
-     timed regions get the same size. */
-  if (team_size != 0) {
-    printf("\"threads\":%d,", team_size);
-  }
-  printf("\"prescribed_scale\":");
-  if (prescribed_scale_seen) {
-    printf("%.9g", (double)prescribed_scale);
-  } else {
-    printf("null");
-  }
-  printf("},\"samples_ms\":");
-  print_double_array(samples, reps, BENCH_SAMPLE_WALL_TIME);
-  if (strcmp(backend, "cuda") == 0) {
-    if (strcmp(boundary, "resident-graph") != 0) {
-      printf(",\"k1_ms\":");
-      print_double_array(samples, reps, BENCH_SAMPLE_K1_TIME);
-      printf(",\"k2_ms\":");
-      print_double_array(samples, reps, BENCH_SAMPLE_K2_TIME);
-      printf(",\"k3_ms\":");
-      print_double_array(samples, reps, BENCH_SAMPLE_K3_TIME);
-      if (strcmp(boundary, "host-origin") == 0) {
-        printf(",\"h2d_ms\":");
-        print_double_array(samples, reps, BENCH_SAMPLE_H2D_TIME);
-      }
-      if (strcmp(boundary, "host-origin") == 0 ||
-          strcmp(boundary, "gpu-origin") == 0) {
-        printf(",\"d2h_ms\":");
-        print_double_array(samples, reps, BENCH_SAMPLE_D2H_TIME);
-      }
-    } else {
-      printf(",\"capture_and_instantiate_ms\":%.6f", capture_ms);
-    }
-  } else if (strcmp(boundary, "gpu-origin") == 0) {
-    printf(",\"d2h_ms\":");
-    print_double_array(samples, reps, BENCH_SAMPLE_D2H_TIME);
-    printf(",\"cpu_ms\":");
-    print_double_array(samples, reps, BENCH_SAMPLE_CPU_TIME);
-  }
-  printf(",\"header_bytes\":%d,\"payload_bytes\":%llu}\n", SQ_HEADER_SIZE,
-         (unsigned long long)payload_bytes);
-}
-
 #ifdef SQ_ENABLE_CUDA
+/* Boundaries without timed transfers carry SQ_TRANSFER_NONE; the driver
+   still takes a policy and expects pageable. */
+static sq_cuda_transfer_policy cuda_transfer_policy(sq_transfer_policy policy) {
+  return policy == SQ_TRANSFER_PINNED ? SQ_CUDA_TRANSFER_PINNED
+                                      : SQ_CUDA_TRANSFER_PAGEABLE;
+}
+
 /*
  * GPU-origin CPU path: the input starts on the device. Each run times one full
  * D2H into the landing buffer (d2h_ms), then CPU compression from it (cpu_ms).
@@ -797,7 +487,7 @@ static sq_status bench_cpu_gpu_origin(
   if (status != SQ_OK) {
     goto done;
   }
-  if (output_path != NULL && !write_file(output_path, record, record_size)) {
+  if (output_path != NULL && !sq_write_file(output_path, record, record_size)) {
     status = SQ_ERR_IO;
     goto done;
   }
@@ -847,164 +537,58 @@ done:
 #endif
 
 static sq_status bench_file(int argc, char **argv) {
-  const char *input_path = NULL, *output_path = NULL, *words_path = NULL;
-  const char *backend = "cpu", *boundary_name = "host-origin";
-  const char *transfer_policy_name = "pageable";
+  sq_options options;
+  const sq_legality *legality;
+  const char *input_path, *output_path, *words_path;
   double capture_ms = 0.0;
-  uint64_t seed = 0, tensor_id = 0, invocation_id = 0;
-  uint64_t bits = SQ_Q8_BITS, block_size = 256, grid_size = 0;
-  uint64_t warmups = 10, reps = 30, total_runs, requested_threads = 0;
-  float prescribed_scale = 0.0f;
+  uint64_t seed, tensor_id, invocation_id;
+  uint64_t bits, block_size, grid_size;
+  uint64_t warmups, reps, total_runs;
+  float prescribed_scale;
 #ifdef SQ_ENABLE_CUDA
   float scale;
 #endif
-  int seed_seen = 0, scale_seen = 0, boundary_seen = 0, policy_seen = 0;
-  int threads_seen = 0, threads, team_size = 0, cpu_gpu_origin;
-  int transfers;
-  int block_size_seen = 0, grid_size_seen = 0, i;
-  int k1 = SQ_CUDA_K1_REFERENCE, k1_seen = 0;
+  int scale_seen, threads, team_size = 0, cpu_gpu_origin;
+  int k1;
   uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
   float *values = NULL, *scale_partials = NULL;
   uint32_t *words = NULL, *generated_words = NULL;
   sq_bench_sample *samples = NULL;
+  sq_bench_result result;
   size_t input_size = 0, word_size = 0, count = 0, payload_bytes;
   size_t record_size, scale_partial_count;
   bench_clock_frequency clock_frequency;
-  sq_status status = SQ_ERR_ARGUMENT;
+  sq_status status;
 
-  for (i = 2; i < argc; i++) {
-    const char *option = argv[i];
-    const char *value;
-
-    if (strcmp(option, "--timings") == 0) {
-      continue;
-    }
-    if (i + 1 >= argc) {
-      return SQ_ERR_ARGUMENT;
-    }
-    value = argv[++i];
-    if (strcmp(option, "--input") == 0) {
-      input_path = value;
-    } else if (strcmp(option, "--output") == 0 ||
-               strcmp(option, "--record-output") == 0) {
-      output_path = value;
-    } else if (strcmp(option, "--words") == 0) {
-      words_path = value;
-    } else if (strcmp(option, "--seed") == 0) {
-      seed_seen = parse_u64(value, &seed);
-      if (!seed_seen) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--tensor-id") == 0) {
-      if (!parse_u64(value, &tensor_id)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--invocation-id") == 0) {
-      if (!parse_u64(value, &invocation_id)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--bits") == 0) {
-      if (!parse_u64(value, &bits)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--scale") == 0) {
-      scale_seen = parse_scale(value, &prescribed_scale);
-      if (!scale_seen) {
-        return SQ_ERR_SCALE;
-      }
-    } else if (strcmp(option, "--backend") == 0) {
-      if (!is_backend(value)) {
-        return SQ_ERR_ARGUMENT;
-      }
-      backend = value;
-    } else if (strcmp(option, "--threads") == 0) {
-      threads_seen = parse_threads(value, &requested_threads);
-      if (!threads_seen) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--boundary") == 0) {
-      if (strcmp(value, "resident") != 0 &&
-          strcmp(value, "resident-graph") != 0 &&
-          strcmp(value, "host-origin") != 0 &&
-          strcmp(value, "gpu-origin") != 0) {
-        return SQ_ERR_ARGUMENT;
-      }
-      boundary_name = value;
-      boundary_seen = 1;
-    } else if (strcmp(option, "--transfer-policy") == 0) {
-      if (strcmp(value, "pageable") != 0 && strcmp(value, "pinned") != 0) {
-        return SQ_ERR_ARGUMENT;
-      }
-      transfer_policy_name = value;
-      policy_seen = 1;
-    } else if (strcmp(option, "--warmup") == 0) {
-      if (!parse_u64(value, &warmups)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--reps") == 0) {
-      if (!parse_u64(value, &reps)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--block-size") == 0) {
-      if (!parse_u64(value, &block_size) || block_size == 0 ||
-          block_size > SQ_CUDA_MAX_BLOCK_SIZE) {
-        return SQ_ERR_ARGUMENT;
-      }
-      block_size_seen = 1;
-    } else if (strcmp(option, "--grid-size") == 0) {
-      if (!parse_u64(value, &grid_size) || grid_size == 0 ||
-          grid_size > SQ_CUDA_MAX_GRID_SIZE) {
-        return SQ_ERR_ARGUMENT;
-      }
-      grid_size_seen = 1;
-    } else if (strcmp(option, "--k1") == 0) {
-      k1_seen = parse_k1(value, &k1);
-      if (!k1_seen) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else {
-      return SQ_ERR_ARGUMENT;
-    }
+  status = sq_cli_parse(SQ_COMMAND_BENCH, argc, argv, &options);
+  if (status == SQ_OK) {
+    status = sq_cli_validate(SQ_COMMAND_BENCH, &options, SQ_HAS_CUDA);
   }
-
-  if (input_path == NULL || !seed_seen || reps == 0) {
-    return SQ_ERR_ARGUMENT;
-  }
-  if (bits != SQ_Q4_BITS && bits != SQ_Q8_BITS) {
-    return SQ_ERR_BIT_WIDTH;
-  }
-  /*
-   * The scalar CPU backend accepts only the GPU-origin boundary; host-host is
-   * its default. The AVX2 comparator runs host-host only.
-   */
-  if (is_cpu_backend(backend) &&
-      (block_size_seen || grid_size_seen || k1_seen ||
-       (boundary_seen && strcmp(boundary_name, "gpu-origin") != 0) ||
-       (boundary_seen && strcmp(backend, "cpu-avx2") == 0))) {
-    return SQ_ERR_ARGUMENT;
-  }
-  if (is_cpu_backend(backend) && !boundary_seen) {
-    boundary_name = "host-host";
-  }
-  transfers = strcmp(boundary_name, "host-origin") == 0 ||
-              strcmp(boundary_name, "gpu-origin") == 0;
-  if (policy_seen && !transfers) {
-    return SQ_ERR_ARGUMENT;
-  }
-  if (!transfers) {
-    transfer_policy_name = "none";
-  }
-#ifndef SQ_ENABLE_CUDA
-  if (strcmp(backend, "cuda") == 0 ||
-      strcmp(boundary_name, "gpu-origin") == 0) {
-    return SQ_ERR_CUDA_UNAVAILABLE;
-  }
-#endif
-  status =
-      resolve_cpu_threads(backend, threads_seen, requested_threads, &threads);
   if (status != SQ_OK) {
     return status;
   }
+  legality = sq_cli_legality(options.backend, options.boundary);
+  input_path = options.input_path;
+  output_path = options.output_path;
+  words_path = options.words_path;
+  seed = options.seed;
+  tensor_id = options.tensor_id;
+  invocation_id = options.invocation_id;
+  bits = options.bits;
+  block_size = options.block_size;
+  grid_size = options.grid_size;
+  warmups = options.warmups;
+  reps = options.reps;
+  k1 = options.k1;
+  scale_seen = (options.seen & SQ_SEEN_SCALE) != 0;
+  prescribed_scale = options.scale;
+  status = resolve_cpu_threads(options.backend,
+                               (options.seen & SQ_SEEN_THREADS) != 0,
+                               options.threads, &threads);
+  if (status != SQ_OK) {
+    return status;
+  }
+
   if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX ||
       warmups > UINT64_MAX - reps) {
     return SQ_ERR_ID_OVERFLOW;
@@ -1018,7 +602,7 @@ static sq_status bench_file(int argc, char **argv) {
     return SQ_ERR_MEMORY;
   }
 
-  if (!read_file(input_path, &input_bytes, &input_size)) {
+  if (!sq_read_file(input_path, &input_bytes, &input_size)) {
     return SQ_ERR_IO;
   }
   if (input_size % sizeof(uint32_t) != 0) {
@@ -1061,7 +645,7 @@ static sq_status bench_file(int argc, char **argv) {
   }
   sq_load_f32_array_le(values, input_bytes, count);
   if (words_path != NULL) {
-    if (!read_file(words_path, &word_bytes, &word_size)) {
+    if (!sq_read_file(words_path, &word_bytes, &word_size)) {
       status = SQ_ERR_IO;
       goto done;
     }
@@ -1081,9 +665,9 @@ static sq_status bench_file(int argc, char **argv) {
     goto done;
   }
 
-  cpu_gpu_origin =
-      strcmp(backend, "cpu") == 0 && strcmp(boundary_name, "gpu-origin") == 0;
-  if (is_cpu_backend(backend) && !cpu_gpu_origin) {
+  cpu_gpu_origin = options.backend == SQ_BACKEND_CPU &&
+                   options.boundary == SQ_BOUNDARY_GPU_ORIGIN;
+  if (options.backend != SQ_BACKEND_CUDA && !cpu_gpu_origin) {
     if (threads != 0) {
       team_size = sq_avx2_team_size(threads);
     }
@@ -1094,7 +678,8 @@ static sq_status bench_file(int argc, char **argv) {
     if (status != SQ_OK) {
       goto done;
     }
-    if (output_path != NULL && !write_file(output_path, record, record_size)) {
+    if (output_path != NULL &&
+        !sq_write_file(output_path, record, record_size)) {
       status = SQ_ERR_IO;
       goto done;
     }
@@ -1134,9 +719,8 @@ static sq_status bench_file(int argc, char **argv) {
         (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
         scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
         generated_words, scale_partials, scale_partial_count,
-        strcmp(transfer_policy_name, "pinned") == 0 ? SQ_CUDA_TRANSFER_PINNED
-                                                    : SQ_CUDA_TRANSFER_PAGEABLE,
-        warmups, reps, record, output_path, record_size, samples);
+        cuda_transfer_policy(options.transfer_policy), warmups, reps, record,
+        output_path, record_size, samples);
     if (status != SQ_OK) {
       goto done;
     }
@@ -1146,18 +730,13 @@ static sq_status bench_file(int argc, char **argv) {
       status = SQ_ERR_ARGUMENT;
       goto done;
     }
-    status = sq_cuda_bench(
-        (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
-        scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
-        (int)block_size, (int)grid_size,
-        strcmp(boundary_name, "resident") == 0 ? SQ_CUDA_BENCH_RESIDENT
-        : strcmp(boundary_name, "resident-graph") == 0
-            ? SQ_CUDA_BENCH_RESIDENT_GRAPH
-        : strcmp(boundary_name, "gpu-origin") == 0 ? SQ_CUDA_BENCH_GPU_ORIGIN
-                                                   : SQ_CUDA_BENCH_HOST_ORIGIN,
-        strcmp(transfer_policy_name, "pinned") == 0 ? SQ_CUDA_TRANSFER_PINNED
-                                                    : SQ_CUDA_TRANSFER_PAGEABLE,
-        warmups, reps, base_payload, &scale, samples, &capture_ms);
+    status =
+        sq_cuda_bench((uint8_t)bits, values, count, seed, tensor_id,
+                      invocation_id, scale_seen, prescribed_scale,
+                      words_path != NULL ? words : NULL, (int)block_size,
+                      (int)grid_size, (sq_cuda_bench_boundary)options.boundary,
+                      cuda_transfer_policy(options.transfer_policy), warmups,
+                      reps, base_payload, &scale, samples, &capture_ms);
     if (status != SQ_OK) {
       goto done;
     }
@@ -1165,19 +744,36 @@ static sq_status bench_file(int argc, char **argv) {
     if (status != SQ_OK) {
       goto done;
     }
-    if (output_path != NULL && !write_file(output_path, record, record_size)) {
+    if (output_path != NULL &&
+        !sq_write_file(output_path, record, record_size)) {
       status = SQ_ERR_IO;
       goto done;
     }
   }
 #endif
 
-  print_bench_json(backend, boundary_name, transfer_policy_name, (uint8_t)bits,
-                   count, seed, tensor_id, invocation_id, warmups, reps,
-                   scale_seen, prescribed_scale, (int)block_size,
-                   (int)grid_size,
-                   strcmp(backend, "cuda") == 0 ? k1_name(k1) : NULL, team_size,
-                   payload_bytes, samples, capture_ms);
+  result.backend = sq_backend_name(options.backend);
+  result.boundary = legality->name;
+  result.transfer_policy = sq_transfer_policy_name(options.transfer_policy);
+  result.k1 = options.backend == SQ_BACKEND_CUDA ? sq_k1_name(k1) : NULL;
+  result.columns = legality->columns;
+  result.invocation_id_step = legality->id_step;
+  result.bit_width = (uint8_t)bits;
+  result.count = count;
+  result.seed = seed;
+  result.tensor_id = tensor_id;
+  result.invocation_id = invocation_id;
+  result.warmups = warmups;
+  result.reps = reps;
+  result.prescribed_scale_seen = scale_seen;
+  result.prescribed_scale = prescribed_scale;
+  result.block_size = (int)block_size;
+  result.grid_size = (int)grid_size;
+  result.team_size = team_size;
+  result.payload_bytes = payload_bytes;
+  result.samples = samples;
+  result.capture_ms = capture_ms;
+  sq_bench_print_json(&result);
   status = SQ_OK;
 
 done:
@@ -1193,30 +789,24 @@ done:
 }
 
 static sq_status decompress_file(int argc, char **argv) {
-  const char *input_path = NULL, *output_path = NULL;
+  sq_options options;
+  const char *input_path, *output_path;
   uint8_t *record = NULL, *output = NULL;
   float *values = NULL;
   size_t record_size = 0, count = 0, output_size;
   sq_status status;
-  int argument;
 
-  for (argument = 2; argument < argc; argument++) {
-    const char *option = argv[argument];
-    if (argument + 1 >= argc) {
-      return SQ_ERR_ARGUMENT;
-    }
-    if (strcmp(option, "--input") == 0) {
-      input_path = argv[++argument];
-    } else if (strcmp(option, "--output") == 0) {
-      output_path = argv[++argument];
-    } else {
-      return SQ_ERR_ARGUMENT;
-    }
+  status = sq_cli_parse(SQ_COMMAND_DECOMPRESS, argc, argv, &options);
+  if (status == SQ_OK) {
+    status = sq_cli_validate(SQ_COMMAND_DECOMPRESS, &options, SQ_HAS_CUDA);
   }
-  if (input_path == NULL || output_path == NULL) {
-    return SQ_ERR_ARGUMENT;
+  if (status != SQ_OK) {
+    return status;
   }
-  if (!read_file(input_path, &record, &record_size)) {
+  input_path = options.input_path;
+  output_path = options.output_path;
+
+  if (!sq_read_file(input_path, &record, &record_size)) {
     return SQ_ERR_IO;
   }
   status = sq_decode_record(record, record_size, &values, &count);
@@ -1234,7 +824,7 @@ static sq_status decompress_file(int argc, char **argv) {
     goto done;
   }
   sq_store_f32_array_le(output, values, count);
-  if (!write_file(output_path, output, output_size)) {
+  if (!sq_write_file(output_path, output, output_size)) {
     status = SQ_ERR_IO;
   }
 
@@ -1263,11 +853,9 @@ static void store_f64_le(uint8_t bytes[8], double value) {
    computed scale, decodes each record, and writes per-element FP64 sums of the
    decoded values followed by per-element sums of their squares. */
 static sq_status expect_file(int argc, char **argv) {
-  const char *input_path = NULL, *output_path = NULL;
-  const char *backend = "cpu";
-  uint64_t bits = SQ_Q8_BITS, seeds = 0, seed_start = 1;
-  uint64_t tensor_id = 0, invocation_id = 0, t;
-  int seeds_seen = 0, i;
+  sq_options options;
+  const char *input_path, *output_path, *backend;
+  uint64_t bits, seeds, seed_start, tensor_id, invocation_id, t;
   uint8_t *input_bytes = NULL, *record = NULL, *output = NULL;
   float *values = NULL, *decoded = NULL;
   uint32_t *words = NULL;
@@ -1278,66 +866,26 @@ static sq_status expect_file(int argc, char **argv) {
   uint32_t scale_bits;
   sq_status status;
 
-  for (i = 2; i < argc; i++) {
-    const char *option = argv[i];
-    const char *value;
-    if (i + 1 >= argc) {
-      return SQ_ERR_ARGUMENT;
-    }
-    value = argv[++i];
-    if (strcmp(option, "--input") == 0) {
-      input_path = value;
-    } else if (strcmp(option, "--output") == 0) {
-      output_path = value;
-    } else if (strcmp(option, "--seeds") == 0) {
-      seeds_seen = parse_u64(value, &seeds) && seeds != 0;
-      if (!seeds_seen) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--seed-start") == 0) {
-      if (!parse_u64(value, &seed_start)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--tensor-id") == 0) {
-      if (!parse_u64(value, &tensor_id)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--invocation-id") == 0) {
-      if (!parse_u64(value, &invocation_id)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--bits") == 0) {
-      if (!parse_u64(value, &bits)) {
-        return SQ_ERR_ARGUMENT;
-      }
-    } else if (strcmp(option, "--backend") == 0) {
-      if (strcmp(value, "cpu") != 0 && strcmp(value, "cuda") != 0) {
-        return SQ_ERR_ARGUMENT;
-      }
-      backend = value;
-    } else {
-      return SQ_ERR_ARGUMENT;
-    }
+  status = sq_cli_parse(SQ_COMMAND_EXPECT, argc, argv, &options);
+  if (status == SQ_OK) {
+    status = sq_cli_validate(SQ_COMMAND_EXPECT, &options, SQ_HAS_CUDA);
   }
-  if (input_path == NULL || output_path == NULL || !seeds_seen) {
-    return SQ_ERR_ARGUMENT;
+  if (status != SQ_OK) {
+    return status;
   }
-  if (seed_start > UINT64_MAX - (seeds - 1)) {
-    return SQ_ERR_ARGUMENT;
-  }
-  if (bits != SQ_Q4_BITS && bits != SQ_Q8_BITS) {
-    return SQ_ERR_BIT_WIDTH;
-  }
-#ifndef SQ_ENABLE_CUDA
-  if (strcmp(backend, "cuda") == 0) {
-    return SQ_ERR_CUDA_UNAVAILABLE;
-  }
-#endif
+  input_path = options.input_path;
+  output_path = options.output_path;
+  backend = sq_backend_name(options.backend);
+  bits = options.bits;
+  seeds = options.seeds;
+  seed_start = options.seed_start;
+  tensor_id = options.tensor_id;
+  invocation_id = options.invocation_id;
   if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX) {
     return SQ_ERR_ID_OVERFLOW;
   }
 
-  if (!read_file(input_path, &input_bytes, &input_size)) {
+  if (!sq_read_file(input_path, &input_bytes, &input_size)) {
     return SQ_ERR_IO;
   }
   if (input_size == 0 || input_size % sizeof(uint32_t) != 0) {
@@ -1434,7 +982,7 @@ static sq_status expect_file(int argc, char **argv) {
     store_f64_le(output + 8 * i_size, sums[i_size]);
     store_f64_le(output + 8 * (count + i_size), squares[i_size]);
   }
-  if (!write_file(output_path, output, output_size)) {
+  if (!sq_write_file(output_path, output, output_size)) {
     status = SQ_ERR_IO;
     goto done;
   }
