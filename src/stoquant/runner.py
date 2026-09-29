@@ -7,12 +7,14 @@ import math
 import subprocess
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 DEFAULT_WARMUPS = 10
 DEFAULT_REPS = 30
 DEFAULT_COMPRESSION_SEED = 42
+DEFAULT_BENCH_TIMEOUT_SECONDS = 300
 
 # The GPU idles at low clocks; a sustained resident workload before the first
 # timed case brings it to its working clocks.
@@ -23,7 +25,50 @@ GPU_WARMUP_REPS = 100
 # repetitions for at least this long, in the same process. Warm-up in separate
 # processes does not carry over to the timed one (issue #26 diagnosis).
 DEFAULT_IN_PROCESS_WARMUP_SECONDS = 1.0
-WARMUP_PROBE_REPS = 3
+
+
+class BenchProcess(Protocol):
+    """Execute one native command without changing its arguments or environment."""
+
+    def run(
+        self, argv: Sequence[str], *, creationflags: int = 0
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+@dataclass(frozen=True)
+class RealBenchProcess:
+    timeout_seconds: float = DEFAULT_BENCH_TIMEOUT_SECONDS
+
+    def run(
+        self, argv: Sequence[str], *, creationflags: int = 0
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            list(argv),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=self.timeout_seconds,
+            creationflags=creationflags,
+        )
+
+
+@dataclass
+class FakeBenchProcess:
+    """Replay process results through the same public interface in tests."""
+
+    results: list[subprocess.CompletedProcess[str]]
+    commands: list[list[str]] = field(default_factory=list)
+
+    def run(
+        self, argv: Sequence[str], *, creationflags: int = 0
+    ) -> subprocess.CompletedProcess[str]:
+        self.commands.append(list(argv))
+        if not self.results:
+            raise AssertionError(f"No fake bench result for {list(argv)!r}")
+        return self.results.pop(0)
+
+
+REAL_BENCH_PROCESS = RealBenchProcess()
 
 
 def k1_args(backend: str, k1: str) -> list[str]:
@@ -65,7 +110,11 @@ def compress_args(
 
 
 def warm_up_gpu(
-    binary: Path, input_path: Path, seconds: float, k1: str = "reference"
+    binary: Path,
+    input_path: Path,
+    seconds: float,
+    k1: str = "reference",
+    process: BenchProcess = REAL_BENCH_PROCESS,
 ) -> dict[str, Any]:
     """Run the resident CUDA path untimed until `seconds` have passed."""
     start = time.monotonic()
@@ -81,6 +130,7 @@ def warm_up_gpu(
             seed=DEFAULT_COMPRESSION_SEED,
             warmups=0,
             reps=GPU_WARMUP_REPS,
+            process=process,
         )
         if payload is None:
             raise RuntimeError(f"GPU warm-up failed: {error}")
@@ -104,7 +154,11 @@ def run_bench_process(
     warmups: int,
     reps: int,
     k1: str = "reference",
+    creationflags: int = 0,
+    process: BenchProcess = REAL_BENCH_PROCESS,
 ) -> tuple[dict[str, Any] | None, str | None]:
+    if any(arg == "--k1" or arg.startswith("--k1=") for arg in extra_args):
+        raise ValueError("Pass the K1 variant through k1, not extra_args")
     bench_cmd = [
         str(binary),
         "bench",
@@ -127,10 +181,21 @@ def run_bench_process(
         str(reps),
         *extra_args,
     ]
-    proc = subprocess.run(bench_cmd, capture_output=True, text=True, check=False)
+    try:
+        proc = process.run(bench_cmd, creationflags=creationflags)
+    except subprocess.TimeoutExpired:
+        return None, "stoquant bench timed out"
+    except OSError as exc:
+        return None, f"stoquant bench could not start: {exc}"
     if proc.returncode != 0:
         return None, f"stoquant bench failed: {proc.stderr.strip()}"
-    return json.loads(proc.stdout), None
+    try:
+        payload = json.loads(proc.stdout)
+    except (TypeError, ValueError):
+        return None, "stoquant bench returned invalid JSON"
+    if not isinstance(payload, dict):
+        return None, "stoquant bench returned non-object JSON"
+    return payload, None
 
 
 def in_process_warmups(minimum: int, seconds: float, rep_ms: float) -> int:

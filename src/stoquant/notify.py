@@ -11,8 +11,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.parse import quote, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from stoquant import layout
 
@@ -26,6 +26,11 @@ class ConfigurationError(ValueError):
 
 class NotificationError(RuntimeError):
     """An ntfy publish request was not accepted."""
+
+
+class NoRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -75,8 +80,22 @@ def _configuration(root: Path, environ: Mapping[str, str] | None = None) -> dict
         raise ConfigurationError("NTFY_HEARTBEAT_SECONDS must be a positive integer.")
 
     server = str(values.get("NTFY_SERVER", DEFAULT_SERVER)).rstrip("/")
-    if not server.startswith(("https://", "http://")):
-        raise ConfigurationError("NTFY_SERVER must be an http or https URL.")
+    parsed = urlsplit(server)
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in ("", "/")
+        or (
+            parsed.scheme != "https"
+            and not (
+                parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+            )
+        )
+    ):
+        raise ConfigurationError("NTFY_SERVER must use https (http is allowed only for localhost).")
     return {
         "server": server,
         "topic": values["NTFY_TOPIC"].strip(),
@@ -98,7 +117,7 @@ def _publish(config: Mapping[str, str | int], title: str, message: str) -> None:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=10) as response:
+        with build_opener(NoRedirects()).open(request, timeout=10) as response:
             if not 200 <= response.status < 300:
                 raise NotificationError(f"ntfy returned HTTP {response.status}.")
     except HTTPError as exc:
@@ -278,6 +297,8 @@ def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]
     child: subprocess.Popen[bytes] | None = None
     started = time.monotonic()
     try:
+        if command[0] == "python":
+            command = [sys.executable, *command[1:]]
         child = subprocess.Popen(command, cwd=root, env=child_env)
         next_heartbeat = time.monotonic() + heartbeat_seconds
         while True:

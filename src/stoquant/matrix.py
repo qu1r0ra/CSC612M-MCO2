@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -71,6 +72,8 @@ from stoquant.runner import (
     DEFAULT_IN_PROCESS_WARMUP_SECONDS,
     DEFAULT_REPS,
     DEFAULT_WARMUPS,
+    REAL_BENCH_PROCESS,
+    BenchProcess,
     in_process_warmups,
     run_bench_process,
     warm_up_gpu,
@@ -204,7 +207,7 @@ def run_benchmark_matrix(
     gpu_warmup_seconds: float = DEFAULT_GPU_WARMUP_SECONDS,
     case_warmup_seconds: float = DEFAULT_CASE_WARMUP_SECONDS,
     in_process_warmup_seconds: float = DEFAULT_IN_PROCESS_WARMUP_SECONDS,
-    force_fail: bool = False,
+    bench_process: BenchProcess = REAL_BENCH_PROCESS,
     allow_existing: bool = False,
     allow_dirty: bool = False,
     pilot: bool = False,
@@ -327,7 +330,7 @@ def run_benchmark_matrix(
             gpu_warmup_seconds=gpu_warmup_seconds,
             case_warmup_seconds=case_warmup_seconds,
             in_process_warmup_seconds=in_process_warmup_seconds,
-            force_fail=force_fail,
+            bench_process=bench_process,
             input_family=input_family,
             model_tensors=model_tensors,
             model_limit=model_limit,
@@ -353,7 +356,7 @@ class SweepSettings:
     gpu_warmup_seconds: float
     case_warmup_seconds: float
     in_process_warmup_seconds: float
-    force_fail: bool
+    bench_process: BenchProcess
     input_family: str
     model_tensors: str | None
     model_limit: int | None
@@ -419,7 +422,7 @@ def sweep_matrix(
     gpu_warmup_seconds: float,
     case_warmup_seconds: float,
     in_process_warmup_seconds: float,
-    force_fail: bool,
+    bench_process: BenchProcess = REAL_BENCH_PROCESS,
     input_family: str = "dense",
     model_tensors: str | None = None,
     model_limit: int | None = None,
@@ -440,7 +443,7 @@ def sweep_matrix(
         gpu_warmup_seconds=gpu_warmup_seconds,
         case_warmup_seconds=case_warmup_seconds,
         in_process_warmup_seconds=in_process_warmup_seconds,
-        force_fail=force_fail,
+        bench_process=bench_process,
         input_family=input_family,
         model_tensors=model_tensors,
         model_limit=model_limit,
@@ -466,7 +469,7 @@ def sweep_matrix(
             tensor_id=0,
             invocation_id=0,
             tmp_dir=setup.temp_dir,
-            force_fail=force_fail,
+            process=bench_process,
             k1=k1,
         )
         cases = build_case_stubs(
@@ -579,7 +582,11 @@ def order_and_warm_up(setup: RunSetup, inputs: SweepInputs, settings: SweepSetti
     gpu_state_after_warmup = None
     if settings.cuda and settings.gpu_warmup_seconds > 0:
         gpu_warmup = warm_up_gpu(
-            setup.binary, inputs.files[largest_input], settings.gpu_warmup_seconds, settings.k1
+            setup.binary,
+            inputs.files[largest_input],
+            settings.gpu_warmup_seconds,
+            settings.k1,
+            settings.bench_process,
         )
         gpu_state_after_warmup = query_gpu_state()
     return SweepOrder(orders, order_labels, ordered_cases, gpu_warmup, gpu_state_after_warmup)
@@ -658,7 +665,9 @@ def warm_up_case(
     if settings.cuda and settings.case_warmup_seconds > 0:
         # Restore GPU clocks after the untimed correctness gate and any
         # long CPU processes of the previous case.
-        case_warmup = warm_up_gpu(binary, input_path, settings.case_warmup_seconds, settings.k1)
+        case_warmup = warm_up_gpu(
+            binary, input_path, settings.case_warmup_seconds, settings.k1, settings.bench_process
+        )
         case_warmup["gpu_state_after"] = query_gpu_state()
         for case in cases:
             case["case_warmup"] = case_warmup
@@ -679,11 +688,25 @@ def warm_up_case(
                 warmups=warmups,
                 reps=reps,
                 k1=settings.k1,
+                process=settings.bench_process,
             )
             if payload is None:
                 case["correctness"] = {"status": "failed", "error_message": error}
                 continue
-            probe_ms = float(np.median(payload.get("samples_ms", [])))
+            samples = payload.get("samples_ms")
+            if (
+                not isinstance(samples, list)
+                or not samples
+                or not all(
+                    isinstance(sample, (int, float)) and math.isfinite(sample) for sample in samples
+                )
+            ):
+                case["correctness"] = {
+                    "status": "failed",
+                    "error_message": "calibration probe returned empty or non-finite samples",
+                }
+                continue
+            probe_ms = float(np.median(samples))
             case["warmup"] = in_process_warmups(
                 warmups, settings.in_process_warmup_seconds, probe_ms
             )
@@ -724,6 +747,7 @@ def run_trials(
                 warmups=case["warmup"],
                 reps=settings.reps,
                 k1=k1,
+                process=settings.bench_process,
             )
             if payload is None:
                 case["correctness"] = {"status": "failed", "error_message": error}
@@ -1158,9 +1182,6 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         help="Model family: keep only the first N selected tensors",
     )
     parser.add_argument(
-        "--force-fail", action="store_true", help="Force correctness failure for tests"
-    )
-    parser.add_argument(
         "--allow-existing", action="store_true", help="Allow writing into existing folder"
     )
     parser.add_argument(
@@ -1201,7 +1222,6 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
             gpu_warmup_seconds=args.gpu_warmup_seconds,
             case_warmup_seconds=args.case_warmup_seconds,
             in_process_warmup_seconds=args.warmup_seconds,
-            force_fail=args.force_fail,
             allow_existing=args.allow_existing,
             allow_dirty=args.allow_dirty,
             pilot=args.pilot,

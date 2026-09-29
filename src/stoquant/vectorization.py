@@ -16,7 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from stoquant import layout
@@ -37,48 +37,55 @@ def generate_msvc_vectorization_report(
     host_flags: Sequence[str] | None,
     object_dir: Path,
     sources: Sequence[str] = COMPARATOR_SOURCES,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    platform: str = os.name,
 ) -> str:
     """Recompile C sources with their exact build flags plus /Qvec-report:2."""
-    output_text = ""
+    if platform != "nt":
+        raise RuntimeError("MSVC vectorization report requires Windows")
+    if host_flags is None:
+        raise RuntimeError("MSVC vectorization report requires build flags")
     script = root / "tools" / "with-msvc.ps1"
-    if os.name == "nt" and script.is_file() and host_flags is not None:
-        object_dir.mkdir(parents=True, exist_ok=True)
-        # A quoted path ending in "\" escapes its closing quote through the
-        # PowerShell wrapper, so the directory ends in "/" instead.
-        try:
-            object_arg = str(object_dir.resolve().relative_to(root.resolve()))
-        except ValueError:
-            object_arg = str(object_dir.resolve())
-        object_arg = object_arg.replace("\\", "/")
-        compile_args = [
-            "cl.exe",
-            *host_flags,
-            "/Qvec-report:2",
-            "/c",
-            *sources,
-            f"/Fo:{object_arg}/",
-        ]
-        cmd = [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(script),
-            *compile_args,
-        ]
-        res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=False)
-        diagnostics = (res.stdout + "\n" + res.stderr).strip()
-        # cl reports absolute source paths; keep the published report root-relative.
-        diagnostics = diagnostics.replace(str(root.resolve()) + "\\", "")
-        output_text = (
-            f"Command: {' '.join(compile_args)}\nExit code: {res.returncode}\n\n" + diagnostics
-        )
-
-    if not output_text:
-        output_text = "MSVC vectorization report not available on this platform/configuration."
+    if not script.is_file():
+        raise RuntimeError(f"MSVC setup script is missing: {script}")
+    object_dir.mkdir(parents=True, exist_ok=True)
+    # A quoted path ending in "\" escapes its closing quote through the
+    # PowerShell wrapper, so the directory ends in "/" instead.
+    try:
+        object_arg = str(object_dir.resolve().relative_to(root.resolve()))
+    except ValueError:
+        object_arg = str(object_dir.resolve())
+    object_arg = object_arg.replace("\\", "/")
+    compile_args = [
+        "cl.exe",
+        *host_flags,
+        "/Qvec-report:2",
+        "/c",
+        *sources,
+        f"/Fo:{object_arg}/",
+    ]
+    cmd = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(script),
+        *compile_args,
+    ]
+    res = runner(cmd, cwd=root, capture_output=True, text=True, check=False)
+    diagnostics = (res.stdout + "\n" + res.stderr).strip()
+    # cl reports absolute source paths; keep the published report root-relative.
+    diagnostics = diagnostics.replace(str(root.resolve()) + "\\", "")
+    output_text = (
+        f"Command: {' '.join(compile_args)}\nExit code: {res.returncode}\n\n" + diagnostics
+    )
 
     output_file.write_text(output_text, encoding="utf-8")
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"MSVC vectorization compile failed (exit {res.returncode}); see {output_file}"
+        )
     return output_text
 
 
@@ -113,10 +120,14 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         return 1
     output = root / args.output
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=root / "build") as objects:
-        report = generate_msvc_vectorization_report(
-            root, output, flags, Path(objects), AVX2_SOURCES
-        )
+    try:
+        with tempfile.TemporaryDirectory(dir=root / "build") as objects:
+            report = generate_msvc_vectorization_report(
+                root, output, flags, Path(objects), AVX2_SOURCES
+            )
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     source = (layout.NATIVE_DIR / SOURCE_NAME).read_text(encoding="utf-8")
     missing = unvectorized_hot_loops(source, report)
     total = len(hot_lines(source))
