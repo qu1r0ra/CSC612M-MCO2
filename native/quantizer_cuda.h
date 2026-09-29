@@ -47,11 +47,10 @@ typedef struct sq_cuda_staging sq_cuda_staging;
 extern "C" {
 #endif
 
-/* The optimized K1 variant needs a 16-byte-aligned input (cudaMalloc pointers
-   are) and returns cudaErrorMisalignedAddress otherwise. */
-
 /* Selects the K1 variant for every later launch in this process; the CLI
-   calls it once before any CUDA work. Returns 0 or cudaErrorInvalidValue. */
+   calls it once before any CUDA work. Returns 0 or cudaErrorInvalidValue. The
+   optimized variant needs a 16-byte-aligned input (cudaMalloc pointers are) and
+   returns cudaErrorMisalignedAddress otherwise. */
 int sq_cuda_select_k1(int variant);
 
 /* Stage launchers accept device pointers and an opaque CUDA stream handle. */

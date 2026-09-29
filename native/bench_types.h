@@ -52,7 +52,7 @@ enum {
   SQ_BENCH_COLUMN_CAPTURE = 1 << 6
 };
 
-/* Everything print_bench_json needs; string fields are the wire names. */
+/* Everything sq_bench_print_json needs; string fields are the wire names. */
 typedef struct {
   const char *backend;
   const char *boundary;
