@@ -21,7 +21,7 @@ this file, and the configurations it runs, stays fixed so that a baseline
 captured before a stage is comparable with a run after it.
 
     just equivalence capture
-    just equivalence compare [--baseline PATH]
+    just equivalence compare [--baseline PATH|COMMIT]
 """
 
 from __future__ import annotations
@@ -478,14 +478,27 @@ def capture(args: argparse.Namespace) -> int:
     return 0
 
 
-def compare(args: argparse.Namespace) -> int:
-    baseline_path = args.baseline
-    if baseline_path is None:
-        store = args.store or default_store()
-        stored = sorted(store.glob("*.json")) if store.exists() else []
+def resolve_baseline(value: str | None, store: Path) -> Path:
+    """Pick the baseline file: a path, a commit prefix in the store, or the only one stored.
+
+    A commit prefix keeps the recipe usable when the primary checkout's path
+    contains spaces, which `just` splits when it forwards arguments.
+    """
+    stored = sorted(store.glob("*.json")) if store.exists() else []
+    if value is None:
         if len(stored) != 1:
             raise SystemExit(f"{len(stored)} baselines in {store}; pass --baseline")
-        baseline_path = stored[0]
+        return stored[0]
+    if Path(value).is_file():
+        return Path(value)
+    matches = [path for path in stored if path.stem.startswith(value)]
+    if len(matches) != 1:
+        raise SystemExit(f"{len(matches)} baselines in {store} match {value!r}")
+    return matches[0]
+
+
+def compare(args: argparse.Namespace) -> int:
+    baseline_path = resolve_baseline(args.baseline, args.store or default_store())
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     if baseline.get("format") != FORMAT_VERSION:
         raise SystemExit(f"{baseline_path} has format {baseline.get('format')}")
@@ -510,7 +523,10 @@ def main(argv: list[str] | None = None) -> int:
     cap.add_argument("--store", type=Path, help="Baseline folder (default: primary checkout)")
     cap.add_argument("--allow-dirty", action="store_true", help="Capture from modified files")
     cmp_ = sub.add_parser("compare", help="Diff a fresh fingerprint against a baseline")
-    cmp_.add_argument("--baseline", type=Path, help="Baseline file (default: the only stored one)")
+    cmp_.add_argument(
+        "--baseline",
+        help="Baseline file or commit prefix in the store (default: the only stored one)",
+    )
     cmp_.add_argument("--store", type=Path, help="Baseline folder (default: primary checkout)")
     cmp_.add_argument("--limit", type=int, default=200, help="Differences to print")
     args = parser.parse_args(argv)

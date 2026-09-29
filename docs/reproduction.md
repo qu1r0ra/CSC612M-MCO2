@@ -223,7 +223,9 @@ just equivalence capture
 just equivalence compare
 ```
 
-`capture` writes `build/equivalence/<sha>.json` under the primary checkout (the parent of the git common directory), so every worktree shares it. It refuses to overwrite an existing baseline and refuses a tree with modified tracked files unless given `--allow-dirty`. `compare` reads the only stored baseline, or the one named by `--baseline`, and never writes to the store. Both accept `--store DIR`. The stage 0 baseline is keyed to `main` at `03b29f3`.
+`capture` writes `build/equivalence/<sha>.json` under the primary checkout (the parent of the git common directory), so every worktree shares it. It refuses to overwrite an existing baseline and refuses a tree with modified tracked files unless given `--allow-dirty`. `compare` reads the only stored baseline, or the one named by `--baseline` (a file path or a commit prefix in the store), and never writes to the store. Once the store holds several baselines, name one; a commit prefix such as `--baseline 1475fbf` avoids quoting a primary-checkout path that contains spaces. Both accept `--store DIR`. The stage 0 baseline is keyed to `main` at `03b29f3`.
+
+A change that moves a loop or deletes a function shifts the MSVC vectorization-report counts the fingerprint records, so `compare` fails on those leaves alone. After confirming that only those counts differ, disclose the deviation in the pull request, run `just equivalence capture` on the branch head, and check it with `compare --baseline <sha>`.
 
 Each run fingerprints:
 
