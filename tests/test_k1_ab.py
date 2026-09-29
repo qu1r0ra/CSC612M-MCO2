@@ -1,18 +1,22 @@
+import argparse
 import re
 
 import pytest
 
 from stoquant import layout
+from stoquant.design import DEFAULT_BITS, DEFAULT_COUNTS
 from stoquant.k1_ab import (
     TREE_SPAN,
     VARIANTS,
     compare_arms,
+    is_default_design,
     keep_decision,
     optimized_launch_count,
     plot_f5,
     summarize_ab_cell,
     variant_order,
 )
+from stoquant.k1_bandwidth import DEFAULT_PROCESSES, DEFAULT_REPS
 
 DEVICE = {"memory_clock_khz": 14_001_000, "bus_width_bits": 128, "l2_bytes": 25_165_824}
 SOURCE = layout.NATIVE_DIR / "quantizer_cuda.cu"
@@ -115,3 +119,35 @@ def test_summarize_ab_cell_and_f5_render(tmp_path):
     out = tmp_path / "f5.png"
     plot_f5({"cells": [summary_cell]}, out)
     assert out.stat().st_size > 0
+
+
+def _design(**changes):
+    from stoquant.k1_ab import DEFAULT_IN_PROCESS_WARMUP_SECONDS, GPU_WARMUP_SECONDS
+
+    values = {
+        "pilot": False,
+        "allow_dirty": False,
+        "bits": list(DEFAULT_BITS),
+        "reps": DEFAULT_REPS,
+        "gpu_warmup_seconds": GPU_WARMUP_SECONDS,
+        "in_process_warmup_seconds": DEFAULT_IN_PROCESS_WARMUP_SECONDS,
+    }
+    values.update(changes)
+    return argparse.Namespace(**values)
+
+
+def test_evidence_needs_the_resolved_default_design():
+    counts, processes = DEFAULT_COUNTS, DEFAULT_PROCESSES
+    assert is_default_design(_design(), counts, processes)
+    assert is_default_design(_design(bits=[4, 8]), list(counts), processes)
+    for changes in (
+        {"pilot": True},
+        {"allow_dirty": True},
+        {"bits": [8]},
+        {"reps": DEFAULT_REPS + 1},
+        {"gpu_warmup_seconds": 0.0},
+        {"in_process_warmup_seconds": 0.0},
+    ):
+        assert not is_default_design(_design(**changes), counts, processes), changes
+    assert not is_default_design(_design(), counts[:-1], processes)
+    assert not is_default_design(_design(), counts, processes + 1)

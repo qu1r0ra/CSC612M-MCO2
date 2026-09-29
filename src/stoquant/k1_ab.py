@@ -24,6 +24,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -298,6 +299,19 @@ def plot_f5(summary: dict[str, Any], out: Path) -> None:
     plt.close(fig)
 
 
+def is_default_design(args: argparse.Namespace, counts: Sequence[int], processes: int) -> bool:
+    """True only for the resolved default design; any reduction clears the evidence flag."""
+    return (
+        not (args.pilot or args.allow_dirty)
+        and tuple(counts) == DEFAULT_COUNTS
+        and tuple(args.bits) == DEFAULT_BITS
+        and processes == DEFAULT_PROCESSES
+        and args.reps == DEFAULT_REPS
+        and args.gpu_warmup_seconds == GPU_WARMUP_SECONDS
+        and args.in_process_warmup_seconds == DEFAULT_IN_PROCESS_WARMUP_SECONDS
+    )
+
+
 def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     parser = argparse.ArgumentParser(prog=prog, description=__doc__)
     parser.add_argument("--output-dir", type=Path)
@@ -326,7 +340,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         sys.exit("--output-dir is required unless --figure is given.")
     counts = args.counts or list(K1_AB_PILOT_COUNTS if args.pilot else DEFAULT_COUNTS)
     processes = args.processes or (PILOT_PROCESSES if args.pilot else DEFAULT_PROCESSES)
-    evidence = not (args.pilot or args.allow_dirty or args.counts or args.processes)
+    evidence = is_default_design(args, counts, processes)
 
     root = layout.ROOT
     git = collect_git_provenance(root)

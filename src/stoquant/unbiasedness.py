@@ -38,6 +38,7 @@ from stoquant.inputs import (
     model_tensor_values,
     sparsify,
 )
+from stoquant.oracle import SIGNED_LIMITS
 from stoquant.provenance import collect_git_provenance, find_binary
 
 SUITE_SEEDS = 4096
@@ -45,8 +46,7 @@ SEED_START = 1
 SUITE_COUNT = 1 << 14
 SUITE_MODEL_TENSOR = "layer1.0.conv1.weight"
 SIGMA = 5.0
-BIT_WIDTHS = (4, 8)
-SIGNED_LIMITS = {4: 7, 8: 127}
+BIT_WIDTHS = tuple(SIGNED_LIMITS)
 BACKENDS = ("cpu", "cuda")
 RESULTS = "unbiasedness.json"
 FIGURE = "f_unbiasedness.png"
@@ -62,7 +62,9 @@ GATE_RULE = (
     "(1 - q) * dec(l) + q * dec(l + 1), delta = |dec(l + 1) - dec(l)|, l = floor(a), "
     "a = min(|x| / scale * s, s) in FP32, and q = floor(fl32(p * 2^32)) / 2^32 is the "
     "Bernoulli probability the rounding comparison realises for p = a - l; every element "
-    "with q = 0 has mean exactly dec(l)"
+    "with q = 0 has mean exactly dec(l); any non-finite mean or sum fails. The bound is a "
+    "normal approximation, validated for the pinned suite (T = 4096 seeds, the four suite "
+    "inputs, the default input seed), and is not an exact bound for small q * T"
 )
 
 
@@ -189,10 +191,13 @@ def analyse(
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     e = expectation(x, scale, s)
     mean = sums / seeds
+    finite = bool(np.isfinite(sums).all() and np.isfinite(squares).all())
     stochastic = e["q"] > 0.0
     sigma = e["delta"] * np.sqrt(e["q"] * (1.0 - e["q"]) / seeds)
     ratio = np.zeros_like(mean)
     ratio[stochastic] = np.abs(mean - e["expected"])[stochastic] / (SIGMA * sigma[stochastic])
+    # A NaN compares false against every bound, so a non-finite element counts as over it.
+    over = ~(ratio <= 1.0)
     exact = mean[~stochastic] == e["low"][~stochastic]
     variance = np.maximum(squares / seeds - mean * mean, 0.0)
     expected_variance = e["delta"] ** 2 * e["q"] * (1.0 - e["q"])
@@ -206,16 +211,17 @@ def analyse(
         "stochastic_elements": int(stochastic.sum()),
         "deterministic_elements": int((~stochastic).sum()),
         "deterministic_exact": bool(exact.all()),
-        "max_error_over_bound": float(ratio.max()) if stochastic.any() else 0.0,
-        "elements_over_bound": int((ratio > 1.0).sum()),
-        "max_abs_z": float(ratio.max() * SIGMA) if stochastic.any() else 0.0,
+        "finite": finite,
+        "max_error_over_bound": float(np.nanmax(ratio)) if finite and stochastic.any() else 0.0,
+        "elements_over_bound": int(over.sum()),
+        "max_abs_z": float(np.nanmax(ratio) * SIGMA) if finite and stochastic.any() else 0.0,
         "variance_ratio_pooled": (
             float(variance[stochastic].sum() / expected_variance[stochastic].sum())
             if stochastic.any()
             else None
         ),
         "max_expectation_gap_steps": float(gap_steps.max()),
-        "passed": bool(exact.all() and not (ratio > 1.0).any()),
+        "passed": bool(finite and exact.all() and not over.any()),
     }
     arrays = {"x": x.astype(np.float64), "mean": mean, "ratio": ratio, "stochastic": stochastic}
     return result, arrays
@@ -316,6 +322,20 @@ def plot_unbiasedness(
     plt.close(fig)
 
 
+def non_evidence_reasons(args: argparse.Namespace, git_dirty: bool) -> list[str]:
+    """Why a run is not evidence; empty only for the default design on a clean tree."""
+    reasons = []
+    if git_dirty:
+        reasons.append("dirty git tree")
+    if args.seeds != SUITE_SEEDS:
+        reasons.append(f"{args.seeds} seeds instead of {SUITE_SEEDS}")
+    if tuple(args.backends) != BACKENDS:
+        reasons.append("not every backend")
+    if args.input_seed != DEFAULT_INPUT_SEED:
+        reasons.append(f"input seed {args.input_seed} instead of {DEFAULT_INPUT_SEED}")
+    return reasons
+
+
 def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     parser = argparse.ArgumentParser(prog=prog, description="Correctness layer 3 expectation suite")
     parser.add_argument("--output-dir", type=Path, default=None, help="Directory for results")
@@ -359,13 +379,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         shutil.rmtree(work_dir, ignore_errors=True)
 
         plot_unbiasedness(plot_data, args.seeds, target / FIGURE)
-        reasons = []
-        if git_prov["git_dirty"]:
-            reasons.append("dirty git tree")
-        if args.seeds != SUITE_SEEDS:
-            reasons.append(f"{args.seeds} seeds instead of {SUITE_SEEDS}")
-        if tuple(args.backends) != BACKENDS:
-            reasons.append("not every backend")
+        reasons = non_evidence_reasons(args, git_prov["git_dirty"])
         report = {
             "created_at_utc": now.isoformat(),
             "git_provenance": git_prov,
