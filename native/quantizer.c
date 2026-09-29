@@ -281,8 +281,3 @@ sq_status sq_encode_payload(uint8_t bit_width, const float *values,
   }
   return SQ_OK;
 }
-
-sq_status sq_q8_make_codes(const float *values, size_t count, float scale,
-                           const uint32_t *words, uint8_t *codes) {
-  return sq_encode_payload(SQ_Q8_BITS, values, count, scale, words, codes);
-}

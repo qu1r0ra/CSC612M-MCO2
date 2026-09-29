@@ -292,7 +292,7 @@ static sq_status compress_file(int argc, char **argv) {
   float *values = NULL, *scale_partials = NULL;
   uint32_t *words = NULL;
   uint8_t *codes;
-  size_t input_size = 0, word_size = 0, count, i_size;
+  size_t input_size = 0, word_size = 0, count;
   sq_rng_stream stream;
   sq_status status;
 
@@ -410,15 +410,12 @@ static sq_status compress_file(int argc, char **argv) {
     status = SQ_ERR_MEMORY;
     goto done;
   }
-  for (i_size = 0; i_size < count; i_size++) {
-    uint32_t bits32 = sq_load_u32_le(input_bytes + 4 * i_size);
-    memcpy(&values[i_size], &bits32, sizeof bits32);
-  }
+  sq_load_f32_array_le(values, input_bytes, count);
 
   if (strcmp(backend, "cuda") == 0) {
 #ifdef SQ_ENABLE_CUDA
     sq_cuda_timings cuda_timings = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    size_t payload_size = (bits == SQ_Q4_BITS) ? (count + 1) / 2 : count;
+    size_t payload_size = sq_payload_size((uint8_t)bits, count);
 
     if (words_path != NULL) {
       if (!read_file(words_path, &word_bytes, &word_size)) {
@@ -435,9 +432,7 @@ static sq_status compress_file(int argc, char **argv) {
         status = SQ_ERR_MEMORY;
         goto done;
       }
-      for (i_size = 0; i_size < count; i_size++) {
-        words[i_size] = sq_load_u32_le(word_bytes + 4 * i_size);
-      }
+      sq_load_u32_array_le(words, word_bytes, count);
     }
 
     record = (uint8_t *)malloc(SQ_HEADER_SIZE + payload_size);
@@ -523,9 +518,7 @@ static sq_status compress_file(int argc, char **argv) {
     goto done;
   }
   if (words_path != NULL) {
-    for (i_size = 0; i_size < count; i_size++) {
-      words[i_size] = sq_load_u32_le(word_bytes + 4 * i_size);
-    }
+    sq_load_u32_array_le(words, word_bytes, count);
   } else {
     if (sq_rng_stream_init(&stream, seed, tensor_id, invocation_id) !=
         SQ_RNG_OK) {
@@ -536,7 +529,7 @@ static sq_status compress_file(int argc, char **argv) {
   }
 
   {
-    size_t payload_size = (bits == SQ_Q4_BITS) ? (count + 1) / 2 : count;
+    size_t payload_size = sq_payload_size((uint8_t)bits, count);
     record = (uint8_t *)malloc(SQ_HEADER_SIZE + payload_size);
     if (record == NULL) {
       status = SQ_ERR_MEMORY;
@@ -620,8 +613,8 @@ static sq_status bench_cpu_compress_one(
     }
   }
   if (prescribed_words == NULL) {
-    status = sq_rng_stream_init(&stream, seed, tensor_id, invocation_id);
-    if (status != SQ_OK) {
+    if (sq_rng_stream_init(&stream, seed, tensor_id, invocation_id) !=
+        SQ_RNG_OK) {
       return SQ_ERR_ID_OVERFLOW;
     }
     cpu_rng_words(&stream, count, generated_words, threads);
@@ -1037,7 +1030,7 @@ static sq_status bench_file(int argc, char **argv) {
     status = SQ_ERR_COUNT;
     goto done;
   }
-  payload_bytes = bits == SQ_Q4_BITS ? count / 2 + (count & 1) : count;
+  payload_bytes = sq_payload_size((uint8_t)bits, count);
   if (payload_bytes > SIZE_MAX - SQ_HEADER_SIZE) {
     status = SQ_ERR_COUNT;
     goto done;
@@ -1066,10 +1059,7 @@ static sq_status bench_file(int argc, char **argv) {
     status = SQ_ERR_MEMORY;
     goto done;
   }
-  for (size_t element = 0; element < count; element++) {
-    uint32_t bits32 = sq_load_u32_le(input_bytes + 4 * element);
-    memcpy(&values[element], &bits32, sizeof bits32);
-  }
+  sq_load_f32_array_le(values, input_bytes, count);
   if (words_path != NULL) {
     if (!read_file(words_path, &word_bytes, &word_size)) {
       status = SQ_ERR_IO;
@@ -1080,9 +1070,7 @@ static sq_status bench_file(int argc, char **argv) {
       status = SQ_ERR_PAYLOAD_LENGTH;
       goto done;
     }
-    for (size_t element = 0; element < count; element++) {
-      words[element] = sq_load_u32_le(word_bytes + 4 * element);
-    }
+    sq_load_u32_array_le(words, word_bytes, count);
   }
   status = sq_validate_input(values, count);
   if (status != SQ_OK) {
@@ -1208,7 +1196,7 @@ static sq_status decompress_file(int argc, char **argv) {
   const char *input_path = NULL, *output_path = NULL;
   uint8_t *record = NULL, *output = NULL;
   float *values = NULL;
-  size_t record_size = 0, count = 0, output_size, i;
+  size_t record_size = 0, count = 0, output_size;
   sq_status status;
   int argument;
 
@@ -1245,11 +1233,7 @@ static sq_status decompress_file(int argc, char **argv) {
     status = SQ_ERR_MEMORY;
     goto done;
   }
-  for (i = 0; i < count; i++) {
-    uint32_t bits32;
-    memcpy(&bits32, &values[i], sizeof bits32);
-    sq_store_u32_le(output + 4 * i, bits32);
-  }
+  sq_store_f32_array_le(output, values, count);
   if (!write_file(output_path, output, output_size)) {
     status = SQ_ERR_IO;
   }
@@ -1272,8 +1256,7 @@ static void store_f64_le(uint8_t bytes[8], double value) {
   uint64_t bits64;
 
   memcpy(&bits64, &value, sizeof bits64);
-  sq_store_u32_le(bytes, (uint32_t)bits64);
-  sq_store_u32_le(bytes + 4, (uint32_t)(bits64 >> 32));
+  sq_store_u64_le(bytes, bits64);
 }
 
 /* Compresses one input under seeds seed_start..seed_start+seeds-1 with the
@@ -1362,7 +1345,7 @@ static sq_status expect_file(int argc, char **argv) {
     goto done;
   }
   count = input_size / sizeof(uint32_t);
-  payload_size = (bits == SQ_Q4_BITS) ? (count + 1) / 2 : count;
+  payload_size = sq_payload_size((uint8_t)bits, count);
   if (count > SIZE_MAX / (2 * sizeof(double)) ||
       count > SIZE_MAX - SQ_HEADER_SIZE) {
     status = SQ_ERR_COUNT;
@@ -1380,10 +1363,7 @@ static sq_status expect_file(int argc, char **argv) {
     status = SQ_ERR_MEMORY;
     goto done;
   }
-  for (i_size = 0; i_size < count; i_size++) {
-    uint32_t bits32 = sq_load_u32_le(input_bytes + 4 * i_size);
-    memcpy(&values[i_size], &bits32, sizeof bits32);
-  }
+  sq_load_f32_array_le(values, input_bytes, count);
   status = sq_compute_scale(values, count, &scale);
   if (status != SQ_OK) {
     goto done;

@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 
+#include "quantizer_cuda.h"
 #include "rng_cuda.h"
 
 #define CHECK(call)                                                            \
@@ -12,15 +13,6 @@
       goto done;                                                               \
     }                                                                          \
   } while (0)
-
-/* Kernels are grid-stride loops, so capping the grid never skips elements. */
-#define MAX_AUTO_GRID 65535
-
-static int auto_grid(uint64_t n, int block_size) {
-  uint64_t blocks = (n + block_size - 1) / block_size;
-
-  return blocks < MAX_AUTO_GRID ? (int)blocks : MAX_AUTO_GRID;
-}
 
 __global__ void philox_raw_kernel(philox4x32_ctr_t ctr, philox4x32_key_t key,
                                   philox4x32_ctr_t *out) {
@@ -93,7 +85,7 @@ extern "C" int sq_rng_words_cuda(const sq_rng_stream *s, uint64_t n,
     return 0;
   }
   if (grid_size <= 0) {
-    grid_size = auto_grid(n, block_size);
+    grid_size = sq_cuda_automatic_grid(n, block_size);
   }
 
   CHECK(cudaMalloc(&d_out, n * sizeof *d_out));
@@ -122,7 +114,8 @@ extern "C" int sq_bernoulli_cuda(const uint32_t *words, const float *p,
   CHECK(cudaMalloc(&d_out, n * sizeof *d_out));
   CHECK(cudaMemcpy(d_words, words, n * sizeof *words, cudaMemcpyHostToDevice));
   CHECK(cudaMemcpy(d_p, p, n * sizeof *p, cudaMemcpyHostToDevice));
-  bernoulli_kernel<<<auto_grid(n, block), block>>>(d_words, d_p, n, d_out);
+  bernoulli_kernel<<<sq_cuda_automatic_grid(n, block), block>>>(d_words, d_p, n,
+                                                                d_out);
   CHECK(cudaGetLastError());
   CHECK(cudaMemcpy(out, d_out, n * sizeof *out, cudaMemcpyDeviceToHost));
 done:

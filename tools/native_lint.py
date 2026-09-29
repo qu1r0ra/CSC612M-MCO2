@@ -37,6 +37,7 @@ def c_units() -> list[tuple[str, list[str]]]:
     units = [
         ("native/main.c", host),
         ("native/main.c", [*host, "/DSQ_ENABLE_CUDA"]),
+        ("native/sq_status.c", host),
         ("native/codec.c", host),
         ("native/quantizer.c", host),
         ("native/rng_cpu.c", host),

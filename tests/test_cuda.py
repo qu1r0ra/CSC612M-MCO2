@@ -995,3 +995,52 @@ def test_k1_option_needs_cuda_and_a_known_variant(tmp_path, extra):
     assert bench.returncode != 0
     assert "invalid argument" in bench.stderr.lower()
     assert bench.stdout == ""
+
+
+FAULT_BINARY = BINARY.with_name(BINARY.stem + "_fault" + BINARY.suffix)
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+@pytest.mark.parametrize("extra", [(), ("--scale", "2.0")], ids=["k1", "scale"])
+def test_every_cuda_failure_exits_nonzero_and_writes_no_record(tmp_path, bits, extra):
+    assert FAULT_BINARY.exists(), "run `just build-cuda-fault` first"
+    values = np.random.default_rng(54).normal(size=1031).astype(np.float32)
+    input_path = tmp_path / "input.f32"
+    output_path = tmp_path / "record.msq"
+    _write_values(input_path, values)
+    command = [
+        str(FAULT_BINARY),
+        "compress",
+        "--input",
+        str(input_path),
+        "--output",
+        str(output_path),
+        "--seed",
+        "1",
+        "--backend",
+        "cuda",
+        "--bits",
+        str(bits),
+        *extra,
+    ]
+    injected = 0
+    for call in range(1, 128):
+        output_path.unlink(missing_ok=True)
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "STOQUANT_FAULT_CUDA_CALL": str(call)},
+        )
+        if "injected CUDA fault" not in result.stderr:
+            assert result.returncode == 0
+            assert output_path.exists()
+            break
+        injected += 1
+        assert result.returncode != 0, f"CUDA call {call} failed but exit was 0"
+        assert not output_path.exists(), f"record written after CUDA call {call} failed"
+    else:
+        pytest.fail("fault counter never ran past the last CUDA call")
+    assert injected >= 8

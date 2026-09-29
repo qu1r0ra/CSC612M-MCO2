@@ -704,7 +704,7 @@ def run_trials(
     order: SweepOrder,
     settings: SweepSettings,
 ) -> None:
-    # Each trial runs every path as its own process, in a rotated order.
+    # Each trial runs every path as its own process, in a balanced order.
     # Every trial reuses the same invocation identifiers, so trials are
     # replicates of an identical workload.
     k1 = settings.k1
@@ -1074,7 +1074,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         "--trials",
         type=int,
         default=DEFAULT_TRIALS,
-        help="Independent processes per path, each trial in a rotated path order",
+        help="Independent processes per path, each trial in a balanced path order (all permutations, or Williams rows)",
     )
     parser.add_argument(
         "--input-seed", type=int, default=DEFAULT_INPUT_SEED, help="Seed for input generation"

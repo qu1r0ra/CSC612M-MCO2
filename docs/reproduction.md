@@ -21,9 +21,9 @@ Verified on 2026-09-25:
 | CUDA toolkit | 13.4 (`nvcc` V13.4.59) |
 | C compiler | MSVC `cl` 19.51.36260 for x64 (Visual Studio Community 2026 18.10, toolset 14.51) |
 | RNG dependency | Random123 v1.14.0, commit `726a093`, vendored in `third_party/random123` |
-| CUDA RNG build flags | `-O2 -arch=sm_120 -Isrc -Ithird_party/random123/include -Xcompiler /wd4068` |
-| CUDA quantizer build flags | `-O2 -arch=native -Isrc -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true -Xcompiler /wd4068` |
-| CPU build flags | `/O2 /W4 /std:c11 /fp:strict` |
+| CUDA RNG build flags | `-O2 -arch=sm_120 -Inative -Ithird_party/random123/include --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068` |
+| CUDA quantizer build flags | `-O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068` |
+| CPU build flags | `/O2 /W4 /WX /std:c11 /fp:strict /Inative /Ithird_party/random123/include` |
 
 `nvcc --list-gpu-arch` includes `compute_120`, and `nvcc` accepted MSVC 19.51 without `-allow-unsupported-compiler`.
 The `/wd4068` flag silences MSVC warnings about CUDA-only pragmas in the vendored Random123 headers.
@@ -62,7 +62,7 @@ Requires `just`, Python 3.11 or newer, `uv`, and a C compiler. On Windows, `tool
 just test-cpu
 ```
 
-`just test-cpu` builds the native CPU CLI and two C test executables, then runs the NumPy/pytest oracle and CLI suite. The first run resolves NumPy and pytest from the checked-in `pyproject.toml` and `uv.lock`.
+`just test-cpu` builds the native CPU CLI and three C test executables, then runs the NumPy/pytest oracle and CLI suite. The first run resolves NumPy and pytest from the checked-in `pyproject.toml` and `uv.lock`.
 
 The CLI consumes and produces raw little-endian FP32 files. A seeded compression computes the FP32 L2 scale and uses the logical Philox stream:
 
@@ -112,13 +112,14 @@ Run the full CPU verification suite or run specific components directly:
    ```powershell
    just test-cpu
    ```
-   Builds `build/stoquant`, `build/test_codec`, and `build/test_quantizer`, executes the native C test binaries, and runs the pytest test suites.
+   Builds `build/stoquant`, `build/test_codec`, `build/test_quantizer`, and `build/test_quantizer_avx2`, executes the native C test binaries, and runs the pytest test suites.
 
-2. **C unit tests (codec and quantizer)**:
+2. **C unit tests (codec, quantizer and AVX2 quantizer)**:
    ```powershell
    just build-cpu
    .\build\test_codec.exe
    .\build\test_quantizer.exe
+   .\build\test_quantizer_avx2.exe
    ```
    - `test_codec.exe` verifies 4-bit and 8-bit header encoding, 4-bit nibble decoding, odd-length records, and every decoder rejection branch (magic mismatch, unsupported version, unsupported bit width, nonzero reserved bytes, nonfinite/negative scale, payload length mismatch, nonzero padding nibble, out-of-range codes, and malformed zero-scale records).
    - `test_quantizer.exe` verifies FP32 L2 norm reduction, 4-bit and 8-bit quantization against prescribed words, signed zero (+0 decode), large magnitudes without intermediate overflow via max-rescaling, saturation boundaries, odd lengths (1, 3, 5, 257), and the 4,096-seed C Layer 3 unbiasedness loop.
@@ -158,7 +159,7 @@ Before declaring a code change ready, run `just verify`, which includes Ruff lin
 
 ## Benchmark matrix and frozen snapshot
 
-The benchmark driver measures in-process throughput with `stoquant bench` for the C comparator and the CUDA resident, resident-graph, and host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (102 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of 24 trials, one per ordering of the four paths. Each timed process first runs about one second of untimed repetitions of its path. The driver excludes physical core 0 from its own affinity before starting any process (protocol revision 3); children inherit the mask.
+The benchmark driver measures in-process throughput with `stoquant bench` for the C comparator and the CUDA resident, resident-graph, and host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (136 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of 24 trials, one per ordering of the four paths. Each timed process first runs about one second of untimed repetitions of its path. The driver excludes physical core 0 from its own affinity before starting any process (protocol revision 3); children inherit the mask.
 
 An evidence sweep refuses to start unless the readiness check passes: a reboot within 30 minutes, no application windows other than the Windows shell and the session that launched the sweep, no running `stoquant`, a clean git tree, and no GPU clock-event reason other than `GpuIdle`. Start evidence commands through `just` or `uv run python -m stoquant <command>`; the installed `stoquant` console command runs as a process of that name and so fails the check. `--ignore-readiness` runs anyway and marks the snapshot non-evidence; a dirty tree needs `--allow-dirty` as well. Earlier snapshots came from earlier revisions of the driver; reproduce each from its recorded revision. The course snapshot `results/2026-09-25-59c8967` was produced by revision `59c8967`, whose driver ran the four course sizes in ascending order without a warm-up.
 
@@ -170,7 +171,7 @@ An evidence sweep refuses to start unless the readiness check passes: a reboot w
 # Pilot: four sizes, both bit widths, into results/pilots/ (never evidence)
 just bench-matrix --pilot
 
-# Build the CUDA executable and run the 102-case size sweep (about 3.2 hours)
+# Build the CUDA executable and run the 136-case size sweep (about 2.8 hours)
 just bench-matrix
 
 # Course sizes only, with the sweep's warm-up and random case order
