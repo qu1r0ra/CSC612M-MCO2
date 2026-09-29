@@ -1040,6 +1040,9 @@ def test_every_cuda_failure_exits_nonzero_and_writes_no_record(tmp_path, bits, e
             break
         injected += 1
         assert result.returncode != 0, f"CUDA call {call} failed but exit was 0"
+        assert "CUDA device unavailable or CUDA runtime operation failed" in result.stderr, (
+            f"CUDA call {call} failed with a non-CUDA status"
+        )
         assert not output_path.exists(), f"record written after CUDA call {call} failed"
     else:
         pytest.fail("fault counter never ran past the last CUDA call")

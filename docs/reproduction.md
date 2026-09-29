@@ -21,7 +21,7 @@ Verified on 2026-09-25:
 | CUDA toolkit | 13.4 (`nvcc` V13.4.59) |
 | C compiler | MSVC `cl` 19.51.36260 for x64 (Visual Studio Community 2026 18.10, toolset 14.51) |
 | RNG dependency | Random123 v1.14.0, commit `726a093`, vendored in `third_party/random123` |
-| CUDA RNG build flags | `-O2 -arch=sm_120 -Inative -Ithird_party/random123/include --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068` |
+| CUDA RNG build flags | `-O2 -arch=native -Inative -Ithird_party/random123/include --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068` |
 | CUDA quantizer build flags | `-O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068` |
 | CPU build flags | `/O2 /W4 /WX /std:c11 /fp:strict /Inative /Ithird_party/random123/include` |
 
