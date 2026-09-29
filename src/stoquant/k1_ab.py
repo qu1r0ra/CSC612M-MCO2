@@ -238,8 +238,8 @@ def power_label(count: int) -> str:
 
 
 def plot_f5(summary: dict[str, Any], out: Path) -> None:
-    plt = pyplot()
     """Stage medians of both arms, as a share of the reference arm's stage total."""
+    plt = pyplot()
     cells = {(c["count"], c["bits"]): c for c in summary["cells"]}
     bit_widths = sorted({c["bits"] for c in summary["cells"]})
     counts = [n for n in F5_COUNTS if any((n, b) in cells for b in bit_widths)]

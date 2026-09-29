@@ -1,3 +1,7 @@
+import subprocess
+
+import pytest
+
 from stoquant import vectorization as vec_report_check
 
 SOURCE = """int f(void)
@@ -46,11 +50,6 @@ tests\test_quantizer_avx2.c(7) : info C5001: loop vectorized
 """
 
     assert vec_report_check.unvectorized_hot_loops(SOURCE, report) == [3, 7]
-
-
-import subprocess
-
-import pytest
 
 
 def test_unsupported_platform_is_an_error(tmp_path):
