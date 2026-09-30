@@ -30,6 +30,8 @@ Every native build writes a stamp file beside its binary. The stamp records:
 - the recipe that ran and the exact compiler flags it passed, including any defines;
 - the SHA-256 of the binary.
 
+The manifest version is 3.2 with the `build_stamp` field. Version 3.1 was the earlier publication-extension schema.
+
 The binary locator reads the stamp and returns the binary together with its verified build facts, or refuses. It refuses when:
 
 - the stamp is missing;
