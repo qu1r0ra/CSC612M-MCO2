@@ -432,6 +432,43 @@ def test_cuda_record_is_byte_identical_to_cpu(
 
 
 @pytest.mark.parametrize("bits", [4, 8])
+@pytest.mark.parametrize(
+    ("count", "total_k1_passes"),
+    [
+        (1, 1),
+        (65539, 2),
+        (524289, 3),
+        (1 << 26, 3),
+    ],
+)
+def test_cuda_optimized_k1_records_match_cpu_through_reduction_depths(
+    tmp_path, bits: int, count: int, total_k1_passes: int
+):
+    # One sum_warps pass is followed by zero, one, or two tree passes at span 2048.
+    block_count = (count + 255) // 256
+    padded_count = 1 << (block_count - 1).bit_length()
+    tree_passes = 0
+    active = padded_count
+    while active > 1:
+        active //= min(active, 2048)
+        tree_passes += 1
+    assert 1 + tree_passes == total_k1_passes
+
+    values = np.full(count, 0.125, dtype=np.float32)
+    cpu_result, cpu_record = _compress(tmp_path, values, backend="cpu", extra=("--bits", str(bits)))
+    cuda_result, cuda_record = _compress(
+        tmp_path,
+        values,
+        backend="cuda",
+        extra=("--bits", str(bits), "--k1", "optimized"),
+    )
+
+    assert cpu_result.returncode == 0, cpu_result.stderr
+    assert cuda_result.returncode == 0, cuda_result.stderr
+    assert cuda_record == cpu_record
+
+
+@pytest.mark.parametrize("bits", [4, 8])
 @pytest.mark.parametrize("count", [5, 257, 1025])
 def test_cuda_prescribed_scale_and_words_match_oracle(tmp_path, bits: int, count: int):
     values = np.linspace(-2.0, 2.0, count, dtype=np.float32)
