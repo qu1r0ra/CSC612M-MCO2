@@ -95,7 +95,6 @@ def list_app_windows() -> list[dict[str, str]]:
         capture_output=True,
         text=True,
         encoding="utf-8",
-        errors="replace",
         check=False,
     )
     output = _checked_probe_output(proc, "list_app_windows").strip()
@@ -120,6 +119,7 @@ def list_launcher_processes() -> list[str]:
         return []
     script = (
         "$ErrorActionPreference = 'Stop'; "
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
         "$byId = @{}; Get-CimInstance Win32_Process | "
         "ForEach-Object { $byId[[int]$_.ProcessId] = $_ }; "
         f"$id = {os.getpid()}; $seen = @{{}}; $processes = @(); "
@@ -133,6 +133,7 @@ def list_launcher_processes() -> list[str]:
         ["powershell.exe", "-NoProfile", "-Command", script],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     output = _checked_probe_output(proc, "list_launcher_processes").strip()
@@ -154,6 +155,7 @@ def list_processes(name: str) -> list[int]:
             ["powershell.exe", "-NoProfile", "-Command", script],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=False,
         )
         output = _checked_probe_output(proc, "list_processes").strip()

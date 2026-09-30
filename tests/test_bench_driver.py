@@ -1209,9 +1209,18 @@ def test_launcher_probe_parses_json_process_names(monkeypatch):
         stdout='["python", "Windows Terminal"]',
         stderr="",
     )
-    monkeypatch.setattr(host.subprocess, "run", lambda *_args, **_kwargs: result)
+    calls = {}
+
+    def fake_run(*args, **kwargs):
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return result
+
+    monkeypatch.setattr(host.subprocess, "run", fake_run)
 
     assert host.list_launcher_processes() == ["python", "Windows Terminal"]
+    assert calls["kwargs"]["encoding"] == "utf-8"
+    assert "[Console]::OutputEncoding = [Text.Encoding]::UTF8" in calls["args"][0][-1]
 
 
 def test_process_probe_rejects_non_json_output(monkeypatch):
