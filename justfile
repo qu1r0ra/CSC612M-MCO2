@@ -325,3 +325,7 @@ k1-ab *args: build-cuda build-stream-probe
 # Capture or compare the restructure equivalence baseline (issue #47)
 equivalence *args: build-cuda build-stream-probe
     uv run python tools/equivalence.py {{args}}
+
+# Fast, bounded record-parity smoke for routine implementation changes
+equivalence-smoke:
+    uv run python tools/equivalence_smoke.py

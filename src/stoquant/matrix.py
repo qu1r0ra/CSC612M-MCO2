@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import math
 import os
 import shutil
@@ -19,7 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import numpy as np
 
@@ -50,9 +49,11 @@ from stoquant.inputs import (
     DEFAULT_INPUT_SEED,
     INPUT_FAMILIES,
     MODEL_TENSOR_SETS,
+    InputProvenance,
     generate_family_inputs,
     select_model_tensors,
 )
+from stoquant.monitoring import MonitoringMetadata, parse_monitoring_config
 from stoquant.oracle import HEADER_STRUCT
 from stoquant.provenance import (
     collect_build_commands,
@@ -75,7 +76,24 @@ from stoquant.runner import (
     run_bench_process,
     warm_up_gpu,
 )
-from stoquant.snapshot_store import check_snapshot, create_snapshot, snapshot_path
+from stoquant.schema import (
+    CaseRecord,
+    MatrixManifest,
+    read_manifest,
+    write_case,
+)
+from stoquant.schema import (
+    write_manifest as write_manifest_record,
+)
+from stoquant.snapshot_store import (
+    ACTIVE_SNAPSHOT_REGISTRATION_ENV,
+    RunPlan,
+    check_snapshot,
+    create_snapshot,
+    register_active_snapshot,
+    snapshot_path,
+    write_run_plan,
+)
 from stoquant.stats import (
     BASELINE_RULE,
     BOOTSTRAP_LEVEL,
@@ -217,6 +235,9 @@ def run_benchmark_matrix(
     model_limit: int | None = None,
     k1: str = "reference",
 ) -> Path:
+    monitoring = parse_monitoring_config(root).manifest_metadata()
+    if len(set(counts)) != len(counts):
+        raise ValueError("--counts values must be unique")
     if k1 not in K1_VARIANTS:
         raise ValueError(f"unknown K1 variant {k1!r}; choose from {K1_VARIANTS}")
     if input_family not in INPUT_FAMILIES:
@@ -289,6 +310,9 @@ def run_benchmark_matrix(
             "applied_to": "driver process before any benchmark or probe process; inherited",
         }
         snapshot = create_snapshot(target_dir, git_prov, allow_dirty=allow_dirty)
+        registration = os.environ.get(ACTIVE_SNAPSHOT_REGISTRATION_ENV)
+        registration_file = Path(registration) if registration is not None else None
+        register_active_snapshot(snapshot.partial, registration_file)
         sweep_matrix(
             root=root,
             target_dir=snapshot.partial,
@@ -314,8 +338,11 @@ def run_benchmark_matrix(
             model_tensors=model_tensors,
             model_limit=model_limit,
             k1=k1,
+            monitoring=monitoring,
         )
-        return snapshot.commit()
+        final_snapshot = snapshot.commit()
+        register_active_snapshot(final_snapshot, registration_file)
+        return final_snapshot
 
 
 @dataclass(frozen=True)
@@ -370,7 +397,7 @@ class RunSetup(NamedTuple):
 class SweepInputs(NamedTuple):
     files: dict[str, Path]
     # Keys keep the generator's order, which ranks inputs in the summary.
-    clean_meta: dict[str, dict[str, Any]]
+    clean_meta: dict[str, InputProvenance]
     counts: dict[str, int]
 
 
@@ -408,6 +435,7 @@ def sweep_matrix(
     model_tensors: str | None = None,
     model_limit: int | None = None,
     k1: str = "reference",
+    monitoring: MonitoringMetadata | None = None,
 ) -> Path:
     settings = SweepSettings(
         counts=counts,
@@ -432,13 +460,13 @@ def sweep_matrix(
     )
     setup = set_up_run(root, target_dir, settings, git_prov)
     inputs = generate_inputs(setup, settings)
+    run_plan: RunPlan = {
+        "total_cases": len(inputs.clean_meta) * len(settings.bit_widths) * len(paths),
+        "input_family": settings.input_family,
+    }
+    write_run_plan(target_dir, run_plan)
     vec_report_path = write_vectorization_reports(root, target_dir, setup, settings)
     order = order_and_warm_up(setup, inputs, settings)
-    (target_dir / "run-plan.json").write_text(
-        json.dumps({"total_cases": len(order.ordered_cases) * len(paths)}),
-        encoding="utf-8",
-        newline="\n",
-    )
 
     case_results: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
@@ -485,6 +513,7 @@ def sweep_matrix(
         vec_report_path=vec_report_path,
         case_results=case_results,
         settings=settings,
+        monitoring=monitoring,
     )
     return target_dir
 
@@ -495,9 +524,10 @@ def set_up_run(
     """Binary, provenance and starting GPU state, then the snapshot and scratch folders."""
     verified = find_binary(root, require_cuda=settings.cuda, git_prov=git_prov)
     toolchain_prov = collect_hardware_and_toolchain(root)
-    build_prov = collect_build_commands(root)
-    host_tokens = build_prov.pop("_host_tokens")
-    avx2_tokens = build_prov.pop("_avx2_tokens")
+    build_commands = collect_build_commands(root)
+    build_prov = build_commands.as_record()
+    host_tokens = build_commands.host_tokens or []
+    avx2_tokens = build_commands.avx2_tokens or []
     publication = len(settings.paths) == 10 and settings.k1 == "optimized"
     device_attributes = query_device_attributes(root) if publication else None
     gpu_state_start = query_gpu_state() if settings.cuda else None
@@ -527,12 +557,9 @@ def generate_inputs(setup: RunSetup, settings: SweepSettings) -> SweepInputs:
         settings.model_limit,
     )
     return SweepInputs(
-        files={key: Path(meta["_path"]) for key, meta in input_meta.items()},
-        clean_meta={
-            key: {k: v for k, v in meta.items() if not k.startswith("_")}
-            for key, meta in input_meta.items()
-        },
-        counts={key: meta["count"] for key, meta in input_meta.items()},
+        files={key: item.path for key, item in input_meta.items()},
+        clean_meta={key: item.provenance for key, item in input_meta.items()},
+        counts={key: item.provenance["count"] for key, item in input_meta.items()},
     )
 
 
@@ -816,9 +843,7 @@ def write_case_outputs(
     trials = settings.trials
     rows: list[dict[str, Any]] = []
     for case in cases:
-        (target_dir / f"{case['case_id']}.json").write_text(
-            json.dumps(case, indent=2), encoding="utf-8"
-        )
+        write_case(target_dir / f"{case['case_id']}.json", cast(CaseRecord, case))
         stats = case["statistics"]
         if case["correctness"]["status"] != "passed":
             rows.append(
@@ -869,7 +894,9 @@ def write_case_outputs(
                 ("speedup_ci_high", "speedup_ci_high", 4),
             ):
                 if source in stats:
-                    row[destination] = f"{stats[source]:.{precision}f}"
+                    value = stats[source]
+                    if isinstance(value, (int, float)) and math.isfinite(value):
+                        row[destination] = f"{value:.{precision}f}"
             for source in ("stable", "unstable_rev2", "boundary_inversion"):
                 if source in stats:
                     row[source] = csv_flag(stats[source])
@@ -943,23 +970,8 @@ def write_manifest(
     vec_report_path: Path,
     case_results: list[dict[str, Any]],
     settings: SweepSettings,
+    monitoring: MonitoringMetadata | None,
 ) -> None:
-    monitoring_provider = os.environ.get("STOQUANT_MONITORING_PROVIDER")
-    monitoring = None
-    if monitoring_provider:
-        try:
-            heartbeat_interval = int(os.environ["STOQUANT_MONITORING_HEARTBEAT_SECONDS"])
-        except (KeyError, ValueError) as exc:
-            raise RuntimeError(
-                "Invalid run-monitoring metadata in the process environment."
-            ) from exc
-        if heartbeat_interval < 1:
-            raise RuntimeError("Invalid run-monitoring metadata in the process environment.")
-        monitoring = {
-            "provider": monitoring_provider,
-            "heartbeat_interval_seconds": heartbeat_interval,
-        }
-
     toolchain_prov = setup.toolchain_prov
     device_attributes = setup.device_attributes
     input_family = settings.input_family
@@ -1091,8 +1103,7 @@ def write_manifest(
         "all_cases_passed": not failed_case_ids,
     }
 
-    manifest_path = target_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
+    write_manifest_record(target_dir / "manifest.json", cast(MatrixManifest, manifest_data))
 
 
 def main(argv: list[str] | None = None, prog: str | None = None) -> None:
@@ -1215,6 +1226,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     )
 
     args = parser.parse_args(argv)
+    if len(set(args.counts)) != len(args.counts):
+        parser.error("--counts values must be unique")
     root = layout.ROOT
 
     try:
@@ -1243,7 +1256,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
             model_limit=args.model_limit,
             k1=args.k1,
         )
-        manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+        manifest = read_manifest(snapshot_dir / "manifest.json")
         if not manifest["all_cases_passed"]:
             reasons = manifest["run_conditions"]["non_evidence_reasons"]
             print(

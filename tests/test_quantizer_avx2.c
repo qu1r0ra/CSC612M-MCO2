@@ -96,6 +96,17 @@ static void compare_encode(uint8_t bits, const float *values, size_t count,
   free(e1);
 }
 
+static void compare_encode_status(uint8_t bits, const float *values,
+                                  size_t count, float scale,
+                                  const uint32_t *words, uint8_t *payload,
+                                  int threads, sq_status expected,
+                                  const char *what) {
+  sq_status st0 = sq_encode_payload(bits, values, count, scale, words, payload);
+  sq_status st1 = sq_avx2_encode_payload(bits, values, count, scale, words,
+                                         payload, threads);
+  check_at(st0 == expected && st1 == expected, what, count, threads);
+}
+
 static void compare_all(const float *values, size_t count, int threads,
                         uint64_t seed) {
   sq_rng_stream stream;
@@ -199,6 +210,20 @@ int main(void) {
   /* Status paths that return before any work. */
   fill(values, 300, 0);
   for (t = 0; t < (int)(sizeof team / sizeof team[0]); t++) {
+    float nonfinite = INFINITY;
+    uint32_t word = 0;
+    uint8_t payload = 0;
+
+    compare_encode_status(3, NULL, 1, NAN, NULL, NULL, team[t],
+                          SQ_ERR_BIT_WIDTH, "bit width precedes arguments");
+    compare_encode_status(SQ_Q8_BITS, NULL, 1, -1.0f, NULL, NULL, team[t],
+                          SQ_ERR_ARGUMENT, "arguments precede scale");
+    compare_encode_status(SQ_Q8_BITS, &nonfinite, 1, -1.0f, &word, &payload,
+                          team[t], SQ_ERR_SCALE,
+                          "scale precedes non-finite input");
+    compare_encode_status(SQ_Q8_BITS, &nonfinite, 1, 0.0f, &word, &payload,
+                          team[t], SQ_ERR_NONFINITE,
+                          "non-finite input precedes zero-scale fill");
     values[0] = FLT_MAX;
     values[1] = FLT_MAX;
     compare_scale(values, 300, team[t], "scale overflow");

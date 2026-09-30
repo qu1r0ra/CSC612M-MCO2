@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -24,6 +25,28 @@ GPU_STATE_FIELDS = (
     "clocks_event_reasons.active",
 )
 BUILD_RECIPE = "build-cuda"
+
+
+@dataclass(frozen=True)
+class BuildCommands:
+    """Parsed build provenance with compile arguments kept out of its JSON record."""
+
+    source: str
+    commands: list[str]
+    comparator_c: str
+    avx2_c: str
+    cuda_nvcc: str
+    host_tokens: list[str] | None
+    avx2_tokens: list[str] | None
+
+    def as_record(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "commands": list(self.commands),
+            "comparator_c": self.comparator_c,
+            "avx2_c": self.avx2_c,
+            "cuda_nvcc": self.cuda_nvcc,
+        }
 
 
 class VerifiedBinary(NamedTuple):
@@ -103,7 +126,7 @@ def collect_git_provenance(root: Path) -> dict[str, Any]:
     }
 
 
-def collect_build_commands(root: Path) -> dict[str, Any]:
+def collect_build_commands(root: Path) -> BuildCommands:
     """Read the exact compile commands from the build recipe via `just --dry-run`."""
     just = shutil.which("just")
     commands: list[str] = []
@@ -120,10 +143,19 @@ def collect_build_commands(root: Path) -> dict[str, Any]:
             text = proc.stderr if proc.stderr.strip() else proc.stdout
             commands = [line.strip() for line in text.splitlines() if line.strip()]
 
-    return {"source": f"just --dry-run {BUILD_RECIPE}", **parse_build_commands(commands)}
+    parsed = parse_build_commands(commands)
+    return BuildCommands(
+        source=f"just --dry-run {BUILD_RECIPE}",
+        commands=parsed.commands,
+        comparator_c=parsed.comparator_c,
+        avx2_c=parsed.avx2_c,
+        cuda_nvcc=parsed.cuda_nvcc,
+        host_tokens=parsed.host_tokens,
+        avx2_tokens=parsed.avx2_tokens,
+    )
 
 
-def parse_build_commands(commands: Sequence[str]) -> dict[str, Any]:
+def parse_build_commands(commands: Sequence[str]) -> BuildCommands:
     """Flags of the scalar comparator, the AVX2 comparator and the CUDA kernels.
 
     Each C entry is the compile of its own source file, so the per-file flags of the
@@ -149,14 +181,15 @@ def parse_build_commands(commands: Sequence[str]) -> dict[str, Any]:
         elif nvcc_flags is None and compiles and tool in ("nvcc", "nvcc.exe"):
             nvcc_flags = strip_compile_io(tokens[1:])
 
-    return {
-        "commands": list(commands),
-        "comparator_c": " ".join(host_flags) if host_flags is not None else "unknown",
-        "avx2_c": " ".join(avx2_flags) if avx2_flags is not None else "unknown",
-        "cuda_nvcc": " ".join(nvcc_flags) if nvcc_flags is not None else "unknown",
-        "_host_tokens": host_flags,
-        "_avx2_tokens": avx2_flags,
-    }
+    return BuildCommands(
+        source="parsed compile commands",
+        commands=list(commands),
+        comparator_c=" ".join(host_flags) if host_flags is not None else "unknown",
+        avx2_c=" ".join(avx2_flags) if avx2_flags is not None else "unknown",
+        cuda_nvcc=" ".join(nvcc_flags) if nvcc_flags is not None else "unknown",
+        host_tokens=host_flags,
+        avx2_tokens=avx2_flags,
+    )
 
 
 def strip_compile_io(tokens: Sequence[str]) -> list[str]:

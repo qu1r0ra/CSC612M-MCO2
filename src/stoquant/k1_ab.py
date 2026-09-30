@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -309,11 +310,17 @@ def analyze_k1_ab(run: ResidentExperimentRun, out: Path) -> None:
     for cell in cell_summaries:
         k1 = cell["k1_comparison"]
         arms = cell["arms"]
+        speedup = k1["speedup"]
+        speedup_text = (
+            f"x{speedup:.2f}"
+            if isinstance(speedup, (int, float)) and math.isfinite(speedup)
+            else "speedup unavailable"
+        )
         print(
             f"n=2^{cell['count'].bit_length() - 1} b={cell['bits']} {cell['regime']:>12} "
             f"ref={arms['reference']['k1']['median_ms']:.4f} "
             f"opt={arms['optimized']['k1']['median_ms']:.4f} ms  "
-            f"x{k1['speedup']:.2f} {k1['verdict']} direction={k1['direction_supported']} "
+            f"{speedup_text} {k1['verdict']} direction={k1['direction_supported']} "
             f"magnitude={k1['magnitude_supported']}"
         )
     decision = summary["decision"]

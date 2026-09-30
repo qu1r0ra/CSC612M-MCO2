@@ -6,23 +6,29 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import time
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from stoquant import layout
-from stoquant.snapshot_store import discover, progress
-
-DEFAULT_SERVER = "https://ntfy.sh"
-DEFAULT_HEARTBEAT_SECONDS = 3600
-
-
-class ConfigurationError(ValueError):
-    """The local ntfy configuration is missing or invalid."""
+from stoquant.monitoring import (
+    ConfigurationError,
+    MonitoringConfig,
+    parse_monitoring_config,
+    with_heartbeat,
+)
+from stoquant.snapshot_store import (
+    ACTIVE_SNAPSHOT_REGISTRATION_ENV,
+    SnapshotProgress,
+    discover,
+    new_since,
+    progress,
+    registered_snapshot,
+)
 
 
 class NotificationError(RuntimeError):
@@ -34,84 +40,19 @@ class NoRedirects(HTTPRedirectHandler):
         return None
 
 
-def _read_env_file(path: Path) -> dict[str, str]:
-    """Read simple KEY=VALUE entries without exporting them to child processes."""
-    try:
-        contents = path.read_text(encoding="utf-8-sig")
-    except FileNotFoundError:
-        return {}
-    except OSError as exc:
-        raise ConfigurationError("Could not read the local ntfy configuration file.") from exc
-
-    values: dict[str, str] = {}
-    for line in contents.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        key = key.strip()
-        if key not in {"NTFY_SERVER", "NTFY_TOPIC", "NTFY_TOKEN", "NTFY_HEARTBEAT_SECONDS"}:
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
-    return values
+def _configuration(root: Path) -> MonitoringConfig:
+    return parse_monitoring_config(root, require_notifications=True)
 
 
-def _configuration(root: Path, environ: Mapping[str, str] | None = None) -> dict[str, str | int]:
-    file_values = _read_env_file(root / ".env")
-    process_values = os.environ if environ is None else environ
-    values = {
-        **file_values,
-        **{key: value for key, value in process_values.items() if key.startswith("NTFY_")},
-    }
-
-    missing = [key for key in ("NTFY_TOPIC", "NTFY_TOKEN") if not values.get(key, "").strip()]
-    if missing:
-        raise ConfigurationError(
-            "Missing ntfy configuration: " + ", ".join(missing) + ". Set them in a local .env file."
-        )
-
-    try:
-        heartbeat_seconds = int(values.get("NTFY_HEARTBEAT_SECONDS", DEFAULT_HEARTBEAT_SECONDS))
-    except (TypeError, ValueError) as exc:
-        raise ConfigurationError("NTFY_HEARTBEAT_SECONDS must be a positive integer.") from exc
-    if heartbeat_seconds < 1:
-        raise ConfigurationError("NTFY_HEARTBEAT_SECONDS must be a positive integer.")
-
-    server = str(values.get("NTFY_SERVER", DEFAULT_SERVER)).rstrip("/")
-    parsed = urlsplit(server)
-    if (
-        not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-        or parsed.path not in ("", "/")
-        or (
-            parsed.scheme != "https"
-            and not (
-                parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-            )
-        )
-    ):
-        raise ConfigurationError("NTFY_SERVER must use https (http is allowed only for localhost).")
-    return {
-        "server": server,
-        "topic": values["NTFY_TOPIC"].strip(),
-        "token": values["NTFY_TOKEN"].strip(),
-        "heartbeat_seconds": heartbeat_seconds,
-    }
-
-
-def _publish(config: Mapping[str, str | int], title: str, message: str) -> None:
-    topic = quote(str(config["topic"]), safe="")
+def _publish(config: MonitoringConfig, title: str, message: str) -> None:
+    if config.topic is None or config.token is None:
+        raise ConfigurationError("Missing ntfy configuration: NTFY_TOPIC, NTFY_TOKEN.")
+    topic = quote(config.topic, safe="")
     request = Request(
-        f"{config['server']}/{topic}",
+        f"{config.server}/{topic}",
         data=message.encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {config['token']}",
+            "Authorization": f"Bearer {config.token}",
             "Content-Type": "text/plain; charset=utf-8",
             "Title": title,
         },
@@ -127,135 +68,81 @@ def _publish(config: Mapping[str, str | int], title: str, message: str) -> None:
         raise NotificationError("ntfy could not be reached.") from None
 
 
-def _run_family(command: list[str]) -> str:
-    for index, argument in enumerate(command):
-        if argument == "--input-family" and index + 1 < len(command):
-            return " ".join(command[index + 1].split())[:48] or "unknown"
-        if argument.startswith("--input-family="):
-            return " ".join(argument.partition("=")[2].split())[:48] or "unknown"
-    return "dense"
-
-
-def _explicit_output_directory(root: Path, command: list[str]) -> Path | None:
-    for index, argument in enumerate(command):
-        value = None
-        if argument == "--output-dir" and index + 1 < len(command):
-            value = command[index + 1]
-        elif argument.startswith("--output-dir="):
-            value = argument.partition("=")[2]
-        if value:
-            output = Path(value)
-            return output if output.is_absolute() else root / output
-    return None
-
-
-def _snapshot_for_run(
-    root: Path,
-    command: list[str],
-    previous_snapshots: set[Path],
-) -> Path | None:
-    explicit = _explicit_output_directory(root, command)
-    if explicit is not None:
-        partial = explicit.with_name(explicit.name + ".partial")
-        if partial.exists():
-            return partial
-        if explicit.exists():
-            return explicit
-    candidates = discover(root) - previous_snapshots
-    return max(candidates, key=lambda path: path.stat().st_mtime, default=None)
-
-
-def _snapshot_progress(
-    snapshot: Path | None, root: Path
-) -> tuple[str | None, int | None, int | None]:
-    if snapshot is None or not snapshot.is_dir():
-        return None, None, None
-    try:
-        relative = snapshot.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        relative = None
-
-    completed, total = progress(snapshot)
-    return relative, completed, total
-
-
-def _notify_best_effort(config: Mapping[str, str | int], title: str, message: str) -> None:
+def _notify_best_effort(config: MonitoringConfig, title: str, message: str) -> None:
     try:
         _publish(config, title, message)
     except NotificationError as exc:
         print(f"Warning: ntfy notification failed: {exc}", file=sys.stderr, flush=True)
 
 
-def _heartbeat_message(
-    family: str,
-    elapsed_seconds: float,
-    snapshot: Path | None,
-    root: Path,
-    command: list[str],
-    previous_snapshots: set[Path],
-) -> str:
-    selected = snapshot or _snapshot_for_run(root, command, previous_snapshots)
-    relative, completed, total = _snapshot_progress(selected, root)
+def _family(state: SnapshotProgress | None) -> str:
+    return state.input_family if state is not None and state.input_family else "benchmark"
+
+
+def _heartbeat_message(elapsed_seconds: float, state: SnapshotProgress | None) -> str:
     minutes, seconds = divmod(int(elapsed_seconds), 60)
     hours, minutes = divmod(minutes, 60)
     parts = [
         "event: heartbeat",
-        f"family: {family}",
+        f"family: {_family(state)}",
         f"elapsed: {hours:02}:{minutes:02}:{seconds:02}",
     ]
-    if relative:
-        parts.append(f"snapshot: {relative}")
-    if completed is not None:
-        progress = f"cases completed: {completed}"
-        if total is not None:
-            progress += f"/{total}"
-        parts.append(progress)
+    if state is not None and state.snapshot:
+        parts.append(f"snapshot: {state.snapshot}")
+    if state is not None:
+        case_progress = f"cases completed: {state.completed_cases}"
+        if state.total_cases is not None:
+            case_progress += f"/{state.total_cases}"
+        parts.append(case_progress)
     else:
         parts.append("cases completed: unavailable")
     return "\n".join(parts)
 
 
 def _terminal_message(
-    family: str,
-    exit_code: int,
-    elapsed_seconds: float,
-    snapshot: Path | None,
-    root: Path,
+    exit_code: int, elapsed_seconds: float, state: SnapshotProgress | None
 ) -> str:
-    relative, completed, total = _snapshot_progress(snapshot, root)
     minutes, seconds = divmod(int(elapsed_seconds), 60)
     hours, minutes = divmod(minutes, 60)
     outcome = "success" if exit_code == 0 else "failure"
     parts = [
         f"event: {outcome}",
-        f"family: {family}",
+        f"family: {_family(state)}",
         f"duration: {hours:02}:{minutes:02}:{seconds:02}",
         f"exit code: {exit_code}",
     ]
-    if relative:
-        parts.append(f"snapshot: {relative}")
-    if completed is not None:
-        case_summary = f"cases: {completed}"
-        if total is not None:
-            case_summary += f"/{total}"
+    if state is not None and state.snapshot:
+        parts.append(f"snapshot: {state.snapshot}")
+    if state is not None:
+        case_summary = f"cases: {state.completed_cases}"
+        if state.total_cases is not None:
+            case_summary += f"/{state.total_cases}"
         parts.append(case_summary)
     return "\n".join(parts)
 
 
-def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]) -> int:
-    family = _run_family(command)
-    heartbeat_seconds = int(config["heartbeat_seconds"])
+def _snapshot_progress(
+    root: Path, previous: set[Path], registration_file: Path
+) -> SnapshotProgress | None:
+    selected = registered_snapshot(registration_file)
+    if selected is None:
+        selected = new_since(root, previous)
+    return progress(selected, root)
+
+
+def _run_command(command: list[str], root: Path, config: MonitoringConfig) -> int:
+    heartbeat_seconds = config.heartbeat_seconds
     previous_snapshots = discover(root)
     started_at = datetime.now(UTC)
 
     try:
         _publish(
             config,
-            f"stoquant {family} started",
+            "stoquant benchmark started",
             "\n".join(
                 (
                     "event: start",
-                    f"family: {family}",
+                    "family: benchmark",
                     f"started: {started_at.isoformat(timespec='seconds')}",
                     f"heartbeat interval: {heartbeat_seconds} seconds",
                 )
@@ -265,62 +152,67 @@ def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]
         print(f"ntfy start notification failed: {exc}", file=sys.stderr, flush=True)
         return 2
 
-    child_env = os.environ.copy()
-    for key in ("NTFY_SERVER", "NTFY_TOPIC", "NTFY_TOKEN", "NTFY_HEARTBEAT_SECONDS"):
-        child_env.pop(key, None)
-    child_env["STOQUANT_MONITORING_PROVIDER"] = "ntfy"
-    child_env["STOQUANT_MONITORING_HEARTBEAT_SECONDS"] = str(heartbeat_seconds)
-
-    exit_code = 127
-    child: subprocess.Popen[bytes] | None = None
-    started = time.monotonic()
+    registration_dir = tempfile.TemporaryDirectory(prefix="stoquant-notify-")
+    registration_file = Path(registration_dir.name) / "active-snapshot.json"
     try:
-        if command[0] == "python":
-            command = [sys.executable, *command[1:]]
-        child = subprocess.Popen(command, cwd=root, env=child_env)
-        next_heartbeat = time.monotonic() + heartbeat_seconds
-        while True:
-            remaining = max(0, next_heartbeat - time.monotonic())
-            try:
-                exit_code = child.wait(timeout=remaining)
-                break
-            except subprocess.TimeoutExpired:
-                elapsed = time.monotonic() - started
-                selected = _snapshot_for_run(root, command, previous_snapshots)
-                _notify_best_effort(
-                    config,
-                    f"stoquant {family} heartbeat",
-                    _heartbeat_message(
-                        family,
-                        elapsed,
-                        selected,
-                        root,
-                        command,
-                        previous_snapshots,
-                    ),
-                )
-                next_heartbeat = time.monotonic() + heartbeat_seconds
-    except KeyboardInterrupt:
-        if child is not None and child.poll() is None:
-            child.terminate()
-            try:
-                child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-        exit_code = child.returncode if child is not None and child.returncode else 130
-    except OSError as exc:
-        print(f"Could not start the benchmark command: {exc}", file=sys.stderr, flush=True)
+        child_env = os.environ.copy()
+        for key in (
+            "NTFY_SERVER",
+            "NTFY_TOPIC",
+            "NTFY_TOKEN",
+            "NTFY_HEARTBEAT_SECONDS",
+            ACTIVE_SNAPSHOT_REGISTRATION_ENV,
+        ):
+            child_env.pop(key, None)
+        child_env["STOQUANT_MONITORING_PROVIDER"] = "ntfy"
+        child_env["STOQUANT_MONITORING_HEARTBEAT_SECONDS"] = str(heartbeat_seconds)
+        child_env[ACTIVE_SNAPSHOT_REGISTRATION_ENV] = str(registration_file)
 
-    elapsed = time.monotonic() - started
-    snapshot = _snapshot_for_run(root, command, previous_snapshots)
-    outcome = "succeeded" if exit_code == 0 else "failed"
-    _notify_best_effort(
-        config,
-        f"stoquant {family} {outcome}",
-        _terminal_message(family, exit_code, elapsed, snapshot, root),
-    )
-    return exit_code
+        exit_code = 127
+        child: subprocess.Popen[bytes] | None = None
+        started = time.monotonic()
+        try:
+            if command[0] == "python":
+                command = [sys.executable, *command[1:]]
+            child = subprocess.Popen(command, cwd=root, env=child_env)
+            next_heartbeat = time.monotonic() + heartbeat_seconds
+            while True:
+                remaining = max(0, next_heartbeat - time.monotonic())
+                try:
+                    exit_code = child.wait(timeout=remaining)
+                    break
+                except subprocess.TimeoutExpired:
+                    elapsed = time.monotonic() - started
+                    state = _snapshot_progress(root, previous_snapshots, registration_file)
+                    _notify_best_effort(
+                        config,
+                        f"stoquant {_family(state)} heartbeat",
+                        _heartbeat_message(elapsed, state),
+                    )
+                    next_heartbeat = time.monotonic() + heartbeat_seconds
+        except KeyboardInterrupt:
+            if child is not None and child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+            exit_code = child.returncode if child is not None and child.returncode else 130
+        except OSError as exc:
+            print(f"Could not start the benchmark command: {exc}", file=sys.stderr, flush=True)
+
+        elapsed = time.monotonic() - started
+        state = _snapshot_progress(root, previous_snapshots, registration_file)
+        outcome = "succeeded" if exit_code == 0 else "failed"
+        _notify_best_effort(
+            config,
+            f"stoquant {_family(state)} {outcome}",
+            _terminal_message(exit_code, elapsed, state),
+        )
+        return exit_code
+    finally:
+        registration_dir.cleanup()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -350,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.heartbeat_seconds is not None:
         if args.heartbeat_seconds < 1:
             parser.error("--heartbeat-seconds must be a positive integer")
-        config["heartbeat_seconds"] = args.heartbeat_seconds
+        config = with_heartbeat(config, args.heartbeat_seconds)
 
     try:
         _publish(

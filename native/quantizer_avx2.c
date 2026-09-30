@@ -98,6 +98,17 @@ static uint32_t max_magnitude_bits(const float *values, size_t count,
   return result;
 }
 
+static sq_status scan_avx2_encode_input(const float *values, size_t count,
+                                        void *context, int *has_nonzero) {
+  int threads = *(const int *)context;
+  uint32_t max_bits = max_magnitude_bits(values, count, threads);
+  if (max_bits >= NONFINITE_BITS) {
+    return SQ_ERR_NONFINITE;
+  }
+  *has_nonzero = max_bits != 0;
+  return SQ_OK;
+}
+
 /*
  * terms[j] holds the term of element rev[j]. Pairing j with j + half on
  * bit-reversed storage adds the same operands at every level as the adjacent
@@ -376,51 +387,17 @@ sq_status sq_avx2_encode_payload(uint8_t bit_width, const float *values,
                                  size_t count, float scale,
                                  const uint32_t *words, uint8_t *payload,
                                  int threads) {
-  uint32_t s, max_bits = 0;
-  int has_nonzero;
-
-  if (bit_width != SQ_Q4_BITS && bit_width != SQ_Q8_BITS) {
-    return SQ_ERR_BIT_WIDTH;
+  sq_encode_payload_state state;
+  sq_status status = sq_encode_payload_prologue(
+      bit_width, values, count, scale, words, payload, scan_avx2_encode_input,
+      &threads, &state);
+  if (status != SQ_OK) {
+    return status;
   }
-  s = (bit_width == SQ_Q4_BITS) ? SQ_Q4_SIGNED_LIMIT : SQ_Q8_SIGNED_LIMIT;
-
-  if (count != 0 && (values == NULL || words == NULL || payload == NULL)) {
-    return SQ_ERR_ARGUMENT;
-  }
-  if (!isfinite(scale) || scale < 0.0f) {
-    return SQ_ERR_SCALE;
-  }
-  if (count == 0 && scale != 0.0f) {
-    return SQ_ERR_SCALE;
-  }
-  if (count != 0) {
-    max_bits = max_magnitude_bits(values, count, threads);
-  }
-  if (max_bits >= NONFINITE_BITS) {
-    return SQ_ERR_NONFINITE;
-  }
-  has_nonzero = max_bits != 0;
-  if (!has_nonzero && scale != 0.0f) {
-    return SQ_ERR_SCALE;
-  }
-
-  if (scale == 0.0f) {
-    if (has_nonzero) {
-      return SQ_ERR_SCALE;
-    }
-    if (count == 0) {
-      return SQ_OK;
-    }
-    if (bit_width == SQ_Q8_BITS) {
-      memset(payload, (int)s, count);
-    } else {
-      memset(payload, (int)((s & 0x0F) | ((s & 0x0F) << 4)), count / 2);
-      if (count % 2 == 1) {
-        payload[count / 2] = (uint8_t)(s & 0x0F);
-      }
-    }
+  if (state.skip_encoding) {
     return SQ_OK;
   }
+  uint32_t s = (uint32_t)state.signed_limit;
 
   omp_set_dynamic(0);
 #pragma omp parallel num_threads(threads)

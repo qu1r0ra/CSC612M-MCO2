@@ -31,7 +31,7 @@ Setup is complete when the command exits successfully and the test notification 
 Each `just bench-matrix` invocation sends:
 
 - A preflight notification before the benchmark driver is started.
-- A start notification with the input family, UTC start time, and heartbeat interval.
+- A start notification with the generic `benchmark` family, UTC start time, and heartbeat interval. Later notifications report the input family from the run plan when it is available.
 - A heartbeat at the configured interval with the input family, elapsed time, relative snapshot path when known, and completed case count when available.
 - A terminal success or failure notification with the input family, duration, exit code, relative snapshot path when known, and completed/total case count when available.
 

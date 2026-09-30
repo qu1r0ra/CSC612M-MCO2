@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser.add_argument("--output", type=Path, default=Path("build/vec_report_avx2.txt"))
     args = parser.parse_args(argv)
     root = layout.ROOT
-    flags = collect_build_commands(root)["_avx2_tokens"]
+    flags = collect_build_commands(root).avx2_tokens
     if flags is None:
         print("no quantizer_avx2.c compile found in the build recipe", file=sys.stderr)
         return 1

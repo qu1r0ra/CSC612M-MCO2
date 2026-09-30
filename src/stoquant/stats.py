@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -129,6 +130,44 @@ def compare_speedup(
     baseline: dict[str, Any], candidate: dict[str, Any], point_key: str
 ) -> dict[str, Any]:
     """Point speedup from pooled medians, a conservative range, and a bootstrap CI."""
+    baseline_trials = baseline.get("trial_medians_ms", ())
+    candidate_trials = candidate.get("trial_medians_ms", ())
+    if (
+        not isinstance(baseline_trials, Sequence)
+        or not isinstance(candidate_trials, Sequence)
+        or not baseline_trials
+        or not candidate_trials
+    ):
+        return {
+            point_key: None,
+            "speedup_low": None,
+            "speedup_high": None,
+            "speedup_ci_low": None,
+            "speedup_ci_high": None,
+            "verdict": "inconclusive",
+        }
+    values = (
+        baseline.get("median_ms"),
+        baseline.get("trial_median_min_ms"),
+        baseline.get("trial_median_max_ms"),
+        candidate.get("median_ms"),
+        candidate.get("trial_median_min_ms"),
+        candidate.get("trial_median_max_ms"),
+        *baseline_trials,
+        *candidate_trials,
+    )
+    if not values or any(
+        not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0
+        for value in values
+    ):
+        return {
+            point_key: None,
+            "speedup_low": None,
+            "speedup_high": None,
+            "speedup_ci_low": None,
+            "speedup_ci_high": None,
+            "verdict": "inconclusive",
+        }
     low = baseline["trial_median_min_ms"] / candidate["trial_median_max_ms"]
     high = baseline["trial_median_max_ms"] / candidate["trial_median_min_ms"]
     if low > 1.0:
@@ -162,6 +201,22 @@ def claim_support(
             direction and not baseline["unstable_rev2"] and not candidate["unstable_rev2"]
         ),
     }
+
+
+def direction_supported(stats: Mapping[str, Any]) -> bool:
+    """Read the stored rule result, recomputing only for older snapshots."""
+    if "direction_supported" in stats:
+        return bool(stats["direction_supported"])
+    return stats.get("verdict") in ("faster", "slower") and not stats.get("boundary_inversion")
+
+
+def magnitude_supported(stats: Mapping[str, Any]) -> bool | None:
+    value = stats.get("magnitude_supported")
+    return value if value is None or isinstance(value, bool) else bool(value)
+
+
+def rev2_supported(stats: Mapping[str, Any]) -> bool:
+    return bool(stats.get("claim_supported_rev2", stats.get("claim_supported")))
 
 
 def baseline_label(path: BenchPath) -> str | None:
