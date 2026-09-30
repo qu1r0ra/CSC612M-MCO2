@@ -37,6 +37,7 @@ from stoquant.inputs import (
 from stoquant.oracle import SIGNED_LIMITS
 from stoquant.plotting import pyplot
 from stoquant.provenance import collect_git_provenance, find_binary
+from stoquant.snapshot_store import create_snapshot, derived_directory, snapshot_path
 
 SUITE_SEEDS = 4096
 SEED_START = 1
@@ -342,7 +343,6 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         "--backends", nargs="+", choices=BACKENDS, default=list(BACKENDS), help="Backends"
     )
     parser.add_argument("--input-seed", type=int, default=DEFAULT_INPUT_SEED)
-    parser.add_argument("--allow-existing", action="store_true")
     parser.add_argument(
         "--allow-dirty",
         action="store_true",
@@ -355,29 +355,19 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
 
     git_prov = collect_git_provenance(root)
     now = datetime.now(UTC)
-    target = args.output_dir or (
-        root / "results" / f"{now:%Y-%m-%d}-{git_prov['code_revision_short']}-unbiasedness"
-    )
-    if target.exists() and not args.allow_existing:
-        sys.exit(f"Results directory already exists and snapshots are frozen: {target}")
-    if git_prov["git_dirty"] and not args.allow_dirty:
-        sys.exit(
-            "Working tree is dirty; commit first or pass --allow-dirty for a non-evidence run: "
-            + "; ".join(git_prov["dirty_files"])
-        )
-
-    created = not target.exists()
+    final = args.output_dir or snapshot_path(root, git_prov["code_revision_short"], "unbiasedness")
+    snapshot = create_snapshot(final, git_prov, allow_dirty=args.allow_dirty)
+    target = snapshot.partial
     work_dir = target / "_temp"
     try:
         verified = find_binary(root, require_cuda="cuda" in args.backends, git_prov=git_prov)
         binary = verified.path
-        target.mkdir(parents=True, exist_ok=True)
         results, plot_data = run_suite(
             binary, work_dir, args.seeds, tuple(args.backends), args.input_seed
         )
         shutil.rmtree(work_dir, ignore_errors=True)
 
-        plot_unbiasedness(plot_data, args.seeds, target / FIGURE)
+        plot_unbiasedness(plot_data, args.seeds, derived_directory(target) / FIGURE)
         reasons = non_evidence_reasons(args, git_prov["git_dirty"])
         report = {
             "created_at_utc": now.isoformat(),
@@ -396,9 +386,10 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
             "cases": results,
         }
         (target / RESULTS).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        if report["all_passed"]:
+            snapshot.commit()
     except BaseException as exc:
-        # Leave no partial snapshot behind, so a rerun is not refused.
-        shutil.rmtree(target if created else work_dir, ignore_errors=True)
+        # Keep the partial directory as evidence of where the run stopped.
         if isinstance(exc, (RuntimeError, OSError)):
             sys.exit(f"Unbiasedness suite failed: {exc}")
         raise
@@ -411,7 +402,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
             f"identical {r['backends_identical']}  "
             f"{'pass' if r['passed'] else 'FAIL'}"
         )
-    print(f"Results written to {target}")
+    print(f"Results written to {final if report['all_passed'] else target}")
     if not report["all_passed"]:
         sys.exit(1)
 

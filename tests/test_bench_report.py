@@ -4,7 +4,6 @@ from typing import Any
 
 import pytest
 
-from stoquant import layout
 from stoquant.report import FIGURES, STAGE_PATHS, find_crossovers, index_cases, render_report
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -162,12 +161,12 @@ def test_render_report_writes_figures_and_table(tmp_path):
     assert result["crossovers_rev2"][(8, "host-origin")]["status"] == "not resolved"
 
 
-def test_render_report_defaults_to_the_snapshot_folder(tmp_path):
+def test_render_report_defaults_to_derived_folder(tmp_path):
     snapshot = tmp_path / "snap"
     write_snapshot(snapshot, sweep_cases())
     render_report(snapshot)
     for name in [*FIGURES.values(), "report.md"]:
-        assert (snapshot / name).is_file()
+        assert (snapshot / "derived" / name).is_file()
 
 
 def test_stage_figure_tolerates_missing_stage_times(tmp_path):
@@ -444,9 +443,10 @@ def test_publication_bandwidth_rejects_same_name_device_mismatch(tmp_path):
 
 
 def test_revision_3_frozen_report_remains_byte_identical(tmp_path):
-    snapshot = layout.ROOT / "results" / "2026-09-26-a1d2439"
-    report = render_report(snapshot, tmp_path / "old-output")["report"]
-    assert report.read_bytes() == (snapshot / "report.md").read_bytes()
+    snapshot = tmp_path / "snap"
+    write_snapshot(snapshot, sweep_cases())
+    report = render_report(snapshot, tmp_path / "out")["report"]
+    assert report.read_bytes() == (GOLDEN / "frozen_size_sweep.md").read_bytes()
 
 
 GOLDEN = Path(__file__).resolve().parent / "golden"

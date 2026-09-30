@@ -157,7 +157,7 @@ The Linux CUDA path has not been run; record the Colab GPU model and host compil
 After changing Python reference, analysis, or tooling code, run `just format` and then `just lint`.
 Before declaring a code change ready, run `just verify`, which includes Ruff linting and a formatting check.
 
-## Benchmark matrix and frozen snapshot
+## Benchmark matrix and snapshots
 
 The benchmark driver measures in-process throughput with `stoquant bench` for the C comparator and the CUDA resident, resident-graph, and host-origin paths at 4 and 8 bits. By default it runs the size sweep: every power of two from $2^{10}$ to $2^{26}$ elements (136 cases). Each (size, bits) cell is gated on Layer 2 correctness and CPU/CUDA byte parity before timing. Cells run in a seeded random order after a 20-second GPU warm-up, and every path runs as a separate process in each of 24 trials, one per ordering of the four paths. Each timed process first runs about one second of untimed repetitions of its path. The driver excludes physical core 0 from its own affinity before starting any process (protocol revision 3); children inherit the mask.
 
@@ -184,21 +184,23 @@ just bench-matrix --boundaries gpu-origin --transfer-policies pageable pinned --
 just bench-matrix --input-family sparse --counts 1024 16384 262144 4194304
 just bench-matrix --input-family model --model-tensors distinct
 
-# Render F1-F4 and report.md (crossover, T1) into a snapshot or pilot folder (dense cases only)
+# Render F1-F4 and report.md (crossover, T1) into derived/ (dense cases only)
 just figures results/<date>-<short_rev>
 ```
 
 ### Layer 3 empirical expectation suite
 
-`just unbiasedness` builds the CUDA executable and runs the full expectation suite of the technical contract (correctness layer 3): four inputs, both bit widths, both backends, 4,096 seeds, about a minute on the RTX 5060. It writes `results/<date>-<short_rev>-unbiasedness/unbiasedness.json` and `f_unbiasedness.png` and exits nonzero if any case fails. Run it from a clean tree; `--allow-dirty`, `--seeds N`, `--backends cpu`, and `--output-dir DIR` give non-evidence runs.
+`just unbiasedness` builds the CUDA executable and runs the full expectation suite of the technical contract (correctness layer 3): four inputs, both bit widths, both backends, 4,096 seeds, about a minute on the RTX 5060. It writes `results/<date>-<short_rev>-unbiasedness/unbiasedness.json` and `derived/f_unbiasedness.png` and exits nonzero if any case fails. Run it from a clean tree; `--allow-dirty`, `--seeds N`, `--backends cpu`, and `--output-dir DIR` give non-evidence runs.
 
 ### K1 bandwidth baseline
 
-`just k1-baseline --output-dir results/<date>-<short_rev>-k1-baseline` builds the CUDA executable and `build/stream_probe`, then measures the reference K1 against the device's theoretical and achievable bandwidth over the full matrix. It writes `summary.json`, `processes.csv`, `processes.json`, and `stream_probe.json`, and refuses a dirty tree or a non-empty output folder. `--allow-dirty`, `--counts`, `--bits`, and `--processes N` give non-evidence runs.
+`just k1-baseline` builds the CUDA executable and `build/stream_probe`, then measures the reference K1 against the device's theoretical and achievable bandwidth over the full matrix. It writes `summary.json`, `processes.csv`, `processes.json`, and `stream_probe.json`, and refuses a dirty tree or an existing output folder. `--allow-dirty`, `--counts`, `--bits`, and `--processes N` give non-evidence runs.
 
 ### Inspecting results and provenance
 
-Snapshots are stored in `results/<date>-<short_rev>/`:
+Snapshots are stored in `results/<local-date>-<short_rev>/`. Writers create `<name>.partial` first and rename it when the run completes. An interrupted run keeps the partial folder for diagnosis; start a new run with a new name. Raw files remain write-once. Figures and reports regenerate in `derived/`, as specified by [ADR 0005](adr/0005-snapshot-lifecycle.md).
+
+The matrix run also writes `run-plan.json` for progress notifications. Raw files include:
 - `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the verified `build_stamp` and build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policies (`transfer_policies`, `["pageable"]` by default), the measured `paths` and `trial_design` (manifest 3.2), GPU state before and after the warm-up and after the run, the case order and its seed, trial orders, the statistics method and claim rule, input hashes, and from revision 3 the affinity mask, the readiness facts, the power plan and HAGS state, and `evidence` with its `non_evidence_reasons`.
 - `summary.csv`: Per-case `boundary`, `transfer_policy`, `path_label`, and `baseline`, pooled median and IQR, trial-median range, `spread_ratio` and `spread_p90_p10`, `speedup_vs_c` with its range, bootstrap CI and verdict, and the `stable`, `unstable_rev2`, `boundary_inversion`, `direction_supported`, `magnitude_supported`, and `claim_supported_rev2` flags. Snapshots before revision 3 carry `unstable` and `claim_supported` instead.
 - `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`, for host-origin `h2d_ms` and `d2h_ms`, for GPU-origin `d2h_ms`, and for CPU GPU-origin `cpu_ms`) with each trial's path order and invocation identifiers, the case's `execution_index`, pooled samples, statistics, `stage_medians_ms`, configuration, and correctness validation results.

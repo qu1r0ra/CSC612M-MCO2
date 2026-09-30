@@ -78,6 +78,7 @@ from stoquant.runner import (
     run_bench_process,
     warm_up_gpu,
 )
+from stoquant.snapshot_store import check_snapshot, create_snapshot, snapshot_path
 from stoquant.stats import (
     BASELINE_RULE,
     BOOTSTRAP_LEVEL,
@@ -208,7 +209,6 @@ def run_benchmark_matrix(
     case_warmup_seconds: float = DEFAULT_CASE_WARMUP_SECONDS,
     in_process_warmup_seconds: float = DEFAULT_IN_PROCESS_WARMUP_SECONDS,
     bench_process: BenchProcess = REAL_BENCH_PROCESS,
-    allow_existing: bool = False,
     allow_dirty: bool = False,
     pilot: bool = False,
     readiness_facts: dict[str, Any] | None = None,
@@ -243,31 +243,11 @@ def run_benchmark_matrix(
     with process_affinity(mask):
         git_prov = collect_git_provenance(root)
 
-        # Determine snapshot directory name
-        now = datetime.now(UTC)
-        date_str = now.strftime("%Y-%m-%d")
-        short_rev = git_prov["code_revision_short"]
-        if output_dir is not None:
-            target_dir = output_dir
-        elif pilot:
-            target_dir = root / "results" / "pilots" / f"{now:%Y-%m-%dT%H%M%S}-{short_rev}"
-        else:
-            suffix = "" if input_family == "dense" else f"-{input_family}"
-            target_dir = root / "results" / f"{date_str}-{short_rev}{suffix}"
-
-        if target_dir.exists() and not allow_existing:
-            raise FileExistsError(
-                f"Snapshot directory already exists: {target_dir}. "
-                "Snapshots are frozen and never overwritten. "
-                "Pass --allow-existing or an explicit --output-dir if intentional."
-            )
-
-        if git_prov["git_dirty"] and not allow_dirty:
-            raise RuntimeError(
-                "Working tree is dirty; a snapshot must be traceable to a committed revision. "
-                "Commit or remove these changes, or pass --allow-dirty for a non-evidence run: "
-                + "; ".join(git_prov["dirty_files"])
-            )
+        target_dir = output_dir or snapshot_path(
+            root, git_prov["code_revision_short"], input_family, pilot=pilot
+        )
+        date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
+        check_snapshot(target_dir, git_prov, allow_dirty=allow_dirty)
 
         # Revision 3: judge the machine before any benchmark process starts. A pilot is
         # non-evidence by design, so it records the check without enforcing it.
@@ -312,9 +292,10 @@ def run_benchmark_matrix(
             "previous_mask": hex(previous_mask),
             "applied_to": "driver process before any benchmark or probe process; inherited",
         }
-        return sweep_matrix(
+        snapshot = create_snapshot(target_dir, git_prov, allow_dirty=allow_dirty)
+        sweep_matrix(
             root=root,
-            target_dir=target_dir,
+            target_dir=snapshot.partial,
             date_str=date_str,
             git_prov=git_prov,
             run_conditions=run_conditions,
@@ -338,6 +319,7 @@ def run_benchmark_matrix(
             model_limit=model_limit,
             k1=k1,
         )
+        return snapshot.commit()
 
 
 @dataclass(frozen=True)
@@ -456,6 +438,11 @@ def sweep_matrix(
     inputs = generate_inputs(setup, settings)
     vec_report_path = write_vectorization_reports(root, target_dir, setup, settings)
     order = order_and_warm_up(setup, inputs, settings)
+    (target_dir / "run-plan.json").write_text(
+        json.dumps({"total_cases": len(order.ordered_cases) * len(paths)}),
+        encoding="utf-8",
+        newline="\n",
+    )
 
     case_results: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
@@ -519,9 +506,8 @@ def set_up_run(
     device_attributes = query_device_attributes(root) if publication else None
     gpu_state_start = query_gpu_state() if settings.cuda else None
 
-    target_dir.mkdir(parents=True, exist_ok=True)
     temp_dir = target_dir / "_temp"
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir.mkdir()
     return RunSetup(
         verified.path,
         verified.stamp,
@@ -1189,9 +1175,6 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         help="Model family: keep only the first N selected tensors",
     )
     parser.add_argument(
-        "--allow-existing", action="store_true", help="Allow writing into existing folder"
-    )
-    parser.add_argument(
         "--allow-dirty",
         action="store_true",
         help="Run from an uncommitted tree (records the dirty files; not for evidence)",
@@ -1229,7 +1212,6 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
             gpu_warmup_seconds=args.gpu_warmup_seconds,
             case_warmup_seconds=args.case_warmup_seconds,
             in_process_warmup_seconds=args.warmup_seconds,
-            allow_existing=args.allow_existing,
             allow_dirty=args.allow_dirty,
             pilot=args.pilot,
             ignore_readiness=args.ignore_readiness,
