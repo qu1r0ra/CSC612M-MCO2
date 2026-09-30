@@ -35,13 +35,10 @@ def stamp_path(binary: Path) -> Path:
 
 
 def recipe_commands(root: Path, recipe: str) -> list[str]:
-    result = subprocess.run(
-        ["just", "--dry-run", recipe], cwd=root, capture_output=True, text=True, check=False
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"just --dry-run {recipe} failed: {result.stderr.strip()}")
-    output = result.stderr if result.stderr.strip() else result.stdout
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    """Reconstruct the compiler commands from the justfile's source and flag lists."""
+    from stoquant.native_build import recipe_commands as build_recipe_commands
+
+    return build_recipe_commands(root, recipe)
 
 
 def compiler_commands(commands: list[str]) -> list[str]:
@@ -87,6 +84,7 @@ def verify_stamp(
     tree_dirty: bool,
     fingerprint: str,
     require_cuda: bool,
+    expected_recipe: str | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     path = stamp_path(binary)
     if not path.is_file():
@@ -104,7 +102,9 @@ def verify_stamp(
     if stamp.get("tree_dirty") != tree_dirty or stamp.get("tree_fingerprint") != fingerprint:
         raise RuntimeError(f"build stamp tree state is stale at {path}")
     recipe = stamp.get("recipe")
-    if recipe not in ("build-cpu", "build-cuda", "build-cuda-fault"):
+    from stoquant.native_build import BUILD_RECIPES
+
+    if recipe not in BUILD_RECIPES:
         raise RuntimeError(f"build stamp has an unsupported recipe at {path}")
     commands = stamp.get("commands")
     if not isinstance(commands, list) or not all(isinstance(command, str) for command in commands):
@@ -115,6 +115,10 @@ def verify_stamp(
         raise RuntimeError(f"test-only build define in stamp at {path}")
     if require_cuda and recipe != "build-cuda":
         raise RuntimeError(f"{recipe} binary cannot serve CUDA paths")
+    if expected_recipe is not None:
+        allowed = (expected_recipe,) if isinstance(expected_recipe, str) else expected_recipe
+        if recipe not in allowed:
+            raise RuntimeError(f"build stamp recipe {recipe!r} is not one of {allowed!r} at {path}")
     if commands != recipe_commands(root, recipe):
         raise RuntimeError(f"build stamp recipe flags are stale at {path}")
     return stamp

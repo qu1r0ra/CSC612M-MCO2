@@ -2,23 +2,16 @@ import subprocess
 import sys
 
 from stoquant import layout
-
-
-def _recipe_bodies() -> dict[str, list[str]]:
-    bodies: dict[str, list[str]] = {}
-    name = ""
-    for line in (layout.ROOT / "justfile").read_text(encoding="utf-8").splitlines():
-        if line and not line[0].isspace() and not line.startswith(("#", "[")):
-            name = line.split(":")[0].split()[0]
-            bodies.setdefault(name, [])
-        elif name and line.startswith((" ", "\t")):
-            bodies[name].append(line)
-    return bodies
+from stoquant.native_build import BUILD_RECIPES, recipe_commands
 
 
 def test_fault_injection_define_is_only_in_the_fault_recipe():
     define = "SQ_CUDA_FAULT_INJECTION"
-    users = {name for name, lines in _recipe_bodies().items() if define in "\n".join(lines)}
+    users = {
+        recipe
+        for recipe in BUILD_RECIPES
+        if define in "\n".join(recipe_commands(layout.ROOT, recipe))
+    }
     assert users == {"build-cuda-fault"}
     text = (layout.ROOT / "justfile").read_text(encoding="utf-8")
     assert define not in text.split("build-cuda-fault")[0]

@@ -2,13 +2,84 @@
 
 from __future__ import annotations
 
+import csv
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, cast
 
 if TYPE_CHECKING:
     from stoquant.inputs import InputProvenance
     from stoquant.monitoring import MonitoringMetadata
+
+
+class SummaryRow(TypedDict):
+    count: int | str
+    bits: int | str
+    backend: str
+    boundary: str
+    transfer_policy: str
+    path_label: str
+    correctness: str
+    warmup: int | str
+    reps: int | str
+    trials: int | str
+    median_ms: str
+    iqr_ms: str
+    trial_median_min_ms: str
+    trial_median_max_ms: str
+    spread_ratio: str
+    spread_p90_p10: str
+    stable: str
+    unstable_rev2: str
+    baseline: str
+    speedup_vs_c: str
+    speedup_low: str
+    speedup_high: str
+    speedup_ci_low: str
+    speedup_ci_high: str
+    verdict: str
+    boundary_inversion: str
+    direction_supported: str
+    magnitude_supported: str
+    claim_supported_rev2: str
+    input_family: str
+    input_key: str
+
+
+SUMMARY_FIELDS = [
+    "count",
+    "bits",
+    "backend",
+    "boundary",
+    "transfer_policy",
+    "path_label",
+    "correctness",
+    "warmup",
+    "reps",
+    "trials",
+    "median_ms",
+    "iqr_ms",
+    "trial_median_min_ms",
+    "trial_median_max_ms",
+    "spread_ratio",
+    "spread_p90_p10",
+    "stable",
+    "unstable_rev2",
+    "baseline",
+    "speedup_vs_c",
+    "speedup_low",
+    "speedup_high",
+    "speedup_ci_low",
+    "speedup_ci_high",
+    "verdict",
+    "boundary_inversion",
+    "direction_supported",
+    "magnitude_supported",
+    "claim_supported_rev2",
+    "input_family",
+    "input_key",
+]
 
 
 class CaseRecord(TypedDict, total=False):
@@ -74,6 +145,15 @@ class MatrixManifest(TypedDict):
     run_conditions: dict[str, Any]
     statistics_method: NotRequired[dict[str, Any]]
     inputs: NotRequired[dict[str | int, InputProvenance]]
+
+
+def write_summary_csv(path: Path, rows: Sequence[SummaryRow]) -> Path:
+    """Write typed matrix summary rows using the shared publication column order."""
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=SUMMARY_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
 
 
 def _write_json(path: Path, record: dict[str, Any]) -> None:

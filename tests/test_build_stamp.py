@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -10,16 +11,37 @@ import pytest
 from stoquant.build_stamp import compiler_commands, recipe_commands, sha256, stamp_path
 from stoquant.provenance import find_binary
 
+TEST_JUSTFILE = """
+cuda_arch := "native"
+cl_includes := "/Inative"
+cc_includes := "-Inative"
+cl_host_flags := "/nologo /O2 /W4"
+cc_host_flags := "-O2 -std=c11 -Wall -Wextra -Werror"
+cl_test_flags := "/nologo /W4"
+cc_strict_flags := "-std=c11 -Wall -Wextra -Werror"
+avx2_cl_flags := "/nologo /O2 /arch:AVX2"
+avx2_cc_flags := "-O2 -mavx2 -fopenmp"
+nvcc_flags := "-O2 -arch=" + cuda_arch + " " + cc_includes
+nvcc_warn_flags := "--Werror all-warnings"
+nvcc_fp_flags := "--fmad=false"
+native_host_sources := "native/main.c native/quantizer.c"
+native_avx2_sources := "native/quantizer_avx2.c"
+native_cuda_sources := "native/quantizer_cuda.cu"
+native_rng_sources := "native/rng_cpu.c native/rng_cuda.cu tests/test_rng.c"
+native_probe_sources := "native/stream_probe.cu"
+test_codec_sources := "tests/test_codec.c native/codec.c"
+test_quantizer_sources := "tests/test_quantizer.c native/quantizer.c native/codec.c native/rng_cpu.c"
+test_avx2_sources := "tests/test_quantizer_avx2.c native/quantizer_avx2.c native/quantizer.c native/codec.c native/rng_cpu.c"
+test_avx2_driver_sources := "tests/test_quantizer_avx2.c"
+test_rng_cpu_sources := "tests/test_rng_cpu.c native/rng_cpu.c"
+test_asan_probe_sources := "tests/asan_overread_probe.c"
+"""
+
 
 @pytest.fixture
 def stamped_binary(tmp_path: Path) -> tuple[Path, Path, dict[str, object]]:
-    (tmp_path / "justfile").write_text(
-        "build-cpu:\n    echo cl.exe /O2 /c native/main.c\n"
-        "build-cuda:\n    echo nvcc -O2 -DSQ_ENABLE_CUDA native/main.cu\n"
-        "build-cuda-fault:\n    echo nvcc -DSQ_CUDA_FAULT_INJECTION native/main.cu\n",
-        encoding="utf-8",
-    )
-    binary = tmp_path / "build" / "stoquant.exe"
+    (tmp_path / "justfile").write_text(TEST_JUSTFILE, encoding="utf-8")
+    binary = tmp_path / "build" / ("stoquant.exe" if os.name == "nt" else "stoquant")
     binary.parent.mkdir()
     binary.write_bytes(b"verified binary")
     commands = recipe_commands(tmp_path, "build-cuda")
@@ -80,4 +102,18 @@ def test_locator_refuses_unverifiable_build(stamped_binary, change, message):
     if change not in ("missing", "hash"):
         path.write_text(json.dumps(stamp), encoding="utf-8")
     with pytest.raises(RuntimeError, match=message):
+        find_binary(root, git_prov=git)
+
+
+def test_stamp_detects_source_list_changes(stamped_binary):
+    root, _, git = stamped_binary
+    justfile = root / "justfile"
+    justfile.write_text(
+        justfile.read_text(encoding="utf-8").replace(
+            'native_host_sources := "native/main.c native/quantizer.c"',
+            'native_host_sources := "native/main.c native/quantizer.c native/new_unit.c"',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="recipe flags are stale"):
         find_binary(root, git_prov=git)

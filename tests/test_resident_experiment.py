@@ -50,6 +50,7 @@ def test_k1_experiments_use_shared_runner_and_fake_process_adapter(
         "dirty_files": [],
         "code_revision_short": "test123",
         "code_revision": "0" * 40,
+        "tree_fingerprint": "clean tree",
     }
     probe = {
         "device": {
@@ -89,7 +90,16 @@ def test_k1_experiments_use_shared_runner_and_fake_process_adapter(
             avx2_tokens=None,
         ),
     )
-    monkeypatch.setattr(resident_experiment, "dry_run", lambda _root, recipe: [recipe])
+    monkeypatch.setattr(
+        resident_experiment,
+        "verify_stamp",
+        lambda *_args, **_kwargs: {
+            "recipe": "build-stream-probe",
+            "commands": [
+                "nvcc -O2 --Werror all-warnings native/stream_probe.cu -o build/stream_probe.exe"
+            ],
+        },
+    )
     monkeypatch.setattr(resident_experiment, "file_sha256", lambda _: "a" * 64)
     monkeypatch.setattr(resident_experiment, "probe_path", lambda _: probe_binary)
     monkeypatch.setattr(resident_experiment, "probe_readiness_facts", lambda *_: {"ready": True})

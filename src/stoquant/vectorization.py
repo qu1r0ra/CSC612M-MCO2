@@ -20,15 +20,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from stoquant import layout
-from stoquant.provenance import collect_build_commands
-
-COMPARATOR_SOURCES = (
-    "native\\main.c",
-    "native\\codec.c",
-    "native\\quantizer.c",
-    "native\\rng_cpu.c",
-)
-AVX2_SOURCES = ("native\\quantizer_avx2.c",)
+from stoquant.native_build import source_lists
+from stoquant.provenance import find_binary, parse_build_commands
 
 
 def generate_msvc_vectorization_report(
@@ -36,7 +29,7 @@ def generate_msvc_vectorization_report(
     output_file: Path,
     host_flags: Sequence[str] | None,
     object_dir: Path,
-    sources: Sequence[str] = COMPARATOR_SOURCES,
+    sources: Sequence[str] | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     platform: str = os.name,
 ) -> str:
@@ -48,6 +41,9 @@ def generate_msvc_vectorization_report(
     script = root / "tools" / "with-msvc.ps1"
     if not script.is_file():
         raise RuntimeError(f"MSVC setup script is missing: {script}")
+    compile_sources = (
+        tuple(sources) if sources is not None else tuple(source_lists(root)["native_host_sources"])
+    )
     object_dir.mkdir(parents=True, exist_ok=True)
     # A quoted path ending in "\" escapes its closing quote through the
     # PowerShell wrapper, so the directory ends in "/" instead.
@@ -61,7 +57,7 @@ def generate_msvc_vectorization_report(
         *host_flags,
         "/Qvec-report:2",
         "/c",
-        *sources,
+        *compile_sources,
         f"/Fo:{object_arg}/",
     ]
     cmd = [
@@ -114,16 +110,23 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser.add_argument("--output", type=Path, default=Path("build/vec_report_avx2.txt"))
     args = parser.parse_args(argv)
     root = layout.ROOT
-    flags = collect_build_commands(root).avx2_tokens
+    try:
+        verified = find_binary(root, require_cuda=False)
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    flags = parse_build_commands(verified.stamp["commands"]).avx2_tokens
     if flags is None:
         print("no quantizer_avx2.c compile found in the build recipe", file=sys.stderr)
         return 1
+    source_groups = source_lists(root)
+    avx2_sources = source_groups["native_avx2_sources"]
     output = root / args.output
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.TemporaryDirectory(dir=root / "build") as objects:
             report = generate_msvc_vectorization_report(
-                root, output, flags, Path(objects), AVX2_SOURCES
+                root, output, flags, Path(objects), avx2_sources
             )
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
