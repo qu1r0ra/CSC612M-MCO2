@@ -74,6 +74,7 @@ def test_failed_compile_is_an_error(tmp_path):
             report,
             [],
             tmp_path / "objects",
+            sources=("native/main.c",),
             runner=failed_compile,
             platform="nt",
         )

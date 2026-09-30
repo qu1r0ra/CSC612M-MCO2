@@ -53,7 +53,17 @@ nvcc_flags := "-O2 -arch=" + cuda_arch + " " + cc_includes
 # for the nvcc diag_suppress pragmas in Random123/array.h.
 nvcc_warn_flags := if os() == "windows" { "--Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068" } else { "--Werror all-warnings" }
 nvcc_fp_flags := "--fmad=false --ftz=false --prec-div=true --prec-sqrt=true"
-rng_sources := "native/rng_cpu.c native/rng_cuda.cu tests/test_rng.c"
+native_host_sources := "native/main.c native/cli.c native/bench_report.c native/sq_status.c native/codec.c native/quantizer.c native/rng_cpu.c"
+native_avx2_sources := "native/quantizer_avx2.c"
+native_cuda_sources := "native/quantizer_cuda.cu"
+native_rng_sources := "native/rng_cpu.c native/rng_cuda.cu tests/test_rng.c"
+native_probe_sources := "native/stream_probe.cu"
+test_codec_sources := "tests/test_codec.c native/codec.c"
+test_quantizer_sources := "tests/test_quantizer.c native/quantizer.c native/codec.c native/rng_cpu.c"
+test_avx2_sources := "tests/test_quantizer_avx2.c native/quantizer_avx2.c native/quantizer.c native/codec.c native/rng_cpu.c"
+test_avx2_driver_sources := "tests/test_quantizer_avx2.c"
+test_rng_cpu_sources := "tests/test_rng_cpu.c native/rng_cpu.c"
+test_asan_probe_sources := "tests/asan_overread_probe.c"
 # Only the AVX2 comparator gets vector, OpenMP and non-strict FP flags. Neither
 # /fp:precise nor -ffp-contract=off contracts a*b+c, and its tests pin the bytes.
 # The file reads float storage as uint32_t, so gcc drops type-based aliasing.
@@ -76,28 +86,20 @@ toolchain:
 # Build the Philox known-answer and mapping test executable
 [windows]
 build-rng:
-    New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_warn_flags}} {{rng_sources}} -o build/test_rng.exe
-    uv run python -m stoquant.build_stamp build-rng build/test_rng.exe
+    uv run python -m stoquant.native_build build-rng
 
 [unix]
 build-rng:
-    mkdir -p build
-    nvcc {{nvcc_flags}} {{nvcc_warn_flags}} {{rng_sources}} -o build/test_rng
-    uv run python -m stoquant.build_stamp build-rng build/test_rng
+    uv run python -m stoquant.native_build build-rng
 
 # Build the Philox known-answer, mapping and overflow checks without CUDA
 [windows]
 build-rng-cpu-test:
-    New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} tests\test_rng_cpu.c native\rng_cpu.c /Fo:build\ /Fe:build\test_rng_cpu.exe
-    uv run python -m stoquant.build_stamp build-rng-cpu-test build/test_rng_cpu.exe
+    uv run python -m stoquant.native_build build-rng-cpu-test
 
 [unix]
 build-rng-cpu-test:
-    mkdir -p build
-    ${CC:-cc} {{cc_strict_flags}} {{cc_includes}} tests/test_rng_cpu.c native/rng_cpu.c -o build/test_rng_cpu
-    uv run python -m stoquant.build_stamp build-rng-cpu-test build/test_rng_cpu
+    uv run python -m stoquant.native_build build-rng-cpu-test
 
 # Run the RNG checks on CPU and GPU; exits nonzero on any failure
 test-rng: build-rng
@@ -106,136 +108,70 @@ test-rng: build-rng
 # Build the CPU compression and decompression command-line tool
 [windows]
 build-cpu:
-    New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} /c native\main.c /Fo:build\main.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} /c native\cli.c /Fo:build\cli.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} /c native\bench_report.c /Fo:build\bench_report.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} /c native\codec.c /Fo:build\codec.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} /c native\sq_status.c /Fo:build\sq_status.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} /c native\quantizer.c /Fo:build\quantizer.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} /c native\rng_cpu.c /Fo:build\rng_cpu.obj
-    ./tools/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c native\quantizer_avx2.c /Fo:build\quantizer_avx2.obj
-    ./tools/with-msvc.ps1 cl.exe /nologo build\main.obj build\cli.obj build\bench_report.obj build\sq_status.obj build\codec.obj build\quantizer.obj build\rng_cpu.obj build\quantizer_avx2.obj /Fe:build\stoquant.exe
-    uv run python -m stoquant.build_stamp build-cpu build/stoquant.exe
+    uv run python -m stoquant.native_build build-cpu
 
 [unix]
 build-cpu:
-    mkdir -p build
-    ${CC:-cc} {{cc_host_flags}} {{cc_includes}} -c native/main.c -o build/main.o
-    ${CC:-cc} {{cc_host_flags}} {{cc_includes}} -c native/cli.c -o build/cli.o
-    ${CC:-cc} {{cc_host_flags}} {{cc_includes}} -c native/bench_report.c -o build/bench_report.o
-    ${CC:-cc} {{cc_host_flags}} {{cc_includes}} -c native/codec.c -o build/codec.o
-    ${CC:-cc} {{cc_host_flags}} {{cc_includes}} -c native/sq_status.c -o build/sq_status.o
-    ${CC:-cc} {{cc_host_flags}} {{cc_includes}} -c native/quantizer.c -o build/quantizer.o
-    ${CC:-cc} {{cc_host_flags}} {{cc_includes}} -c native/rng_cpu.c -o build/rng_cpu.o
-    ${CC:-cc} {{avx2_cc_flags}} -c native/quantizer_avx2.c -o build/quantizer_avx2.o
-    ${CC:-cc} -fopenmp build/main.o build/cli.o build/bench_report.o build/sq_status.o build/codec.o build/quantizer.o build/rng_cpu.o build/quantizer_avx2.o -lm -o build/stoquant
-    uv run python -m stoquant.build_stamp build-cpu build/stoquant
+    uv run python -m stoquant.native_build build-cpu
 
 # Build the CUDA-enabled 4-bit and 8-bit compression CLI. Keep host sources in C mode
 # so the CPU and CUDA paths share the same C implementation and ABI.
 [windows]
 build-cuda:
-    New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} /DSQ_ENABLE_CUDA {{cl_includes}} /c native\main.c /Fo:build\main_cuda.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} /DSQ_ENABLE_CUDA {{cl_includes}} /c native\cli.c /Fo:build\cli_cuda.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} /DSQ_ENABLE_CUDA {{cl_includes}} /c native\bench_report.c /Fo:build\bench_report_cuda.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} /DSQ_ENABLE_CUDA {{cl_includes}} /c native\codec.c /Fo:build\codec_cuda.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} /DSQ_ENABLE_CUDA {{cl_includes}} /c native\sq_status.c /Fo:build\sq_status_cuda.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} /DSQ_ENABLE_CUDA {{cl_includes}} /c native\quantizer.c /Fo:build\quantizer_cuda_host.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} /DSQ_ENABLE_CUDA {{cl_includes}} /c native\rng_cpu.c /Fo:build\rng_cpu_cuda.obj
-    ./tools/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c native\quantizer_avx2.c /Fo:build\quantizer_avx2_cuda.obj
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -c native\quantizer_cuda.cu -o build\quantizer_cuda.obj
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} build\main_cuda.obj build\cli_cuda.obj build\bench_report_cuda.obj build\sq_status_cuda.obj build\codec_cuda.obj build\quantizer_cuda_host.obj build\rng_cpu_cuda.obj build\quantizer_avx2_cuda.obj build\quantizer_cuda.obj -o build\stoquant.exe
-    uv run python -m stoquant.build_stamp build-cuda build/stoquant.exe
+    uv run python -m stoquant.native_build build-cuda
 
 [unix]
 build-cuda:
-    mkdir -p build
-    ${CC:-cc} {{cc_host_flags}} -DSQ_ENABLE_CUDA {{cc_includes}} -c native/main.c -o build/main_cuda.o
-    ${CC:-cc} {{cc_host_flags}} -DSQ_ENABLE_CUDA {{cc_includes}} -c native/cli.c -o build/cli_cuda.o
-    ${CC:-cc} {{cc_host_flags}} -DSQ_ENABLE_CUDA {{cc_includes}} -c native/bench_report.c -o build/bench_report_cuda.o
-    ${CC:-cc} {{cc_host_flags}} -DSQ_ENABLE_CUDA {{cc_includes}} -c native/codec.c -o build/codec_cuda.o
-    ${CC:-cc} {{cc_host_flags}} -DSQ_ENABLE_CUDA {{cc_includes}} -c native/sq_status.c -o build/sq_status_cuda.o
-    ${CC:-cc} {{cc_host_flags}} -DSQ_ENABLE_CUDA {{cc_includes}} -c native/quantizer.c -o build/quantizer_cuda_host.o
-    ${CC:-cc} {{cc_host_flags}} -DSQ_ENABLE_CUDA {{cc_includes}} -c native/rng_cpu.c -o build/rng_cpu_cuda.o
-    ${CC:-cc} {{avx2_cc_flags}} -c native/quantizer_avx2.c -o build/quantizer_avx2_cuda.o
-    nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -c native/quantizer_cuda.cu -o build/quantizer_cuda.o
-    nvcc {{nvcc_flags}} {{nvcc_fp_flags}} build/main_cuda.o build/cli_cuda.o build/bench_report_cuda.o build/sq_status_cuda.o build/codec_cuda.o build/quantizer_cuda_host.o build/rng_cpu_cuda.o build/quantizer_avx2_cuda.o build/quantizer_cuda.o -lm -Xcompiler -fopenmp -o build/stoquant
-    uv run python -m stoquant.build_stamp build-cuda build/stoquant
+    uv run python -m stoquant.native_build build-cuda
 
 # Build a fault-injection CLI beside the evidence binary (test only; never
 # overwrites build/stoquant)
 [windows]
 build-cuda-fault: build-cuda
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -DSQ_CUDA_FAULT_INJECTION -c native\quantizer_cuda.cu -o build\quantizer_cuda_fault.obj
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} build\main_cuda.obj build\cli_cuda.obj build\bench_report_cuda.obj build\sq_status_cuda.obj build\codec_cuda.obj build\quantizer_cuda_host.obj build\rng_cpu_cuda.obj build\quantizer_avx2_cuda.obj build\quantizer_cuda_fault.obj -o build\stoquant_fault.exe
-    uv run python -m stoquant.build_stamp build-cuda-fault build/stoquant_fault.exe
+    uv run python -m stoquant.native_build build-cuda-fault
 
 [unix]
 build-cuda-fault: build-cuda
-    nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -DSQ_CUDA_FAULT_INJECTION -c native/quantizer_cuda.cu -o build/quantizer_cuda_fault.o
-    nvcc {{nvcc_flags}} {{nvcc_fp_flags}} build/main_cuda.o build/cli_cuda.o build/bench_report_cuda.o build/sq_status_cuda.o build/codec_cuda.o build/quantizer_cuda_host.o build/rng_cpu_cuda.o build/quantizer_avx2_cuda.o build/quantizer_cuda_fault.o -lm -Xcompiler -fopenmp -o build/stoquant_fault
-    uv run python -m stoquant.build_stamp build-cuda-fault build/stoquant_fault
+    uv run python -m stoquant.native_build build-cuda-fault
 
 # Build the device-attribute and streaming-read probe for the K1 baseline
 [windows]
 build-stream-probe:
-    New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_warn_flags}} native\stream_probe.cu -o build\stream_probe.exe
-    uv run python -m stoquant.build_stamp build-stream-probe build/stream_probe.exe
+    uv run python -m stoquant.native_build build-stream-probe
 
 [unix]
 build-stream-probe:
-    mkdir -p build
-    nvcc {{nvcc_flags}} {{nvcc_warn_flags}} native/stream_probe.cu -o build/stream_probe
-    uv run python -m stoquant.build_stamp build-stream-probe build/stream_probe
+    uv run python -m stoquant.native_build build-stream-probe
 
 [windows]
 build-codec-test:
-    New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} tests\test_codec.c native\codec.c /Fo:build\ /Fe:build\test_codec.exe
-    uv run python -m stoquant.build_stamp build-codec-test build/test_codec.exe
+    uv run python -m stoquant.native_build build-codec-test
 
 [unix]
 build-codec-test:
-    mkdir -p build
-    ${CC:-cc} {{cc_strict_flags}} {{cc_includes}} tests/test_codec.c native/codec.c -o build/test_codec
-    uv run python -m stoquant.build_stamp build-codec-test build/test_codec
+    uv run python -m stoquant.native_build build-codec-test
 
 # Build the AVX2-versus-scalar differential test
 [windows]
 build-avx2-test:
-    New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} /c tests\test_quantizer_avx2.c /Fo:build\test_quantizer_avx2.obj
-    ./tools/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c native\quantizer_avx2.c /Fo:build\quantizer_avx2_test.obj
-    ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} build\test_quantizer_avx2.obj build\quantizer_avx2_test.obj native\quantizer.c native\codec.c native\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer_avx2.exe
-    uv run python -m stoquant.build_stamp build-avx2-test build/test_quantizer_avx2.exe
+    uv run python -m stoquant.native_build build-avx2-test
 
 [unix]
 build-avx2-test:
-    mkdir -p build
-    ${CC:-cc} {{cc_strict_flags}} {{cc_includes}} -c tests/test_quantizer_avx2.c -o build/test_quantizer_avx2.o
-    ${CC:-cc} {{avx2_cc_flags}} -c native/quantizer_avx2.c -o build/quantizer_avx2_test.o
-    ${CC:-cc} {{cc_host_flags}} -fopenmp {{cc_includes}} build/test_quantizer_avx2.o build/quantizer_avx2_test.o native/quantizer.c native/codec.c native/rng_cpu.c -lm -o build/test_quantizer_avx2
-    uv run python -m stoquant.build_stamp build-avx2-test build/test_quantizer_avx2
+    uv run python -m stoquant.native_build build-avx2-test
 
 # Check that MSVC reports every tagged AVX2 hot loop as vectorized
 [windows]
-vec-report:
+vec-report: build-cpu
     uv run python -m stoquant vec-report
 
 [windows]
 build-quantizer-test:
-    New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} tests\test_quantizer.c native\quantizer.c native\codec.c native\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer.exe
-    uv run python -m stoquant.build_stamp build-quantizer-test build/test_quantizer.exe
+    uv run python -m stoquant.native_build build-quantizer-test
 
 [unix]
 build-quantizer-test:
-    mkdir -p build
-    ${CC:-cc} {{cc_strict_flags}} {{cc_includes}} tests/test_quantizer.c native/quantizer.c native/codec.c native/rng_cpu.c -lm -o build/test_quantizer
-    uv run python -m stoquant.build_stamp build-quantizer-test build/test_quantizer
+    uv run python -m stoquant.native_build build-quantizer-test
 
 # Build the CPU tool, verify the C seams, and run the independent Python oracle/CLI suite
 [windows]
@@ -257,30 +193,25 @@ test-cpu: build-cpu build-codec-test build-quantizer-test build-avx2-test build-
 # Build and run every native CPU test executable under AddressSanitizer
 [windows]
 test-cpu-asan:
-    New-Item -ItemType Directory -Force build | Out-Null
-    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} {{cl_includes}} tests\test_codec.c native\codec.c /Fo:build\ /Fe:build\test_codec_asan.exe
-    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} {{cl_includes}} tests\test_quantizer.c native\quantizer.c native\codec.c native\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer_asan.exe
-    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} {{cl_includes}} /arch:AVX2 /openmp tests\test_quantizer_avx2.c native\quantizer_avx2.c native\quantizer.c native\codec.c native\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer_avx2_asan.exe
-    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} {{cl_includes}} tests\test_rng_cpu.c native\rng_cpu.c /Fo:build\ /Fe:build\test_rng_cpu_asan.exe
-    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} tests\asan_overread_probe.c /Fo:build\ /Fe:build\asan_overread_probe.exe
-    ./tools/with-msvc.ps1 ./build/test_codec_asan.exe
-    ./tools/with-msvc.ps1 ./build/test_quantizer_asan.exe
-    ./tools/with-msvc.ps1 ./build/test_quantizer_avx2_asan.exe
-    ./tools/with-msvc.ps1 ./build/test_rng_cpu_asan.exe
-    ./tools/with-msvc.ps1 ./tools/check_asan_overread.ps1 build\asan_overread_probe.exe
+    uv run python -m stoquant.native_build test-cpu-asan
 
 [unix]
 test-cpu-asan:
     @echo "the AddressSanitizer CPU proof uses MSVC on Windows"
 
+# Compile the command-line tool and run all native C tests under GCC UBSan
+[unix]
+test-cpu-gcc-ubsan:
+    uv run python -m stoquant.native_build test-cpu-gcc-ubsan
+
 # Run the CUDA quantizer acceptance suite on the local GPU
 [windows]
 test-cuda: build-cuda build-cuda-fault
-    $env:STOQUANT_TEST_CUDA = '1'; uv run --group dev pytest --require-cuda tests\test_cuda.py tests\test_bench_driver.py
+    $env:STOQUANT_TEST_CUDA = '1'; uv run --group dev pytest --require-cuda tests\test_cuda.py tests\test_matrix_driver.py tests\test_sweep_avx2.py
 
 [unix]
 test-cuda: build-cuda build-cuda-fault
-    STOQUANT_TEST_CUDA=1 uv run --group dev pytest --require-cuda tests/test_cuda.py tests/test_bench_driver.py
+    STOQUANT_TEST_CUDA=1 uv run --group dev pytest --require-cuda tests/test_cuda.py tests/test_matrix_driver.py tests/test_sweep_avx2.py
 
 # Render F1-F4, T1 and the crossover report into a snapshot folder
 figures snapshot *args:

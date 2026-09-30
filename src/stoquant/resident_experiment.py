@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import random
-import shutil
 import statistics
 import subprocess
 import tempfile
@@ -15,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
 
+from stoquant.build_stamp import verify_stamp
 from stoquant.design import CUDA_RESIDENT
 from stoquant.host import (
     benchmark_process_affinity,
@@ -118,22 +118,6 @@ def variant_order(process: int, variants: Sequence[str] = DEFAULT_VARIANTS) -> t
     if len(variants) < 2 or process % 2 == 0:
         return tuple(variants)
     return tuple(reversed(variants))
-
-
-def dry_run(root: Path, recipe: str) -> list[str]:
-    just = shutil.which("just")
-    if just is None:
-        raise RuntimeError("just is not on PATH; build provenance cannot be recorded")
-    proc = subprocess.run(
-        [just, "--dry-run", recipe], cwd=root, capture_output=True, text=True, check=False
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"just --dry-run {recipe} failed; build provenance cannot be recorded: "
-            f"{proc.stderr.strip()}"
-        )
-    text = proc.stderr if proc.stderr.strip() else proc.stdout
-    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def file_sha256(path: Path) -> str:
@@ -270,16 +254,24 @@ def _run_resident_experiment(
     verified = find_binary(config.root, git_prov=git)
     binary = verified.path
     probe_binary = probe_path(config.root)
-    build_commands = collect_build_commands(config.root)
+    probe_stamp = verify_stamp(
+        config.root,
+        probe_binary,
+        revision=git["code_revision"],
+        tree_dirty=git["git_dirty"],
+        fingerprint=git["tree_fingerprint"],
+        require_cuda=False,
+        expected_recipe=PROBE_RECIPE,
+    )
+    build_commands = collect_build_commands(verified.stamp)
     build = build_commands.as_record()
     if not build_commands.commands:
-        raise RuntimeError(
-            f"just --dry-run {BUILD_RECIPE} failed; build provenance cannot be recorded."
-        )
+        raise RuntimeError("verified CLI build stamp has no compiler commands")
     build_record = {
         "build_stamp": verified.stamp,
         BUILD_RECIPE: build["commands"],
-        PROBE_RECIPE: dry_run(config.root, PROBE_RECIPE),
+        "probe_build_stamp": probe_stamp,
+        PROBE_RECIPE: probe_stamp["commands"],
         "sha256": {
             binary.name: file_sha256(binary),
             probe_binary.name: file_sha256(probe_binary),

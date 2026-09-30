@@ -12,6 +12,22 @@ import numpy as np
 DEFAULT_COUNTS = tuple(1 << exponent for exponent in range(10, 27))
 DEFAULT_BITS = (4, 8)
 
+
+@dataclass(frozen=True)
+class SweepProfile:
+    """Named matrix settings applied by the command-line interface."""
+
+    name: str
+    counts: tuple[int, ...]
+    bit_widths: tuple[int, ...]
+
+
+PILOT_PROFILE = SweepProfile(
+    name="pilot",
+    counts=(1 << 10, 1 << 14, 1 << 20, 1 << 26),
+    bit_widths=DEFAULT_BITS,
+)
+
 DEFAULT_CASE_ORDER_SEED = 612
 
 # Twenty-four trials run every ordering of the four paths once, balancing both the
