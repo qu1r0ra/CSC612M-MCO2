@@ -215,7 +215,7 @@ Get-Content (Get-ChildItem results -Directory | Sort-Object LastWriteTime -Desce
 
 ## Restructure equivalence check
 
-The restructure stages (issue #46) must leave behavior unchanged. `just equivalence` builds the CUDA executable and the stream probe, then runs `tools/equivalence.py`, which drives only command-line interfaces and imports no project code.
+The restructure stages (issue #46) used a full behavior fingerprint. `just equivalence` builds the CUDA executable and the stream probe, then runs `tools/equivalence.py`, which drives only command-line interfaces and imports no project code. The full fingerprint remains available for publication-output changes and final evidence pinning; routine implementation and refinement PRs use the bounded smoke below.
 
 ```powershell
 # On the reference commit, with no modified tracked files: write the baseline
@@ -238,6 +238,19 @@ Each run fingerprints:
 Measured values are redacted. These include timings, timestamps, and bandwidth and statistics that depend on timing. Subtrees that describe the machine, the tree, or timing-dependent decisions are collapsed, so even their length is ignored: build flags, git provenance, hardware, toolkit and driver, device, GPU state, readiness facts and verdicts, evidence status and its reasons, and the K1 A/B decision lists (the keep rule itself is unit-tested on fixed cells). Paths are scrubbed, and the binary name is normalized. Figures drawn from timings are recorded only as present; the unbiasedness figure is hashed. Redaction rules match key paths from each output file's root, so the output layout is part of the compared behavior. Everything else must match exactly: case lists and order, configuration, correctness results, exit codes, record and file hashes, CSV key columns, and vectorization verdict counts. The run also fails if any file under `results/` changes.
 
 Later stages may change only the `INVOCATION` table at the top of the tool, which holds the binary path, the command that starts each script, and the environment-variable prefixes to scrub. A stage that needs any other change to the tool is not behavior-preserving.
+
+### Routine implementation PR smoke
+
+Build the CUDA binary once, then run the bounded smoke:
+
+```powershell
+just build-cuda
+just equivalence-smoke
+```
+
+`just equivalence-smoke` stops its native commands by 285 seconds, leaving time for cleanup and reporting within a five-minute cap. It runs fixed normal, mixed odd-length, and all-zero inputs at 4 and 8 bits through the scalar CPU, AVX2 CPU, and CUDA reference and optimized K1 paths. Every record must match the scalar CPU record byte for byte, and each record must decode to the same output. The CUDA build stamp is checked before any smoke case runs. Temporary inputs and outputs are removed when the command exits.
+
+This is a selected behavior smoke against implementations in the current tree. It does not compare the whole current tree with a fingerprint from an earlier revision, nor cover snapshot rendering, monitoring, or every benchmark and report output. Run focused tests for the changed modules as usual. Use the full capture/compare workflow when publication output contracts or claim rules change and for the final whole-output audit associated with an evidence pin.
 
 ## Scope boundary
 
