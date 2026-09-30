@@ -44,6 +44,7 @@ cl_includes := "/Inative /Ithird_party/random123/include"
 cc_includes := "-Inative -Ithird_party/random123/include"
 cl_strict_flags := "/W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS"
 cl_test_flags := "/nologo " + cl_strict_flags
+cl_asan_flags := cl_test_flags + " /fsanitize=address /Zi"
 cl_host_flags := "/nologo /O2 " + cl_strict_flags
 cc_strict_flags := "-std=c11 -Wall -Wextra -Werror -ffp-contract=off"
 cc_host_flags := "-O2 " + cc_strict_flags
@@ -84,6 +85,19 @@ build-rng:
     mkdir -p build
     nvcc {{nvcc_flags}} {{nvcc_warn_flags}} {{rng_sources}} -o build/test_rng
     uv run python -m stoquant.build_stamp build-rng build/test_rng
+
+# Build the Philox known-answer, mapping and overflow checks without CUDA
+[windows]
+build-rng-cpu-test:
+    New-Item -ItemType Directory -Force build | Out-Null
+    ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} tests\test_rng_cpu.c native\rng_cpu.c /Fo:build\ /Fe:build\test_rng_cpu.exe
+    uv run python -m stoquant.build_stamp build-rng-cpu-test build/test_rng_cpu.exe
+
+[unix]
+build-rng-cpu-test:
+    mkdir -p build
+    ${CC:-cc} {{cc_strict_flags}} {{cc_includes}} tests/test_rng_cpu.c native/rng_cpu.c -o build/test_rng_cpu
+    uv run python -m stoquant.build_stamp build-rng-cpu-test build/test_rng_cpu
 
 # Run the RNG checks on CPU and GPU; exits nonzero on any failure
 test-rng: build-rng
@@ -225,18 +239,39 @@ build-quantizer-test:
 
 # Build the CPU tool, verify the C seams, and run the independent Python oracle/CLI suite
 [windows]
-test-cpu: build-cpu build-codec-test build-quantizer-test build-avx2-test
+test-cpu: build-cpu build-codec-test build-quantizer-test build-avx2-test build-rng-cpu-test
     ./build/test_codec.exe
     ./build/test_quantizer.exe
     ./build/test_quantizer_avx2.exe
+    ./build/test_rng_cpu.exe
     $env:STOQUANT_EXPECT_CPU_ONLY = '1'; uv run --group dev pytest
 
 [unix]
-test-cpu: build-cpu build-codec-test build-quantizer-test build-avx2-test
+test-cpu: build-cpu build-codec-test build-quantizer-test build-avx2-test build-rng-cpu-test
     ./build/test_codec
     ./build/test_quantizer
     ./build/test_quantizer_avx2
+    ./build/test_rng_cpu
     STOQUANT_EXPECT_CPU_ONLY=1 uv run --group dev pytest
+
+# Build and run every native CPU test executable under AddressSanitizer
+[windows]
+test-cpu-asan:
+    New-Item -ItemType Directory -Force build | Out-Null
+    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} {{cl_includes}} tests\test_codec.c native\codec.c /Fo:build\ /Fe:build\test_codec_asan.exe
+    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} {{cl_includes}} tests\test_quantizer.c native\quantizer.c native\codec.c native\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer_asan.exe
+    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} {{cl_includes}} /arch:AVX2 /openmp tests\test_quantizer_avx2.c native\quantizer_avx2.c native\quantizer.c native\codec.c native\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer_avx2_asan.exe
+    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} {{cl_includes}} tests\test_rng_cpu.c native\rng_cpu.c /Fo:build\ /Fe:build\test_rng_cpu_asan.exe
+    ./tools/with-msvc.ps1 cl.exe {{cl_asan_flags}} tests\asan_overread_probe.c /Fo:build\ /Fe:build\asan_overread_probe.exe
+    ./tools/with-msvc.ps1 ./build/test_codec_asan.exe
+    ./tools/with-msvc.ps1 ./build/test_quantizer_asan.exe
+    ./tools/with-msvc.ps1 ./build/test_quantizer_avx2_asan.exe
+    ./tools/with-msvc.ps1 ./build/test_rng_cpu_asan.exe
+    ./tools/with-msvc.ps1 ./tools/check_asan_overread.ps1 build\asan_overread_probe.exe
+
+[unix]
+test-cpu-asan:
+    @echo "the AddressSanitizer CPU proof uses MSVC on Windows"
 
 # Run the CUDA quantizer acceptance suite on the local GPU
 [windows]

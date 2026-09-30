@@ -333,3 +333,5 @@ raise SystemExit(7)
     assert server.messages[1]["title"] == "stoquant dense started"
     assert server.messages[2]["title"] == "stoquant dense heartbeat"
     assert server.messages[3]["title"] == "stoquant dense failed"
+    assert "event: failure" in server.messages[3]["body"]
+    assert "exit code: 7" in server.messages[3]["body"]

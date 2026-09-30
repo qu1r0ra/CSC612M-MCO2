@@ -17,68 +17,40 @@ reported, but no decision depends on it. F5 draws the stage medians of both arms
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import random
 import statistics
-import subprocess
-import sys
-import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from stoquant import layout
-from stoquant.design import CUDA_RESIDENT, DEFAULT_BITS, DEFAULT_COUNTS
-from stoquant.host import (
-    EXCLUDED_LOGICAL_CPUS,
-    affinity_mask_excluding,
-    get_process_affinity,
-    probe_readiness_facts,
-    process_affinity,
-)
-from stoquant.inputs import generate_inputs
+from stoquant.design import DEFAULT_BITS, DEFAULT_COUNTS
 from stoquant.k1_bandwidth import (
-    CALIBRATION_REPS,
     DEFAULT_PROCESSES,
     DEFAULT_REPS,
     GPU_WARMUP_SECONDS,
-    MIN_WARMUPS,
-    ORDER_SEED,
-    PROBE_RECIPE,
     REDUCTION_THREADS,
-    dry_run,
-    file_sha256,
     probe_ceiling,
-    probe_path,
-    run_probe,
     summarize_cell,
     theoretical_peak_gbps,
 )
 from stoquant.plotting import pyplot
-from stoquant.provenance import (
-    BUILD_RECIPE,
-    collect_build_commands,
-    collect_git_provenance,
-    collect_hardware_and_toolchain,
-    find_binary,
-    query_gpu_state,
+from stoquant.resident_experiment import (
+    MIN_WARMUPS,
+    ResidentExperimentConfig,
+    ResidentExperimentRecord,
+    ResidentExperimentRun,
+    run_resident_experiment,
+    variant_order,
 )
 from stoquant.runner import (
     DEFAULT_COMPRESSION_SEED,
     DEFAULT_IN_PROCESS_WARMUP_SECONDS,
-    compress_args,
-    in_process_warmups,
-    run_bench_process,
-    warm_up_gpu,
+    REAL_BENCH_PROCESS,
+    BenchProcess,
 )
-from stoquant.snapshot_store import (
-    check_snapshot,
-    create_snapshot,
-    derived_directory,
-    snapshot_path,
-)
+from stoquant.snapshot_store import derived_directory
 from stoquant.stats import (
     claim_support,
     compare_speedup,
@@ -87,6 +59,7 @@ from stoquant.stats import (
 )
 
 VARIANTS = ("reference", "optimized")
+__all__ = ["variant_order"]
 # SQ_CUDA_K1_TREE_SPAN in native/quantizer_cuda.cu.
 TREE_SPAN = 2048
 K1_AB_PILOT_COUNTS = (1 << 10, 1 << 14, 1 << 20, 1 << 25, 1 << 26)
@@ -120,10 +93,6 @@ def optimized_launch_count(count: int) -> int:
         active //= min(active, TREE_SPAN)
         launches += 1
     return launches
-
-
-def variant_order(process: int) -> tuple[str, ...]:
-    return VARIANTS if process % 2 == 0 else VARIANTS[::-1]
 
 
 def compare_arms(
@@ -162,47 +131,12 @@ def keep_decision(cells: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def record_hash(binary: Path, input_path: Path, bits: int, variant: str, out: Path) -> str:
-    command = compress_args(
-        binary,
-        input_path,
-        out,
-        seed=DEFAULT_COMPRESSION_SEED,
-        bits=bits,
-        tensor_id=0,
-        invocation_id=0,
-        backend="cuda",
-        k1=variant,
-    )
-    proc = subprocess.run(command, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError(f"stoquant compress --k1 {variant} failed: {proc.stderr.strip()}")
-    digest = hashlib.sha256(out.read_bytes()).hexdigest()
-    out.unlink()
-    return digest
-
-
-def run_arm(binary: Path, input_path: Path, bits: int, variant: str, warmups: int, reps: int):
-    payload, error = run_bench_process(
-        binary,
-        input_path,
-        bits=bits,
-        backend="cuda",
-        extra_args=["--boundary", CUDA_RESIDENT.boundary],
-        k1=variant,
-        seed=DEFAULT_COMPRESSION_SEED,
-        warmups=warmups,
-        reps=reps,
-    )
-    if payload is None:
-        raise RuntimeError(error)
-    if payload["configuration"].get("k1") != variant:
-        raise RuntimeError(f"bench did not record k1={variant}")
-    return payload
-
-
 def summarize_ab_cell(
-    count: int, bits: int, rows: list[dict[str, Any]], device: dict[str, Any], ceiling: float
+    count: int,
+    bits: int,
+    rows: Sequence[ResidentExperimentRecord],
+    device: dict[str, Any],
+    ceiling: float,
 ) -> dict[str, Any]:
     arms = {}
     for variant in VARIANTS:
@@ -316,6 +250,88 @@ def is_default_design(args: argparse.Namespace, counts: Sequence[int], processes
     )
 
 
+def analyze_k1_ab(run: ResidentExperimentRun, out: Path) -> None:
+    ceiling = probe_ceiling(run.probe, run.device["l2_bytes"])
+    cell_summaries = [
+        summarize_ab_cell(
+            count,
+            bits,
+            [
+                record
+                for record in run.records
+                if record["count"] == count and record["bits"] == bits
+            ],
+            run.device,
+            ceiling["gbps"],
+        )
+        for count, bits in run.cells
+    ]
+    (out / "processes.json").write_text(json.dumps(run.records), encoding="utf-8")
+    summary = {
+        "created_utc": datetime.now(UTC).isoformat(),
+        "purpose": "issue #23 same-tree A/B of the reference and optimized K1",
+        "evidence": run.evidence,
+        "git": run.git,
+        "build": run.build_record,
+        **run.hardware,
+        "device": run.device,
+        "theoretical_peak_gbps": theoretical_peak_gbps(
+            run.device["memory_clock_khz"], run.device["bus_width_bits"]
+        ),
+        "probe_ceiling_gbps": ceiling["gbps"],
+        "probe_ceiling_size": {"count": ceiling["count"], "bytes": ceiling["bytes"]},
+        "gpu_state_probe": {"start": run.gpu_probe_start, "end": run.gpu_probe_end},
+        "protocol": {
+            "path": "cuda resident",
+            "variants": list(VARIANTS),
+            "measurand": "k1_ms (K1 stage events); the resident total is descriptive",
+            "processes_per_variant": run.processes,
+            "reps_per_process": run.reps,
+            "in_process_warmup_seconds": run.in_process_warmup_seconds,
+            "min_warmups": MIN_WARMUPS,
+            "order": ORDER_RULE,
+            "seed": DEFAULT_COMPRESSION_SEED,
+            "affinity_mask": run.affinity_mask,
+            "excluded_logical_cpus": list(run.excluded_logical_cpus),
+            "readiness": "recorded, not enforced",
+        },
+        "readiness_facts": run.readiness,
+        "record_identity": run.record_identity,
+        "inputs": list(run.inputs.values()),
+        "initial_gpu_warm_up": run.initial_gpu_warm_up,
+        "gpu_state_start": run.gpu_state_start,
+        "gpu_state_end": run.gpu_state_end,
+        "cells": cell_summaries,
+        "decision": keep_decision(cell_summaries),
+    }
+    (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    plot_f5(summary, derived_directory(out) / "f5_k1_stages.png")
+    for cell in cell_summaries:
+        k1 = cell["k1_comparison"]
+        arms = cell["arms"]
+        print(
+            f"n=2^{cell['count'].bit_length() - 1} b={cell['bits']} {cell['regime']:>12} "
+            f"ref={arms['reference']['k1']['median_ms']:.4f} "
+            f"opt={arms['optimized']['k1']['median_ms']:.4f} ms  "
+            f"x{k1['speedup']:.2f} {k1['verdict']} direction={k1['direction_supported']} "
+            f"magnitude={k1['magnitude_supported']}"
+        )
+    decision = summary["decision"]
+    print(f"kept={decision['kept']} over {decision['dram_cells']} dram cells")
+
+
+def run_k1_ab(
+    config: ResidentExperimentConfig,
+    adapter: BenchProcess = REAL_BENCH_PROCESS,
+) -> Path:
+    return run_resident_experiment(
+        config,
+        variants=VARIANTS,
+        analyze=analyze_k1_ab,
+        adapter=adapter,
+    )
+
+
 def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     parser = argparse.ArgumentParser(prog=prog, description=__doc__)
     parser.add_argument("--output-dir", type=Path)
@@ -343,163 +359,22 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     counts = args.counts or list(K1_AB_PILOT_COUNTS if args.pilot else DEFAULT_COUNTS)
     processes = args.processes or (PILOT_PROCESSES if args.pilot else DEFAULT_PROCESSES)
     evidence = is_default_design(args, counts, processes)
-
-    root = layout.ROOT
-    git = collect_git_provenance(root)
-    final = args.output_dir or snapshot_path(
-        root, git["code_revision_short"], "k1-ab", pilot=args.pilot
+    config = ResidentExperimentConfig(
+        root=layout.ROOT,
+        kind="k1-ab",
+        counts=counts,
+        bits=args.bits,
+        processes=processes,
+        reps=args.reps,
+        gpu_warmup_seconds=args.gpu_warmup_seconds,
+        in_process_warmup_seconds=args.in_process_warmup_seconds,
+        output_dir=args.output_dir,
+        allow_dirty=args.allow_dirty,
+        pilot=args.pilot,
+        evidence=evidence,
+        record_readiness=True,
     )
-    check_snapshot(final, git, allow_dirty=args.allow_dirty)
-    verified = find_binary(root, git_prov=git)
-    binary = verified.path
-    probe_binary = probe_path(root)
-    build = collect_build_commands(root)
-    build.pop("_host_tokens", None)
-    if not build["commands"]:
-        sys.exit(f"just --dry-run {BUILD_RECIPE} failed; build provenance cannot be recorded.")
-    try:
-        probe_commands = dry_run(root, PROBE_RECIPE)
-    except RuntimeError as error:
-        sys.exit(str(error))
-    build_record = {
-        "build_stamp": verified.stamp,
-        BUILD_RECIPE: build["commands"],
-        PROBE_RECIPE: probe_commands,
-        "sha256": {
-            binary.name: file_sha256(binary),
-            probe_binary.name: file_sha256(probe_binary),
-        },
-    }
-
-    cells = [(count, bits) for count in counts for bits in args.bits]
-    records: list[dict[str, Any]] = []
-    readiness = probe_readiness_facts(root, git)
-    # Revision 3: every probe and benchmark process runs off physical core 0.
-    mask = affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, get_process_affinity())
-    with process_affinity(mask), tempfile.TemporaryDirectory(prefix="stoquant-k1ab-") as scratch:
-        gpu_start = query_gpu_state()
-        inputs = generate_inputs(counts, Path(scratch))
-        paths = {count: Path(inputs[count]["_path"]) for count in counts}
-        identity = []
-        for count, bits in cells:
-            hashes = {
-                variant: record_hash(
-                    binary, paths[count], bits, variant, Path(scratch) / "record.msq"
-                )
-                for variant in VARIANTS
-            }
-            identity.append({"count": count, "bits": bits, "record_sha256": hashes})
-            if len(set(hashes.values())) != 1:
-                sys.exit(f"records differ at count={count} bits={bits}: {hashes}")
-        warm = warm_up_gpu(binary, paths[max(counts)], args.gpu_warmup_seconds)
-        gpu_probe_start = query_gpu_state()
-        probe = run_probe(probe_binary)
-        gpu_probe_end = query_gpu_state()
-        device = probe["device"]
-        ceiling = probe_ceiling(probe, device["l2_bytes"])
-        snapshot = create_snapshot(final, git, allow_dirty=args.allow_dirty)
-        out = snapshot.partial
-        (out / "stream_probe.json").write_text(json.dumps(probe, indent=2), encoding="utf-8")
-        warmups = {}
-        for count, bits in cells:
-            for variant in VARIANTS:
-                payload = run_arm(
-                    binary, paths[count], bits, variant, MIN_WARMUPS, CALIBRATION_REPS
-                )
-                rep_ms = statistics.median(payload["samples_ms"])
-                warmups[count, bits, variant] = in_process_warmups(
-                    MIN_WARMUPS, args.in_process_warmup_seconds, rep_ms
-                )
-        rng = random.Random(ORDER_SEED)
-        for process in range(processes):
-            order = list(cells)
-            rng.shuffle(order)
-            for position, (count, bits) in enumerate(order):
-                for slot, variant in enumerate(variant_order(process)):
-                    n = warmups[count, bits, variant]
-                    payload = run_arm(binary, paths[count], bits, variant, n, args.reps)
-                    records.append(
-                        {
-                            "process": process,
-                            "position": position,
-                            "slot": slot,
-                            "variant": variant,
-                            "count": count,
-                            "bits": bits,
-                            "warmups": n,
-                            "reps": args.reps,
-                            "samples_ms": payload["samples_ms"],
-                            "k1_ms": payload["k1_ms"],
-                            "k2_ms": payload["k2_ms"],
-                            "k3_ms": payload["k3_ms"],
-                        }
-                    )
-            print(f"process round {process + 1}/{processes}", flush=True)
-        gpu_end = query_gpu_state()
-
-    cell_summaries = [
-        summarize_ab_cell(
-            count,
-            bits,
-            [r for r in records if r["count"] == count and r["bits"] == bits],
-            device,
-            ceiling["gbps"],
-        )
-        for count, bits in cells
-    ]
-    (out / "processes.json").write_text(json.dumps(records), encoding="utf-8")
-    summary = {
-        "created_utc": datetime.now(UTC).isoformat(),
-        "purpose": "issue #23 same-tree A/B of the reference and optimized K1",
-        "evidence": evidence,
-        "git": git,
-        "build": build_record,
-        **collect_hardware_and_toolchain(root),
-        "device": device,
-        "theoretical_peak_gbps": theoretical_peak_gbps(
-            device["memory_clock_khz"], device["bus_width_bits"]
-        ),
-        "probe_ceiling_gbps": ceiling["gbps"],
-        "probe_ceiling_size": {"count": ceiling["count"], "bytes": ceiling["bytes"]},
-        "gpu_state_probe": {"start": gpu_probe_start, "end": gpu_probe_end},
-        "protocol": {
-            "path": "cuda resident",
-            "variants": list(VARIANTS),
-            "measurand": "k1_ms (K1 stage events); the resident total is descriptive",
-            "processes_per_variant": processes,
-            "reps_per_process": args.reps,
-            "in_process_warmup_seconds": args.in_process_warmup_seconds,
-            "min_warmups": MIN_WARMUPS,
-            "order": ORDER_RULE,
-            "seed": DEFAULT_COMPRESSION_SEED,
-            "affinity_mask": mask,
-            "excluded_logical_cpus": list(EXCLUDED_LOGICAL_CPUS),
-            "readiness": "recorded, not enforced",
-        },
-        "readiness_facts": readiness,
-        "record_identity": identity,
-        "inputs": [{k: v for k, v in inputs[c].items() if k != "_path"} for c in counts],
-        "initial_gpu_warm_up": warm,
-        "gpu_state_start": gpu_start,
-        "gpu_state_end": gpu_end,
-        "cells": cell_summaries,
-        "decision": keep_decision(cell_summaries),
-    }
-    (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    plot_f5(summary, derived_directory(out) / "f5_k1_stages.png")
-    snapshot.commit()
-    for cell in cell_summaries:
-        k1 = cell["k1_comparison"]
-        arms = cell["arms"]
-        print(
-            f"n=2^{cell['count'].bit_length() - 1} b={cell['bits']} {cell['regime']:>12} "
-            f"ref={arms['reference']['k1']['median_ms']:.4f} "
-            f"opt={arms['optimized']['k1']['median_ms']:.4f} ms  "
-            f"x{k1['speedup']:.2f} {k1['verdict']} direction={k1['direction_supported']} "
-            f"magnitude={k1['magnitude_supported']}"
-        )
-    decision = summary["decision"]
-    print(f"kept={decision['kept']} over {decision['dram_cells']} dram cells")
+    run_k1_ab(config)
 
 
 if __name__ == "__main__":

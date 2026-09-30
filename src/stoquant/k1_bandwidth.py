@@ -22,38 +22,30 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
-import os
-import random
-import shutil
 import statistics
-import subprocess
-import sys
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from stoquant import layout
-from stoquant.design import CUDA_RESIDENT, DEFAULT_BITS, DEFAULT_COUNTS
-from stoquant.inputs import generate_inputs
-from stoquant.provenance import (
-    BUILD_RECIPE,
-    collect_build_commands,
-    collect_git_provenance,
-    collect_hardware_and_toolchain,
-    find_binary,
-    query_gpu_state,
+from stoquant.design import DEFAULT_BITS, DEFAULT_COUNTS
+from stoquant.resident_experiment import (
+    DEFAULT_PROCESSES,
+    DEFAULT_REPS,
+    GPU_WARMUP_SECONDS,
+    MIN_WARMUPS,
+    ORDER_SEED,
+    ResidentExperimentConfig,
+    ResidentExperimentRun,
+    run_resident_experiment,
 )
 from stoquant.runner import (
     DEFAULT_COMPRESSION_SEED,
     DEFAULT_IN_PROCESS_WARMUP_SECONDS,
-    in_process_warmups,
-    run_bench_process,
-    warm_up_gpu,
+    REAL_BENCH_PROCESS,
+    BenchProcess,
 )
-from stoquant.snapshot_store import check_snapshot, create_snapshot, snapshot_path
 from stoquant.stats import compute_case_statistics
 
 # SQ_CUDA_REDUCTION_THREADS in native/quantizer_cuda.cu.
@@ -63,13 +55,6 @@ K1_INPUT_READS = 2
 DRAM_L2_MULTIPLE = 4
 # One size past the largest matrix count, so the ceiling is not set at the range edge.
 PROBE_MAX_EXP = 27
-DEFAULT_PROCESSES = 12
-DEFAULT_REPS = 30
-MIN_WARMUPS = 10
-CALIBRATION_REPS = 10
-GPU_WARMUP_SECONDS = 20.0
-ORDER_SEED = 23
-PROBE_RECIPE = "build-stream-probe"
 PEAK_RULE = (
     "theoretical_peak_gbps = 2 * memory_clock_khz * 1e3 * bus_width_bits / 8 / 1e9 "
     "(DDR convention, CUDA C++ Best Practices Guide); the RTX 5060 vendor figure is "
@@ -170,56 +155,105 @@ def summarize_cell(
     }
 
 
-def probe_path(root: Path) -> Path:
-    path = root / "build" / ("stream_probe.exe" if os.name == "nt" else "stream_probe")
-    if not path.is_file():
-        raise FileNotFoundError(f"{path} not found. Build it first with just {PROBE_RECIPE}.")
-    return path
-
-
-def dry_run(root: Path, recipe: str) -> list[str]:
-    just = shutil.which("just")
-    if just is None:
-        raise RuntimeError("just is not on PATH; build provenance cannot be recorded")
-    proc = subprocess.run(
-        [just, "--dry-run", recipe], cwd=root, capture_output=True, text=True, check=False
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"just --dry-run {recipe} failed; build provenance cannot be recorded: {proc.stderr.strip()}"
+def analyze_baseline(run: ResidentExperimentRun, out: Path) -> None:
+    ceiling = probe_ceiling(run.probe, run.device["l2_bytes"])
+    cell_summaries = []
+    for count, bits in run.cells:
+        rows = [
+            record for record in run.records if record["count"] == count and record["bits"] == bits
+        ]
+        cell_summaries.append(
+            summarize_cell(
+                count,
+                bits,
+                [record["k1_ms"] for record in rows],
+                {
+                    stage: [statistics.median(record[stage]) for record in rows]
+                    for stage in ("k2_ms", "k3_ms", "samples_ms")
+                },
+                run.device,
+                ceiling["gbps"],
+            )
         )
-    # just echoes dry-run commands on stderr.
-    text = proc.stderr if proc.stderr.strip() else proc.stdout
-    return [line.strip() for line in text.splitlines() if line.strip()]
+
+    with (out / "processes.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            ["process", "position", "count", "bits", "warmups", "reps"]
+            + [f"{key}_median" for key in ("samples_ms", "k1_ms", "k2_ms", "k3_ms")]
+        )
+        for record in run.records:
+            writer.writerow(
+                [
+                    record["process"],
+                    record["position"],
+                    record["count"],
+                    record["bits"],
+                    record["warmups"],
+                    record["reps"],
+                ]
+                + [
+                    statistics.median(record[key])
+                    for key in ("samples_ms", "k1_ms", "k2_ms", "k3_ms")
+                ]
+            )
+    (out / "processes.json").write_text(json.dumps(run.records), encoding="utf-8")
+
+    summary = {
+        "created_utc": datetime.now(UTC).isoformat(),
+        "purpose": "issue #23 K1 baseline before any K1 change",
+        "git": run.git,
+        "build": run.build_record,
+        **run.hardware,
+        "device": run.device,
+        "rules": {"peak": PEAK_RULE, "effective": EFFECTIVE_RULE, "regime": REGIME_RULE},
+        "theoretical_peak_gbps": theoretical_peak_gbps(
+            run.device["memory_clock_khz"], run.device["bus_width_bits"]
+        ),
+        "probe_ceiling_gbps": ceiling["gbps"],
+        "probe_ceiling_size": {"count": ceiling["count"], "bytes": ceiling["bytes"]},
+        "gpu_state_probe": {"start": run.gpu_probe_start, "end": run.gpu_probe_end},
+        "protocol": {
+            "path": "cuda resident",
+            "processes": run.processes,
+            "reps_per_process": run.reps,
+            "in_process_warmup_seconds": run.in_process_warmup_seconds,
+            "min_warmups": MIN_WARMUPS,
+            "order": f"cells shuffled per process round, random.Random({ORDER_SEED})",
+            "seed": DEFAULT_COMPRESSION_SEED,
+            "affinity_mask": run.affinity_mask,
+            "excluded_logical_cpus": list(run.excluded_logical_cpus),
+        },
+        "inputs": list(run.inputs.values()),
+        "initial_gpu_warm_up": run.initial_gpu_warm_up,
+        "gpu_state_start": run.gpu_state_start,
+        "gpu_state_end": run.gpu_state_end,
+        "cells": cell_summaries,
+    }
+    (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    for cell in cell_summaries:
+        fraction = cell["fraction_of_peak"]
+        print(
+            f"n=2^{cell['count'].bit_length() - 1} b={cell['bits']} {cell['regime']:>12} "
+            f"k1={cell['k1']['median_ms']:.4f} ms  {cell['effective_gbps']:.1f} GB/s  "
+            + (
+                f"{fraction:.1%} of peak"
+                if fraction is not None
+                else f"{cell['launches']} launches"
+            )
+        )
 
 
-def file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def run_probe(probe: Path) -> dict[str, Any]:
-    proc = subprocess.run(
-        [str(probe), "--max-exp", str(PROBE_MAX_EXP)], capture_output=True, text=True, check=False
+def run_k1_baseline(
+    config: ResidentExperimentConfig,
+    adapter: BenchProcess = REAL_BENCH_PROCESS,
+) -> Path:
+    return run_resident_experiment(
+        config,
+        variants=("reference",),
+        analyze=analyze_baseline,
+        adapter=adapter,
     )
-    if proc.returncode != 0:
-        raise RuntimeError(f"stream probe failed: {proc.stderr.strip()}")
-    return json.loads(proc.stdout)
-
-
-def run_resident(binary: Path, input_path: Path, bits: int, warmups: int, reps: int) -> dict:
-    payload, error = run_bench_process(
-        binary,
-        input_path,
-        bits=bits,
-        backend="cuda",
-        extra_args=["--boundary", CUDA_RESIDENT.boundary],
-        seed=DEFAULT_COMPRESSION_SEED,
-        warmups=warmups,
-        reps=reps,
-    )
-    if payload is None:
-        raise RuntimeError(error)
-    return payload
 
 
 def main(argv: list[str] | None = None, prog: str | None = None) -> None:
@@ -237,149 +271,19 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         "--allow-dirty", action="store_true", help="Permit a dirty tree (non-evidence runs only)"
     )
     args = parser.parse_args(argv)
-
-    root = layout.ROOT
-    git = collect_git_provenance(root)
-    final = args.output_dir or snapshot_path(root, git["code_revision_short"], "k1-baseline")
-    check_snapshot(final, git, allow_dirty=args.allow_dirty)
-    verified = find_binary(root, git_prov=git)
-    binary = verified.path
-    probe_binary = probe_path(root)
-    build = collect_build_commands(root)
-    build.pop("_host_tokens", None)
-    if not build["commands"]:
-        sys.exit(f"just --dry-run {BUILD_RECIPE} failed; build provenance cannot be recorded.")
-    try:
-        probe_commands = dry_run(root, PROBE_RECIPE)
-    except RuntimeError as error:
-        sys.exit(str(error))
-    build_record = {
-        "build_stamp": verified.stamp,
-        BUILD_RECIPE: build["commands"],
-        PROBE_RECIPE: probe_commands,
-        "sha256": {
-            binary.name: file_sha256(binary),
-            probe_binary.name: file_sha256(probe_binary),
-        },
-    }
-
-    cells = [(count, bits) for count in args.counts for bits in args.bits]
-    records: list[dict[str, Any]] = []
-    gpu_start = query_gpu_state()
-    with tempfile.TemporaryDirectory(prefix="stoquant-k1-") as scratch:
-        inputs = generate_inputs(args.counts, Path(scratch))
-        paths = {count: Path(inputs[count]["_path"]) for count in args.counts}
-        warm = warm_up_gpu(binary, paths[max(args.counts)], args.gpu_warmup_seconds)
-        gpu_probe_start = query_gpu_state()
-        probe = run_probe(probe_binary)
-        gpu_probe_end = query_gpu_state()
-        device = probe["device"]
-        ceiling = probe_ceiling(probe, device["l2_bytes"])
-        snapshot = create_snapshot(final, git, allow_dirty=args.allow_dirty)
-        out = snapshot.partial
-        (out / "stream_probe.json").write_text(json.dumps(probe, indent=2), encoding="utf-8")
-        warmups = {}
-        for count, bits in cells:
-            payload = run_resident(binary, paths[count], bits, MIN_WARMUPS, CALIBRATION_REPS)
-            rep_ms = statistics.median(payload["samples_ms"])
-            warmups[count, bits] = in_process_warmups(
-                MIN_WARMUPS, args.in_process_warmup_seconds, rep_ms
-            )
-        rng = random.Random(ORDER_SEED)
-        for process in range(args.processes):
-            order = list(cells)
-            rng.shuffle(order)
-            for position, (count, bits) in enumerate(order):
-                payload = run_resident(binary, paths[count], bits, warmups[count, bits], args.reps)
-                records.append(
-                    {
-                        "process": process,
-                        "position": position,
-                        "count": count,
-                        "bits": bits,
-                        "warmups": warmups[count, bits],
-                        "reps": args.reps,
-                        "samples_ms": payload["samples_ms"],
-                        "k1_ms": payload["k1_ms"],
-                        "k2_ms": payload["k2_ms"],
-                        "k3_ms": payload["k3_ms"],
-                    }
-                )
-            print(f"process round {process + 1}/{args.processes}", flush=True)
-    gpu_end = query_gpu_state()
-
-    cell_summaries = []
-    for count, bits in cells:
-        rows = [r for r in records if r["count"] == count and r["bits"] == bits]
-        cell_summaries.append(
-            summarize_cell(
-                count,
-                bits,
-                [r["k1_ms"] for r in rows],
-                {
-                    stage: [statistics.median(r[stage]) for r in rows]
-                    for stage in ("k2_ms", "k3_ms", "samples_ms")
-                },
-                device,
-                ceiling["gbps"],
-            )
-        )
-
-    with (out / "processes.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(
-            ["process", "position", "count", "bits", "warmups", "reps"]
-            + [f"{key}_median" for key in ("samples_ms", "k1_ms", "k2_ms", "k3_ms")]
-        )
-        for r in records:
-            writer.writerow(
-                [r["process"], r["position"], r["count"], r["bits"], r["warmups"], r["reps"]]
-                + [statistics.median(r[key]) for key in ("samples_ms", "k1_ms", "k2_ms", "k3_ms")]
-            )
-    (out / "processes.json").write_text(json.dumps(records), encoding="utf-8")
-
-    summary = {
-        "created_utc": datetime.now(UTC).isoformat(),
-        "purpose": "issue #23 K1 baseline before any K1 change",
-        "git": git,
-        "build": build_record,
-        **collect_hardware_and_toolchain(root),
-        "device": device,
-        "rules": {"peak": PEAK_RULE, "effective": EFFECTIVE_RULE, "regime": REGIME_RULE},
-        "theoretical_peak_gbps": theoretical_peak_gbps(
-            device["memory_clock_khz"], device["bus_width_bits"]
-        ),
-        "probe_ceiling_gbps": ceiling["gbps"],
-        "probe_ceiling_size": {"count": ceiling["count"], "bytes": ceiling["bytes"]},
-        "gpu_state_probe": {"start": gpu_probe_start, "end": gpu_probe_end},
-        "protocol": {
-            "path": "cuda resident",
-            "processes": args.processes,
-            "reps_per_process": args.reps,
-            "in_process_warmup_seconds": args.in_process_warmup_seconds,
-            "min_warmups": MIN_WARMUPS,
-            "order": f"cells shuffled per process round, random.Random({ORDER_SEED})",
-            "seed": DEFAULT_COMPRESSION_SEED,
-        },
-        "inputs": [{k: v for k, v in inputs[c].items() if k != "_path"} for c in args.counts],
-        "initial_gpu_warm_up": warm,
-        "gpu_state_start": gpu_start,
-        "gpu_state_end": gpu_end,
-        "cells": cell_summaries,
-    }
-    (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    snapshot.commit()
-    for cell in cell_summaries:
-        fraction = cell["fraction_of_peak"]
-        print(
-            f"n=2^{cell['count'].bit_length() - 1} b={cell['bits']} {cell['regime']:>12} "
-            f"k1={cell['k1']['median_ms']:.4f} ms  {cell['effective_gbps']:.1f} GB/s  "
-            + (
-                f"{fraction:.1%} of peak"
-                if fraction is not None
-                else f"{cell['launches']} launches"
-            )
-        )
+    config = ResidentExperimentConfig(
+        root=layout.ROOT,
+        kind="k1-baseline",
+        counts=args.counts,
+        bits=args.bits,
+        processes=args.processes,
+        reps=args.reps,
+        gpu_warmup_seconds=args.gpu_warmup_seconds,
+        in_process_warmup_seconds=args.in_process_warmup_seconds,
+        output_dir=args.output_dir,
+        allow_dirty=args.allow_dirty,
+    )
+    run_k1_baseline(config)
 
 
 if __name__ == "__main__":

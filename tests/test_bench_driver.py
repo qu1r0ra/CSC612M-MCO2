@@ -36,8 +36,11 @@ from stoquant.inputs import (
 from stoquant.matrix import (
     MATRIX_PILOT_COUNTS,
     SUMMARY_FIELDS,
+    SweepInputs,
+    SweepSettings,
     compact_invocation_ids,
     run_benchmark_matrix,
+    write_case_outputs,
 )
 from stoquant.provenance import find_binary, parse_build_commands
 from stoquant.runner import REAL_BENCH_PROCESS, FakeBenchProcess, in_process_warmups
@@ -523,6 +526,11 @@ def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
 
     manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["all_cases_passed"] is False
+    assert manifest["run_conditions"]["evidence"] is False
+    assert any(
+        reason.startswith("failed benchmark cases:")
+        for reason in manifest["run_conditions"]["non_evidence_reasons"]
+    )
 
     # Check case JSON
     for case_id in manifest["cases"]:
@@ -715,6 +723,26 @@ def test_boundary_inversion_nests_gpu_origin_between_resident_and_host_origin():
     assert boundary_inversion(medians, "pinned") is True
 
 
+def test_boundary_inversion_vetoes_a_selected_partner_without_a_median():
+    assert (
+        boundary_inversion(
+            {"resident": 1.0, "host-origin": 2.0},
+            selected_keys={"resident", "resident-graph", "host-origin"},
+        )
+        is True
+    )
+
+
+def test_boundary_inversion_vetoes_a_selected_host_path_without_a_median():
+    assert (
+        boundary_inversion(
+            {"resident": 1.0},
+            selected_keys={"resident", "resident-graph", "host-origin"},
+        )
+        is True
+    )
+
+
 def test_default_paths_are_the_revision_3_paths():
     assert [path.label for path in build_paths(["cpu", "cuda"])] == [
         "cpu-comparator",
@@ -863,6 +891,135 @@ def test_case_group_uses_policy_matched_baselines_and_groups():
     assert vs_comparator["descriptive"] is True
     assert "direction_supported" not in vs_comparator
     assert stats["cuda-resident-graph"]["vs_resident"]["boundary_inversion"] is False
+
+
+def test_cuda_claims_fail_closed_when_a_selected_veto_path_failed():
+    paths = build_paths(["cpu", "cuda"])
+    medians = {
+        "cpu-comparator": 10.0,
+        "cuda-resident": 1.0,
+        "cuda-resident-graph": None,
+        "cuda-host-origin": 4.0,
+    }
+    cases = [
+        {"statistics": None if medians[path.label] is None else fake_stats(medians[path.label])}
+        for path in paths
+    ]
+
+    compare_case_group(cases, paths)
+    stats = {path.label: case["statistics"] for path, case in zip(paths, cases, strict=True)}
+
+    host_origin = stats["cuda-host-origin"]
+    resident = stats["cuda-resident"]
+    assert host_origin is not None
+    assert resident is not None
+    assert host_origin["boundary_inversion"] is True
+    assert host_origin["direction_supported"] is False
+    assert resident["direction_supported"] is False
+
+
+def test_cuda_resident_claims_fail_closed_when_host_origin_veto_failed():
+    paths = build_paths(["cpu", "cuda"])
+    medians = {
+        "cpu-comparator": 10.0,
+        "cuda-resident": 1.0,
+        "cuda-resident-graph": 0.9,
+        "cuda-host-origin": None,
+    }
+    cases = [
+        {"statistics": None if medians[path.label] is None else fake_stats(medians[path.label])}
+        for path in paths
+    ]
+
+    compare_case_group(cases, paths)
+    stats = {path.label: case["statistics"] for path, case in zip(paths, cases, strict=True)}
+
+    for label in ("cuda-resident", "cuda-resident-graph"):
+        result = stats[label]
+        assert result is not None
+        assert result["boundary_inversion"] is True
+        assert result["direction_supported"] is False
+        assert result["magnitude_supported"] is False
+
+
+def test_passing_unbaselined_case_keeps_measured_summary_values(tmp_path):
+    case = {
+        "case_id": "candidate-case",
+        "backend": "cuda",
+        "timing_boundary": "resident",
+        "transfer_policy": "none",
+        "path_label": "cuda-resident",
+        "warmup": 1,
+        "correctness": {"status": "passed"},
+        "statistics": {
+            "median_ms": 1.25,
+            "iqr_ms": 0.2,
+            "trial_median_min_ms": 1.1,
+            "trial_median_max_ms": 1.4,
+            "spread_ratio": 1.27,
+            "spread_p90_p10": 1.1,
+            "stable": True,
+            "unstable_rev2": True,
+        },
+    }
+
+    rows = write_case_outputs(
+        tmp_path,
+        [case],
+        SweepInputs(files={}, clean_meta={}, counts={"n1024": 1024}),
+        "n1024",
+        4,
+        SweepSettings(
+            counts=(1024,),
+            bit_widths=(4,),
+            backends=("cuda",),
+            paths=(),
+            transfer_policies=(),
+            warmups=1,
+            reps=2,
+            trials=1,
+            input_seed=0,
+            compression_seed=0,
+            case_order_seed=0,
+            gpu_warmup_seconds=0,
+            case_warmup_seconds=0,
+            in_process_warmup_seconds=0,
+            bench_process=REAL_BENCH_PROCESS,
+            input_family="dense",
+            model_tensors=None,
+            model_limit=None,
+            k1="reference",
+        ),
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row is not None
+    assert row["correctness"] == "passed"
+    assert row["median_ms"] == "1.250000"
+    assert row["baseline"] == ""
+    assert row["verdict"] == ""
+
+
+def test_matrix_cli_returns_failure_for_non_evidence_snapshot(tmp_path, monkeypatch, capsys):
+    snapshot = tmp_path / "failed-snapshot"
+    snapshot.mkdir()
+    (snapshot / "manifest.json").write_text(
+        json.dumps(
+            {
+                "all_cases_passed": False,
+                "run_conditions": {"non_evidence_reasons": ["failed benchmark cases: case-1"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(matrix, "run_benchmark_matrix", lambda **_: snapshot)
+
+    with pytest.raises(SystemExit) as error:
+        matrix.main(["--output-dir", str(snapshot)])
+
+    assert error.value.code == 1
+    assert "snapshot is non-evidence" in capsys.readouterr().err
 
 
 def test_cpu_gpu_origin_faster_than_the_comparator_is_an_inversion():
