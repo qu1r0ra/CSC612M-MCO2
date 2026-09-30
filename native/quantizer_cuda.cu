@@ -12,6 +12,75 @@
 
 #define SQ_CUDA_REDUCTION_THREADS 256
 
+#ifdef SQ_CUDA_FAULT_INJECTION
+/* Test build only. STOQUANT_FAULT_CUDA_CALL=n makes the n-th CUDA call of
+   sq_cuda_compress fail with cudaErrorUnknown; unset, the gate never fires. */
+static int fault_countdown;
+
+static void fault_arm(void) {
+  const char *setting = getenv("STOQUANT_FAULT_CUDA_CALL");
+  fault_countdown = setting != NULL ? atoi(setting) : 0;
+}
+
+static int fault_fires(void) {
+  if (fault_countdown > 0 && --fault_countdown == 0) {
+    (void)fputs("injected CUDA fault\n", stderr);
+    return 1;
+  }
+  return 0;
+}
+#define SQ_CUDA_FAULT_ARM() fault_arm()
+#define SQ_CUDA_CALL(call) (fault_fires() ? cudaErrorUnknown : (call))
+#else
+#define SQ_CUDA_FAULT_ARM() ((void)0)
+#define SQ_CUDA_CALL(call) (call)
+#endif
+
+#define SQ_CUDA_TRY(error, call, failure)                                      \
+  do {                                                                         \
+    (error) = SQ_CUDA_CALL(call);                                              \
+    if ((error) != cudaSuccess) {                                              \
+      failure;                                                                 \
+    }                                                                          \
+  } while (0)
+
+static cudaError_t create_events(cudaEvent_t *events, size_t count) {
+  cudaError_t error;
+  size_t index;
+
+  for (index = 0; index < count; index++) {
+    SQ_CUDA_TRY(error, cudaEventCreate(&events[index]), return error);
+  }
+  return cudaSuccess;
+}
+
+static void destroy_events(cudaEvent_t *events, size_t count) {
+  size_t index;
+
+  for (index = 0; index < count; index++) {
+    if (events[index] != NULL) {
+      (void)cudaEventDestroy(events[index]);
+    }
+  }
+}
+
+static int cuda_device_available(void) {
+  int device_count = 0;
+  cudaError_t error;
+
+  SQ_CUDA_TRY(error, cudaGetDeviceCount(&device_count), {
+    (void)cudaGetLastError();
+    return 0;
+  });
+  if (device_count == 0) {
+    (void)cudaGetLastError();
+    return 0;
+  }
+  return 1;
+}
+
+enum { SQ_CUDA_TIMING_START, SQ_CUDA_TIMING_STOP, SQ_CUDA_TIMING_COUNT };
+
 enum {
   SQ_CUDA_INPUT_NONFINITE = 1U,
   SQ_CUDA_INPUT_ANY_NONZERO = 2U,
@@ -460,13 +529,86 @@ static int launch_grid(uint64_t work, int block_size, int grid_size) {
   return sq_cuda_automatic_grid(work, block_size);
 }
 
+struct sq_cuda_k1_workspace {
+  float *max_partials;
+  uint32_t *invalid_partials;
+  float *sums_a;
+  float *sums_b;
+  uint64_t block_count;
+  uint64_t padded_count;
+};
+
+static int valid_launch_geometry(int block_size, int grid_size) {
+  return block_size > 0 && block_size <= SQ_CUDA_MAX_BLOCK_SIZE &&
+         grid_size >= 0 && grid_size <= SQ_CUDA_MAX_GRID_SIZE;
+}
+
+static sq_status set_k1_workspace_geometry(sq_cuda_k1_workspace *workspace,
+                                           uint64_t count) {
+  uint64_t block_count = count / SQ_CUDA_REDUCTION_THREADS +
+                         (count % SQ_CUDA_REDUCTION_THREADS != 0);
+  uint64_t padded_count = 1;
+
+  if (workspace == NULL) {
+    return SQ_ERR_ARGUMENT;
+  }
+  if (count == 0) {
+    workspace->block_count = 0;
+    workspace->padded_count = 0;
+    return SQ_OK;
+  }
+  while (padded_count < block_count) {
+    if (padded_count > std::numeric_limits<uint64_t>::max() / 2) {
+      return SQ_ERR_COUNT;
+    }
+    padded_count <<= 1;
+  }
+  if (block_count > SIZE_MAX / sizeof(float) ||
+      block_count > SIZE_MAX / sizeof(uint32_t) ||
+      padded_count > SIZE_MAX / sizeof(float)) {
+    return SQ_ERR_COUNT;
+  }
+  workspace->block_count = block_count;
+  workspace->padded_count = padded_count;
+  return SQ_OK;
+}
+
+static cudaError_t allocate_k1_workspace(sq_cuda_k1_workspace *workspace) {
+  cudaError_t error;
+
+  SQ_CUDA_TRY(error,
+              cudaMalloc(reinterpret_cast<void **>(&workspace->max_partials),
+                         workspace->block_count * sizeof(float)),
+              return error);
+  SQ_CUDA_TRY(
+      error,
+      cudaMalloc(reinterpret_cast<void **>(&workspace->invalid_partials),
+                 workspace->block_count * sizeof(uint32_t)),
+      return error);
+  SQ_CUDA_TRY(error,
+              cudaMalloc(reinterpret_cast<void **>(&workspace->sums_a),
+                         workspace->padded_count * sizeof(float)),
+              return error);
+  SQ_CUDA_TRY(error,
+              cudaMalloc(reinterpret_cast<void **>(&workspace->sums_b),
+                         workspace->padded_count * sizeof(float)),
+              return error);
+  return error;
+}
+
+static void destroy_k1_workspace(sq_cuda_k1_workspace *workspace) {
+  (void)cudaFree(workspace->max_partials);
+  (void)cudaFree(workspace->invalid_partials);
+  (void)cudaFree(workspace->sums_a);
+  (void)cudaFree(workspace->sums_b);
+}
+
 static int launch_k1_optimized(const float *device_values, uint64_t count,
-                               float *device_max_partials,
-                               uint32_t *device_invalid_partials,
-                               float *device_sums_a, float *device_sums_b,
-                               uint64_t block_count, uint64_t padded_count,
+                               const sq_cuda_k1_workspace *workspace,
                                float *device_scale, int *device_status,
                                int grid_size, cudaStream_t stream) {
+  const uint64_t block_count = workspace->block_count;
+  const uint64_t padded_count = workspace->padded_count;
   const uint64_t word_count = count / 4 + (count % 4 != 0);
   const uint64_t auto_max_grid = (uint64_t)sq_cuda_automatic_grid(
       word_count, SQ_CUDA_REDUCTION_THREADS * 2);
@@ -489,32 +631,24 @@ static int launch_k1_optimized(const float *device_values, uint64_t count,
   }
 
   max_vector_kernel<<<(unsigned int)max_grid, SQ_CUDA_REDUCTION_THREADS, 0,
-                      stream>>>(device_values, count, device_max_partials,
-                                device_invalid_partials);
-  cudaError_t error = cudaGetLastError();
-  if (error != cudaSuccess) {
-    return (int)error;
-  }
+                      stream>>>(device_values, count, workspace->max_partials,
+                                workspace->invalid_partials);
+  cudaError_t error;
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
 
   reduce_max_kernel<<<1, SQ_CUDA_REDUCTION_THREADS, 0, stream>>>(
-      device_max_partials, device_invalid_partials, max_grid, device_scale,
-      device_status);
-  error = cudaGetLastError();
-  if (error != cudaSuccess) {
-    return (int)error;
-  }
+      workspace->max_partials, workspace->invalid_partials, max_grid,
+      device_scale, device_status);
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
 
   sum_warps_kernel<<<sum_grid, SQ_CUDA_REDUCTION_THREADS, 0, stream>>>(
       device_values, count, block_count, padded_count, device_scale,
-      device_status, device_sums_a);
-  error = cudaGetLastError();
-  if (error != cudaSuccess) {
-    return (int)error;
-  }
+      device_status, workspace->sums_a);
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
 
   uint64_t active = padded_count;
-  float *input = device_sums_a;
-  float *output = device_sums_b;
+  float *input = workspace->sums_a;
+  float *output = workspace->sums_b;
   while (active > 1) {
     const unsigned int span = active < SQ_CUDA_K1_TREE_SPAN
                                   ? (unsigned int)active
@@ -525,10 +659,7 @@ static int launch_k1_optimized(const float *device_values, uint64_t count,
                       : (unsigned int)sq_cuda_automatic_grid(output_count, 1);
     reduce_tree_kernel<<<tree_grid, SQ_CUDA_REDUCTION_THREADS, 0, stream>>>(
         input, output, output_count, span);
-    error = cudaGetLastError();
-    if (error != cudaSuccess) {
-      return (int)error;
-    }
+    SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
     active = output_count;
     float *temporary = input;
     input = output;
@@ -536,20 +667,20 @@ static int launch_k1_optimized(const float *device_values, uint64_t count,
   }
 
   finish_scale_kernel<<<1, 1, 0, stream>>>(input, device_scale, device_status);
-  return (int)cudaGetLastError();
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
+  return (int)cudaSuccess;
 }
 
-extern "C" int sq_cuda_launch_k1(const float *device_values, uint64_t count,
-                                 float *device_max_partials,
-                                 uint32_t *device_invalid_partials,
-                                 float *device_sums_a, float *device_sums_b,
-                                 uint64_t block_count, uint64_t padded_count,
-                                 float *device_scale, int *device_status,
-                                 int grid_size, void *stream_handle) {
-  if (grid_size < 0 || grid_size > SQ_CUDA_MAX_GRID_SIZE) {
+static int launch_k1(const float *device_values, uint64_t count,
+                     const sq_cuda_k1_workspace *workspace, float *device_scale,
+                     int *device_status, int grid_size, cudaStream_t stream) {
+  if (count == 0) {
+    return (int)cudaSuccess;
+  }
+  if (!valid_launch_geometry(SQ_CUDA_REDUCTION_THREADS, grid_size) ||
+      workspace == NULL) {
     return (int)cudaErrorInvalidValue;
   }
-  cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_handle);
   const uint64_t expected_block_count =
       count / SQ_CUDA_REDUCTION_THREADS +
       (count % SQ_CUDA_REDUCTION_THREADS != 0);
@@ -557,6 +688,8 @@ extern "C" int sq_cuda_launch_k1(const float *device_values, uint64_t count,
   while (expected_padded_count < expected_block_count) {
     expected_padded_count <<= 1;
   }
+  const uint64_t block_count = workspace->block_count;
+  const uint64_t padded_count = workspace->padded_count;
   const unsigned int auto_max_grid =
       (unsigned int)(block_count < SQ_CUDA_MAX_GRID_SIZE
                          ? block_count
@@ -570,47 +703,38 @@ extern "C" int sq_cuda_launch_k1(const float *device_values, uint64_t count,
   const unsigned int sum_grid =
       (grid_size > 0) ? (unsigned int)grid_size : auto_sum_grid;
 
-  if (count == 0 || block_count != expected_block_count ||
+  if (block_count != expected_block_count ||
       padded_count != expected_padded_count || max_grid == 0 || sum_grid == 0 ||
-      device_values == NULL || device_max_partials == NULL ||
-      device_invalid_partials == NULL || device_sums_a == NULL ||
-      device_sums_b == NULL || device_scale == NULL || device_status == NULL) {
+      device_values == NULL || workspace->max_partials == NULL ||
+      workspace->invalid_partials == NULL || workspace->sums_a == NULL ||
+      workspace->sums_b == NULL || device_scale == NULL ||
+      device_status == NULL) {
     return (int)cudaErrorInvalidValue;
   }
   if (k1_variant == SQ_CUDA_K1_OPTIMIZED) {
-    return launch_k1_optimized(device_values, count, device_max_partials,
-                               device_invalid_partials, device_sums_a,
-                               device_sums_b, block_count, padded_count,
-                               device_scale, device_status, grid_size, stream);
+    return launch_k1_optimized(device_values, count, workspace, device_scale,
+                               device_status, grid_size, stream);
   }
 
   max_blocks_kernel<<<max_grid, SQ_CUDA_REDUCTION_THREADS, 0, stream>>>(
-      device_values, count, block_count, device_max_partials,
-      device_invalid_partials);
-  cudaError_t error = cudaGetLastError();
-  if (error != cudaSuccess) {
-    return (int)error;
-  }
+      device_values, count, block_count, workspace->max_partials,
+      workspace->invalid_partials);
+  cudaError_t error;
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
 
   reduce_max_kernel<<<1, SQ_CUDA_REDUCTION_THREADS, 0, stream>>>(
-      device_max_partials, device_invalid_partials, block_count, device_scale,
-      device_status);
-  error = cudaGetLastError();
-  if (error != cudaSuccess) {
-    return (int)error;
-  }
+      workspace->max_partials, workspace->invalid_partials, block_count,
+      device_scale, device_status);
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
 
   sum_blocks_kernel<<<sum_grid, SQ_CUDA_REDUCTION_THREADS, 0, stream>>>(
       device_values, count, block_count, padded_count, device_scale,
-      device_status, device_sums_a);
-  error = cudaGetLastError();
-  if (error != cudaSuccess) {
-    return (int)error;
-  }
+      device_status, workspace->sums_a);
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
 
   uint64_t active = padded_count;
-  float *input = device_sums_a;
-  float *output = device_sums_b;
+  float *input = workspace->sums_a;
+  float *output = workspace->sums_b;
   while (active > 1) {
     const uint64_t output_count = active / 2;
     const unsigned int auto_pair_grid =
@@ -619,10 +743,7 @@ extern "C" int sq_cuda_launch_k1(const float *device_values, uint64_t count,
         (grid_size > 0) ? (unsigned int)grid_size : auto_pair_grid;
     reduce_pairs_kernel<<<pair_grid, 256, 0, stream>>>(input, output,
                                                        output_count);
-    error = cudaGetLastError();
-    if (error != cudaSuccess) {
-      return (int)error;
-    }
+    SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
     active = output_count;
     float *temporary = input;
     input = output;
@@ -630,7 +751,8 @@ extern "C" int sq_cuda_launch_k1(const float *device_values, uint64_t count,
   }
 
   finish_scale_kernel<<<1, 1, 0, stream>>>(input, device_scale, device_status);
-  return (int)cudaGetLastError();
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
+  return (int)cudaSuccess;
 }
 
 extern "C" int
@@ -645,8 +767,7 @@ sq_cuda_launch_k2(uint8_t bit_width, const float *device_values, uint64_t count,
   if (count == 0) {
     return 0;
   }
-  if (grid_size < 0 || grid_size > SQ_CUDA_MAX_GRID_SIZE || block_size <= 0 ||
-      block_size > SQ_CUDA_MAX_BLOCK_SIZE) {
+  if (!valid_launch_geometry(block_size, grid_size)) {
     return (int)cudaErrorInvalidValue;
   }
   const uint64_t group_count = count / 4 + (count % 4 != 0);
@@ -657,11 +778,13 @@ sq_cuda_launch_k2(uint8_t bit_width, const float *device_values, uint64_t count,
     return (int)cudaErrorInvalidValue;
   }
 
+  cudaError_t error;
   round_kernel<<<grid, block_size, 0,
                  reinterpret_cast<cudaStream_t>(stream_handle)>>>(
       bit_width, device_values, count, device_scale, device_words,
       prescribed_words, stream_state, device_codes, device_validation_flags);
-  return (int)cudaGetLastError();
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
+  return (int)cudaSuccess;
 }
 
 extern "C" int sq_cuda_launch_k3(uint8_t bit_width, const uint8_t *device_codes,
@@ -674,8 +797,7 @@ extern "C" int sq_cuda_launch_k3(uint8_t bit_width, const uint8_t *device_codes,
   if (count == 0) {
     return 0;
   }
-  if (grid_size < 0 || grid_size > SQ_CUDA_MAX_GRID_SIZE || block_size <= 0 ||
-      block_size > SQ_CUDA_MAX_BLOCK_SIZE) {
+  if (!valid_launch_geometry(block_size, grid_size)) {
     return (int)cudaErrorInvalidValue;
   }
   const uint64_t output_bytes = sq_payload_size(bit_width, count);
@@ -685,6 +807,7 @@ extern "C" int sq_cuda_launch_k3(uint8_t bit_width, const uint8_t *device_codes,
   }
 
   const cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_handle);
+  cudaError_t error;
   if (bit_width == SQ_Q4_BITS) {
     pack_q4_kernel<<<grid, block_size, 0, stream>>>(
         device_codes, count, output_bytes, device_payload);
@@ -692,45 +815,19 @@ extern "C" int sq_cuda_launch_k3(uint8_t bit_width, const uint8_t *device_codes,
     pack_q8_kernel<<<grid, block_size, 0, stream>>>(device_codes, count,
                                                     device_payload);
   }
-  return (int)cudaGetLastError();
+  SQ_CUDA_TRY(error, cudaGetLastError(), return (int)error);
+  return (int)cudaSuccess;
 }
-
-#ifdef SQ_CUDA_FAULT_INJECTION
-/* Test build only. STOQUANT_FAULT_CUDA_CALL=n makes the n-th CUDA call of
-   sq_cuda_compress fail with cudaErrorUnknown; unset, the gate never fires. */
-static int fault_countdown;
-
-static void fault_arm(void) {
-  const char *setting = getenv("STOQUANT_FAULT_CUDA_CALL");
-  fault_countdown = setting != NULL ? atoi(setting) : 0;
-}
-
-static int fault_fires(void) {
-  if (fault_countdown > 0 && --fault_countdown == 0) {
-    (void)fputs("injected CUDA fault\n", stderr);
-    return 1;
-  }
-  return 0;
-}
-#define SQ_CUDA_FAULT_ARM() fault_arm()
-#define SQ_CUDA_CALL(call) (fault_fires() ? cudaErrorUnknown : (call))
-#else
-#define SQ_CUDA_FAULT_ARM() ((void)0)
-#define SQ_CUDA_CALL(call) (call)
-#endif
 
 static sq_status timed_copy(void *destination, const void *source, size_t size,
                             cudaMemcpyKind kind, cudaStream_t stream,
                             float *elapsed_ms, int collect_timing) {
   const auto start = std::chrono::steady_clock::now();
-  cudaError_t error =
-      SQ_CUDA_CALL(cudaMemcpyAsync(destination, source, size, kind, stream));
-  if (error == cudaSuccess) {
-    error = SQ_CUDA_CALL(cudaStreamSynchronize(stream));
-  }
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
+  cudaError_t error;
+
+  SQ_CUDA_TRY(error, cudaMemcpyAsync(destination, source, size, kind, stream),
+              return SQ_ERR_CUDA);
+  SQ_CUDA_TRY(error, cudaStreamSynchronize(stream), return SQ_ERR_CUDA);
   if (collect_timing) {
     const auto end = std::chrono::steady_clock::now();
     *elapsed_ms +=
@@ -741,14 +838,13 @@ static sq_status timed_copy(void *destination, const void *source, size_t size,
 
 static sq_status finish_kernel_timing(cudaEvent_t start, cudaEvent_t stop,
                                       cudaStream_t stream, float *elapsed_ms) {
-  cudaError_t error = SQ_CUDA_CALL(cudaEventRecord(stop, stream));
-  if (error == cudaSuccess) {
-    error = SQ_CUDA_CALL(cudaEventSynchronize(stop));
-  }
-  if (error == cudaSuccess) {
-    error = SQ_CUDA_CALL(cudaEventElapsedTime(elapsed_ms, start, stop));
-  }
-  return error == cudaSuccess ? SQ_OK : SQ_ERR_CUDA;
+  cudaError_t error;
+
+  SQ_CUDA_TRY(error, cudaEventRecord(stop, stream), return SQ_ERR_CUDA);
+  SQ_CUDA_TRY(error, cudaEventSynchronize(stop), return SQ_ERR_CUDA);
+  SQ_CUDA_TRY(error, cudaEventElapsedTime(elapsed_ms, start, stop),
+              return SQ_ERR_CUDA);
+  return SQ_OK;
 }
 
 sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
@@ -759,19 +855,17 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
                            int grid_size, uint8_t *payload, float *scale,
                            int collect_timings, sq_cuda_timings *timings) {
   cudaStream_t stream = NULL;
-  cudaEvent_t event_start = NULL, event_stop = NULL;
+  cudaEvent_t timing_events[SQ_CUDA_TIMING_COUNT] = {};
   float *device_values = NULL, *device_scale = NULL;
-  float *device_max_partials = NULL, *device_sums_a = NULL,
-        *device_sums_b = NULL;
-  uint32_t *device_invalid_partials = NULL, *device_words = NULL;
+  uint32_t *device_words = NULL;
   uint32_t *device_validation_flags = NULL;
   uint8_t *device_codes = NULL, *device_payload = NULL;
   int *device_status = NULL;
-  uint64_t block_count = 0, padded_count = 1;
+  sq_cuda_k1_workspace k1_workspace = {};
   uint32_t host_validation_flags = 0;
   int host_status = SQ_OK;
-  int device_count = 0;
   sq_rng_stream stream_state;
+  cudaError_t error = cudaSuccess;
   sq_status result = SQ_ERR_CUDA;
   sq_cuda_timings zero_timings = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
   const size_t payload_bytes = sq_payload_size(bit_width, count);
@@ -787,8 +881,7 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
       (collect_timings && timings == NULL)) {
     return SQ_ERR_ARGUMENT;
   }
-  if (block_size <= 0 || block_size > SQ_CUDA_MAX_BLOCK_SIZE || grid_size < 0 ||
-      grid_size > SQ_CUDA_MAX_GRID_SIZE) {
+  if (!valid_launch_geometry(block_size, grid_size)) {
     return SQ_ERR_ARGUMENT;
   }
   if (prescribed_scale_seen &&
@@ -801,9 +894,7 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
   }
 
   SQ_CUDA_FAULT_ARM();
-  cudaError_t error = SQ_CUDA_CALL(cudaGetDeviceCount(&device_count));
-  if (error != cudaSuccess || device_count == 0) {
-    (void)cudaGetLastError();
+  if (!cuda_device_available()) {
     return SQ_ERR_CUDA;
   }
   if (count == 0 && prescribed_scale_seen && prescribed_scale != 0.0f) {
@@ -815,65 +906,65 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
     return SQ_OK;
   }
 
-  block_count = count / SQ_CUDA_REDUCTION_THREADS +
-                (count % SQ_CUDA_REDUCTION_THREADS != 0);
-  while (!prescribed_scale_seen && padded_count < block_count) {
-    if (padded_count > std::numeric_limits<uint64_t>::max() / 2) {
-      return SQ_ERR_COUNT;
+  if (!prescribed_scale_seen) {
+    result = set_k1_workspace_geometry(&k1_workspace, count);
+    if (result != SQ_OK) {
+      return result;
     }
-    padded_count *= 2;
   }
 
-  error =
-      SQ_CUDA_CALL(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-  if (error != cudaSuccess) {
-    goto done;
-  }
+  SQ_CUDA_TRY(error, cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
+              goto done);
   if (collect_timings) {
-    error = SQ_CUDA_CALL(cudaEventCreate(&event_start));
-    if (error != cudaSuccess) {
-      goto done;
-    }
-    error = SQ_CUDA_CALL(cudaEventCreate(&event_stop));
+    error = create_events(timing_events, SQ_CUDA_TIMING_COUNT);
     if (error != cudaSuccess) {
       goto done;
     }
   }
 
-#define ALLOCATE_DEVICE(pointer, bytes)                                        \
-  do {                                                                         \
-    error = SQ_CUDA_CALL(                                                      \
-        cudaMalloc(reinterpret_cast<void **>(&(pointer)), (bytes)));           \
-    if (error != cudaSuccess)                                                  \
-      goto done;                                                               \
-  } while (0)
-
-  ALLOCATE_DEVICE(device_values, count * sizeof(float));
-  ALLOCATE_DEVICE(device_scale, sizeof(float));
-  ALLOCATE_DEVICE(device_status, sizeof(int));
-  ALLOCATE_DEVICE(device_validation_flags, sizeof(uint32_t));
-  ALLOCATE_DEVICE(device_codes, count * sizeof(uint8_t));
-  ALLOCATE_DEVICE(device_payload,
-                  (payload_bytes > 0 ? payload_bytes : 1) * sizeof(uint8_t));
+  SQ_CUDA_TRY(error,
+              cudaMalloc(reinterpret_cast<void **>(&device_values),
+                         count * sizeof(float)),
+              goto done);
+  SQ_CUDA_TRY(
+      error,
+      cudaMalloc(reinterpret_cast<void **>(&device_scale), sizeof(float)),
+      goto done);
+  SQ_CUDA_TRY(
+      error, cudaMalloc(reinterpret_cast<void **>(&device_status), sizeof(int)),
+      goto done);
+  SQ_CUDA_TRY(error,
+              cudaMalloc(reinterpret_cast<void **>(&device_validation_flags),
+                         sizeof(uint32_t)),
+              goto done);
+  SQ_CUDA_TRY(error,
+              cudaMalloc(reinterpret_cast<void **>(&device_codes),
+                         count * sizeof(uint8_t)),
+              goto done);
+  SQ_CUDA_TRY(
+      error,
+      cudaMalloc(reinterpret_cast<void **>(&device_payload),
+                 (payload_bytes > 0 ? payload_bytes : 1) * sizeof(uint8_t)),
+      goto done);
   if (prescribed_words != NULL) {
-    ALLOCATE_DEVICE(device_words, count * sizeof(uint32_t));
+    SQ_CUDA_TRY(error,
+                cudaMalloc(reinterpret_cast<void **>(&device_words),
+                           count * sizeof(uint32_t)),
+                goto done);
   }
   if (!prescribed_scale_seen) {
-    ALLOCATE_DEVICE(device_max_partials, block_count * sizeof(float));
-    ALLOCATE_DEVICE(device_invalid_partials, block_count * sizeof(uint32_t));
-    ALLOCATE_DEVICE(device_sums_a, padded_count * sizeof(float));
-    ALLOCATE_DEVICE(device_sums_b, padded_count * sizeof(float));
+    error = allocate_k1_workspace(&k1_workspace);
+    if (error != cudaSuccess) {
+      goto done;
+    }
   }
 
-  error = SQ_CUDA_CALL(cudaMemsetAsync(device_status, 0, sizeof(int), stream));
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = SQ_CUDA_CALL(
-      cudaMemsetAsync(device_validation_flags, 0, sizeof(uint32_t), stream));
-  if (error != cudaSuccess) {
-    goto done;
-  }
+  SQ_CUDA_TRY(error, cudaMemsetAsync(device_status, 0, sizeof(int), stream),
+              goto done);
+  SQ_CUDA_TRY(
+      error,
+      cudaMemsetAsync(device_validation_flags, 0, sizeof(uint32_t), stream),
+      goto done);
 
   result = timed_copy(device_values, values, count * sizeof(float),
                       cudaMemcpyHostToDevice, stream,
@@ -903,29 +994,24 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
     }
   } else {
     if (collect_timings) {
-      error = SQ_CUDA_CALL(cudaEventRecord(event_start, stream));
-      if (error != cudaSuccess) {
-        goto done;
-      }
+      SQ_CUDA_TRY(error,
+                  cudaEventRecord(timing_events[SQ_CUDA_TIMING_START], stream),
+                  goto done);
     }
-    error = SQ_CUDA_CALL((cudaError_t)sq_cuda_launch_k1(
-        device_values, count, device_max_partials, device_invalid_partials,
-        device_sums_a, device_sums_b, block_count, padded_count, device_scale,
-        device_status, grid_size, stream));
-    if (error != cudaSuccess) {
-      goto done;
-    }
+    SQ_CUDA_TRY(error,
+                (cudaError_t)launch_k1(device_values, count, &k1_workspace,
+                                       device_scale, device_status, grid_size,
+                                       stream),
+                goto done);
     if (collect_timings) {
-      result = finish_kernel_timing(event_start, event_stop, stream,
+      result = finish_kernel_timing(timing_events[SQ_CUDA_TIMING_START],
+                                    timing_events[SQ_CUDA_TIMING_STOP], stream,
                                     &timings->k1_ms);
       if (result != SQ_OK) {
         goto done;
       }
     }
-    error = SQ_CUDA_CALL(cudaStreamSynchronize(stream));
-    if (error != cudaSuccess) {
-      goto done;
-    }
+    SQ_CUDA_TRY(error, cudaStreamSynchronize(stream), goto done);
     result = timed_copy(&host_status, device_status, sizeof(int),
                         cudaMemcpyDeviceToHost, stream,
                         timings != NULL ? &timings->d2h_ms : NULL,
@@ -947,29 +1033,25 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
   }
 
   if (collect_timings) {
-    error = SQ_CUDA_CALL(cudaEventRecord(event_start, stream));
-    if (error != cudaSuccess) {
-      goto done;
-    }
+    SQ_CUDA_TRY(error,
+                cudaEventRecord(timing_events[SQ_CUDA_TIMING_START], stream),
+                goto done);
   }
-  error = SQ_CUDA_CALL((cudaError_t)sq_cuda_launch_k2(
-      bit_width, device_values, count, device_scale, device_words,
-      prescribed_words != NULL, stream_state, device_codes,
-      device_validation_flags, block_size, grid_size, stream));
-  if (error != cudaSuccess) {
-    goto done;
-  }
+  SQ_CUDA_TRY(error,
+              (cudaError_t)sq_cuda_launch_k2(
+                  bit_width, device_values, count, device_scale, device_words,
+                  prescribed_words != NULL, stream_state, device_codes,
+                  device_validation_flags, block_size, grid_size, stream),
+              goto done);
   if (collect_timings) {
-    result =
-        finish_kernel_timing(event_start, event_stop, stream, &timings->k2_ms);
+    result = finish_kernel_timing(timing_events[SQ_CUDA_TIMING_START],
+                                  timing_events[SQ_CUDA_TIMING_STOP], stream,
+                                  &timings->k2_ms);
     if (result != SQ_OK) {
       goto done;
     }
   }
-  error = SQ_CUDA_CALL(cudaStreamSynchronize(stream));
-  if (error != cudaSuccess) {
-    goto done;
-  }
+  SQ_CUDA_TRY(error, cudaStreamSynchronize(stream), goto done);
   result = timed_copy(&host_validation_flags, device_validation_flags,
                       sizeof(uint32_t), cudaMemcpyDeviceToHost, stream,
                       timings != NULL ? &timings->d2h_ms : NULL,
@@ -991,28 +1073,24 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
   }
 
   if (collect_timings) {
-    error = SQ_CUDA_CALL(cudaEventRecord(event_start, stream));
-    if (error != cudaSuccess) {
-      goto done;
-    }
+    SQ_CUDA_TRY(error,
+                cudaEventRecord(timing_events[SQ_CUDA_TIMING_START], stream),
+                goto done);
   }
-  error = SQ_CUDA_CALL((cudaError_t)sq_cuda_launch_k3(
-      bit_width, device_codes, count, device_payload, block_size, grid_size,
-      stream));
-  if (error != cudaSuccess) {
-    goto done;
-  }
+  SQ_CUDA_TRY(error,
+              (cudaError_t)sq_cuda_launch_k3(bit_width, device_codes, count,
+                                             device_payload, block_size,
+                                             grid_size, stream),
+              goto done);
   if (collect_timings) {
-    result =
-        finish_kernel_timing(event_start, event_stop, stream, &timings->k3_ms);
+    result = finish_kernel_timing(timing_events[SQ_CUDA_TIMING_START],
+                                  timing_events[SQ_CUDA_TIMING_STOP], stream,
+                                  &timings->k3_ms);
     if (result != SQ_OK) {
       goto done;
     }
   }
-  error = SQ_CUDA_CALL(cudaStreamSynchronize(stream));
-  if (error != cudaSuccess) {
-    goto done;
-  }
+  SQ_CUDA_TRY(error, cudaStreamSynchronize(stream), goto done);
   result =
       timed_copy(payload, device_payload, payload_bytes, cudaMemcpyDeviceToHost,
                  stream, timings != NULL ? &timings->d2h_ms : NULL,
@@ -1023,48 +1101,16 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
   result = SQ_OK;
 
 done:
-  if (error != cudaSuccess) {
-    result = SQ_ERR_CUDA;
-  }
-  if (device_values != NULL) {
-    (void)cudaFree(device_values);
-  }
-  if (device_scale != NULL) {
-    (void)cudaFree(device_scale);
-  }
-  if (device_max_partials != NULL) {
-    (void)cudaFree(device_max_partials);
-  }
-  if (device_invalid_partials != NULL) {
-    (void)cudaFree(device_invalid_partials);
-  }
-  if (device_sums_a != NULL) {
-    (void)cudaFree(device_sums_a);
-  }
-  if (device_sums_b != NULL) {
-    (void)cudaFree(device_sums_b);
-  }
-  if (device_words != NULL) {
-    (void)cudaFree(device_words);
-  }
-  if (device_validation_flags != NULL) {
-    (void)cudaFree(device_validation_flags);
-  }
-  if (device_codes != NULL) {
-    (void)cudaFree(device_codes);
-  }
-  if (device_payload != NULL) {
-    (void)cudaFree(device_payload);
-  }
-  if (device_status != NULL) {
-    (void)cudaFree(device_status);
-  }
-  if (event_start != NULL) {
-    (void)cudaEventDestroy(event_start);
-  }
-  if (event_stop != NULL) {
-    (void)cudaEventDestroy(event_stop);
-  }
+  result = error != cudaSuccess ? SQ_ERR_CUDA : result;
+  (void)cudaFree(device_values);
+  (void)cudaFree(device_scale);
+  destroy_k1_workspace(&k1_workspace);
+  (void)cudaFree(device_words);
+  (void)cudaFree(device_validation_flags);
+  (void)cudaFree(device_codes);
+  (void)cudaFree(device_payload);
+  (void)cudaFree(device_status);
+  destroy_events(timing_events, SQ_CUDA_TIMING_COUNT);
   if (stream != NULL) {
     (void)cudaStreamDestroy(stream);
   }
@@ -1099,26 +1145,28 @@ static void free_host(void *pointer, sq_cuda_transfer_policy transfer_policy) {
   }
 }
 
+enum {
+  SQ_BENCH_K1_START,
+  SQ_BENCH_K1_STOP,
+  SQ_BENCH_K2_START,
+  SQ_BENCH_K2_STOP,
+  SQ_BENCH_K3_START,
+  SQ_BENCH_K3_STOP,
+  SQ_BENCH_H2D_START,
+  SQ_BENCH_H2D_STOP,
+  SQ_BENCH_D2H_START,
+  SQ_BENCH_D2H_STOP,
+  SQ_BENCH_EVENT_COUNT
+};
+
 struct sq_cuda_bench_context {
   sq_cuda_transfer_policy transfer_policy;
   cudaStream_t stream;
-  cudaEvent_t k1_start;
-  cudaEvent_t k1_stop;
-  cudaEvent_t k2_start;
-  cudaEvent_t k2_stop;
-  cudaEvent_t k3_start;
-  cudaEvent_t k3_stop;
-  cudaEvent_t h2d_start;
-  cudaEvent_t h2d_stop;
-  cudaEvent_t d2h_start;
-  cudaEvent_t d2h_stop;
+  cudaEvent_t events[SQ_BENCH_EVENT_COUNT];
   float *device_values;
   float *device_scale;
   float *device_k1_scale;
-  float *device_max_partials;
-  float *device_sums_a;
-  float *device_sums_b;
-  uint32_t *device_invalid_partials;
+  sq_cuda_k1_workspace k1_workspace;
   uint32_t *device_words;
   uint32_t *device_validation_flags;
   uint8_t *device_codes;
@@ -1131,72 +1179,16 @@ struct sq_cuda_bench_context {
 };
 
 static void destroy_bench_context(sq_cuda_bench_context *context) {
-  if (context->device_values != NULL) {
-    (void)cudaFree(context->device_values);
-  }
-  if (context->device_scale != NULL) {
-    (void)cudaFree(context->device_scale);
-  }
-  if (context->device_k1_scale != NULL) {
-    (void)cudaFree(context->device_k1_scale);
-  }
-  if (context->device_max_partials != NULL) {
-    (void)cudaFree(context->device_max_partials);
-  }
-  if (context->device_invalid_partials != NULL) {
-    (void)cudaFree(context->device_invalid_partials);
-  }
-  if (context->device_sums_a != NULL) {
-    (void)cudaFree(context->device_sums_a);
-  }
-  if (context->device_sums_b != NULL) {
-    (void)cudaFree(context->device_sums_b);
-  }
-  if (context->device_words != NULL) {
-    (void)cudaFree(context->device_words);
-  }
-  if (context->device_validation_flags != NULL) {
-    (void)cudaFree(context->device_validation_flags);
-  }
-  if (context->device_codes != NULL) {
-    (void)cudaFree(context->device_codes);
-  }
-  if (context->device_payload != NULL) {
-    (void)cudaFree(context->device_payload);
-  }
-  if (context->device_status != NULL) {
-    (void)cudaFree(context->device_status);
-  }
-  if (context->k1_start != NULL) {
-    (void)cudaEventDestroy(context->k1_start);
-  }
-  if (context->k1_stop != NULL) {
-    (void)cudaEventDestroy(context->k1_stop);
-  }
-  if (context->k2_start != NULL) {
-    (void)cudaEventDestroy(context->k2_start);
-  }
-  if (context->k2_stop != NULL) {
-    (void)cudaEventDestroy(context->k2_stop);
-  }
-  if (context->k3_start != NULL) {
-    (void)cudaEventDestroy(context->k3_start);
-  }
-  if (context->k3_stop != NULL) {
-    (void)cudaEventDestroy(context->k3_stop);
-  }
-  if (context->h2d_start != NULL) {
-    (void)cudaEventDestroy(context->h2d_start);
-  }
-  if (context->h2d_stop != NULL) {
-    (void)cudaEventDestroy(context->h2d_stop);
-  }
-  if (context->d2h_start != NULL) {
-    (void)cudaEventDestroy(context->d2h_start);
-  }
-  if (context->d2h_stop != NULL) {
-    (void)cudaEventDestroy(context->d2h_stop);
-  }
+  (void)cudaFree(context->device_values);
+  (void)cudaFree(context->device_scale);
+  (void)cudaFree(context->device_k1_scale);
+  destroy_k1_workspace(&context->k1_workspace);
+  (void)cudaFree(context->device_words);
+  (void)cudaFree(context->device_validation_flags);
+  (void)cudaFree(context->device_codes);
+  (void)cudaFree(context->device_payload);
+  (void)cudaFree(context->device_status);
+  destroy_events(context->events, SQ_BENCH_EVENT_COUNT);
   if (context->stream != NULL) {
     (void)cudaStreamDestroy(context->stream);
   }
@@ -1231,6 +1223,71 @@ static sq_status check_bench_result(float host_scale, int prescribed_scale_seen,
   return SQ_OK;
 }
 
+static cudaError_t enqueue_resident(sq_cuda_bench_context *context,
+                                    uint8_t bit_width, size_t count,
+                                    int prescribed_scale_seen,
+                                    int prescribed_words_seen,
+                                    sq_rng_stream stream_state, int block_size,
+                                    int grid_size, cudaEvent_t *events) {
+  cudaError_t error;
+
+  if (count == 0) {
+    return cudaSuccess;
+  }
+  SQ_CUDA_TRY(error,
+              cudaMemsetAsync(context->device_validation_flags, 0,
+                              sizeof(uint32_t), context->stream),
+              return error);
+  if (events != NULL) {
+    SQ_CUDA_TRY(error,
+                cudaEventRecord(events[SQ_BENCH_K1_START], context->stream),
+                return error);
+  }
+  SQ_CUDA_TRY(error,
+              (cudaError_t)launch_k1(
+                  context->device_values, count, &context->k1_workspace,
+                  prescribed_scale_seen ? context->device_k1_scale
+                                        : context->device_scale,
+                  context->device_status, grid_size, context->stream),
+              return error);
+  if (events != NULL) {
+    SQ_CUDA_TRY(error,
+                cudaEventRecord(events[SQ_BENCH_K1_STOP], context->stream),
+                return error);
+    SQ_CUDA_TRY(error,
+                cudaEventRecord(events[SQ_BENCH_K2_START], context->stream),
+                return error);
+  }
+  SQ_CUDA_TRY(error,
+              (cudaError_t)sq_cuda_launch_k2(
+                  bit_width, context->device_values, count,
+                  context->device_scale, context->device_words,
+                  prescribed_words_seen, stream_state, context->device_codes,
+                  context->device_validation_flags, block_size, grid_size,
+                  context->stream),
+              return error);
+  if (events != NULL) {
+    SQ_CUDA_TRY(error,
+                cudaEventRecord(events[SQ_BENCH_K2_STOP], context->stream),
+                return error);
+    SQ_CUDA_TRY(error,
+                cudaEventRecord(events[SQ_BENCH_K3_START], context->stream),
+                return error);
+  }
+  SQ_CUDA_TRY(error,
+              (cudaError_t)sq_cuda_launch_k3(bit_width, context->device_codes,
+                                             count, context->device_payload,
+                                             block_size, grid_size,
+                                             context->stream),
+              return error);
+  if (events != NULL) {
+    SQ_CUDA_TRY(error,
+                cudaEventRecord(events[SQ_BENCH_K3_STOP], context->stream),
+                return error);
+  }
+  return cudaSuccess;
+}
+
 static sq_status
 run_bench_pipeline(sq_cuda_bench_context *context, uint8_t bit_width,
                    size_t count, uint64_t seed, uint64_t tensor_id,
@@ -1240,9 +1297,6 @@ run_bench_pipeline(sq_cuda_bench_context *context, uint8_t bit_width,
                    int inspect_result, sq_bench_sample *sample) {
   const size_t payload_bytes =
       bit_width == SQ_Q4_BITS ? count / 2 + (count & 1) : count;
-  const uint64_t block_count = count / SQ_CUDA_REDUCTION_THREADS +
-                               (count % SQ_CUDA_REDUCTION_THREADS != 0);
-  uint64_t padded_count = 1;
   sq_rng_stream stream_state;
   const auto wall_start = std::chrono::steady_clock::now();
   cudaError_t error;
@@ -1251,164 +1305,106 @@ run_bench_pipeline(sq_cuda_bench_context *context, uint8_t bit_width,
       SQ_RNG_OK) {
     return SQ_ERR_ID_OVERFLOW;
   }
-  while (padded_count < block_count) {
-    padded_count <<= 1;
-  }
-
   if (boundary == SQ_CUDA_BENCH_HOST_ORIGIN) {
-    error = cudaEventRecord(context->h2d_start, context->stream);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
-    error = cudaMemcpyAsync(context->device_values, context->h2d_source,
-                            count * sizeof(float), cudaMemcpyHostToDevice,
-                            context->stream);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
-    error = cudaEventRecord(context->h2d_stop, context->stream);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
+    SQ_CUDA_TRY(
+        error,
+        cudaEventRecord(context->events[SQ_BENCH_H2D_START], context->stream),
+        return SQ_ERR_CUDA);
+    SQ_CUDA_TRY(error,
+                cudaMemcpyAsync(context->device_values, context->h2d_source,
+                                count * sizeof(float), cudaMemcpyHostToDevice,
+                                context->stream),
+                return SQ_ERR_CUDA);
+    SQ_CUDA_TRY(
+        error,
+        cudaEventRecord(context->events[SQ_BENCH_H2D_STOP], context->stream),
+        return SQ_ERR_CUDA);
   }
 
-  error = cudaMemsetAsync(context->device_validation_flags, 0, sizeof(uint32_t),
-                          context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
-
-  error = cudaEventRecord(context->k1_start, context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
-  error = (cudaError_t)sq_cuda_launch_k1(
-      context->device_values, count, context->device_max_partials,
-      context->device_invalid_partials, context->device_sums_a,
-      context->device_sums_b, block_count, padded_count,
-      prescribed_scale_seen ? context->device_k1_scale : context->device_scale,
-      context->device_status, grid_size, context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
-  error = cudaEventRecord(context->k1_stop, context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
-
-  error = cudaEventRecord(context->k2_start, context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
-  error = (cudaError_t)sq_cuda_launch_k2(
-      bit_width, context->device_values, count, context->device_scale,
-      context->device_words, prescribed_words_seen, stream_state,
-      context->device_codes, context->device_validation_flags, block_size,
-      grid_size, context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
-  error = cudaEventRecord(context->k2_stop, context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
-
-  error = cudaEventRecord(context->k3_start, context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
-  error = (cudaError_t)sq_cuda_launch_k3(
-      bit_width, context->device_codes, count, context->device_payload,
-      block_size, grid_size, context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
-  error = cudaEventRecord(context->k3_stop, context->stream);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
+  SQ_CUDA_TRY(error,
+              enqueue_resident(context, bit_width, count, prescribed_scale_seen,
+                               prescribed_words_seen, stream_state, block_size,
+                               grid_size, context->events),
+              return SQ_ERR_CUDA);
 
   if (copy_outputs) {
-    error = cudaEventRecord(context->d2h_start, context->stream);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
+    SQ_CUDA_TRY(
+        error,
+        cudaEventRecord(context->events[SQ_BENCH_D2H_START], context->stream),
+        return SQ_ERR_CUDA);
     if (payload_bytes != 0) {
-      error = cudaMemcpyAsync(context->host_payload, context->device_payload,
-                              payload_bytes, cudaMemcpyDeviceToHost,
-                              context->stream);
-      if (error != cudaSuccess) {
-        return SQ_ERR_CUDA;
-      }
+      SQ_CUDA_TRY(error,
+                  cudaMemcpyAsync(context->host_payload,
+                                  context->device_payload, payload_bytes,
+                                  cudaMemcpyDeviceToHost, context->stream),
+                  return SQ_ERR_CUDA);
     }
-    error =
-        cudaMemcpyAsync(&context->host->scale, context->device_scale,
-                        sizeof(float), cudaMemcpyDeviceToHost, context->stream);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
-    error = cudaEventRecord(context->d2h_stop, context->stream);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
+    SQ_CUDA_TRY(error,
+                cudaMemcpyAsync(&context->host->scale, context->device_scale,
+                                sizeof(float), cudaMemcpyDeviceToHost,
+                                context->stream),
+                return SQ_ERR_CUDA);
+    SQ_CUDA_TRY(
+        error,
+        cudaEventRecord(context->events[SQ_BENCH_D2H_STOP], context->stream),
+        return SQ_ERR_CUDA);
   }
   if (inspect_result) {
-    error =
-        cudaMemcpyAsync(&context->host->status, context->device_status,
-                        sizeof(int), cudaMemcpyDeviceToHost, context->stream);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
-    error = cudaMemcpyAsync(&context->host->validation_flags,
-                            context->device_validation_flags, sizeof(uint32_t),
-                            cudaMemcpyDeviceToHost, context->stream);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
+    SQ_CUDA_TRY(error,
+                cudaMemcpyAsync(&context->host->status, context->device_status,
+                                sizeof(int), cudaMemcpyDeviceToHost,
+                                context->stream),
+                return SQ_ERR_CUDA);
+    SQ_CUDA_TRY(error,
+                cudaMemcpyAsync(&context->host->validation_flags,
+                                context->device_validation_flags,
+                                sizeof(uint32_t), cudaMemcpyDeviceToHost,
+                                context->stream),
+                return SQ_ERR_CUDA);
   }
 
-  error = cudaDeviceSynchronize();
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
+  SQ_CUDA_TRY(error, cudaDeviceSynchronize(), return SQ_ERR_CUDA);
   if (sample != NULL) {
     const auto wall_stop = std::chrono::steady_clock::now();
     float elapsed = 0.0f;
     sample->wall_ms =
         std::chrono::duration<double, std::milli>(wall_stop - wall_start)
             .count();
-    error = cudaEventElapsedTime(&elapsed, context->k1_start, context->k1_stop);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
+    SQ_CUDA_TRY(error,
+                cudaEventElapsedTime(&elapsed,
+                                     context->events[SQ_BENCH_K1_START],
+                                     context->events[SQ_BENCH_K1_STOP]),
+                return SQ_ERR_CUDA);
     sample->k1_ms = elapsed;
-    error = cudaEventElapsedTime(&elapsed, context->k2_start, context->k2_stop);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
+    SQ_CUDA_TRY(error,
+                cudaEventElapsedTime(&elapsed,
+                                     context->events[SQ_BENCH_K2_START],
+                                     context->events[SQ_BENCH_K2_STOP]),
+                return SQ_ERR_CUDA);
     sample->k2_ms = elapsed;
-    error = cudaEventElapsedTime(&elapsed, context->k3_start, context->k3_stop);
-    if (error != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
+    SQ_CUDA_TRY(error,
+                cudaEventElapsedTime(&elapsed,
+                                     context->events[SQ_BENCH_K3_START],
+                                     context->events[SQ_BENCH_K3_STOP]),
+                return SQ_ERR_CUDA);
     sample->k3_ms = elapsed;
     sample->h2d_ms = 0.0;
     sample->d2h_ms = 0.0;
     sample->cpu_ms = 0.0;
     if (boundary == SQ_CUDA_BENCH_HOST_ORIGIN) {
-      error =
-          cudaEventElapsedTime(&elapsed, context->h2d_start, context->h2d_stop);
-      if (error != cudaSuccess) {
-        return SQ_ERR_CUDA;
-      }
+      SQ_CUDA_TRY(error,
+                  cudaEventElapsedTime(&elapsed,
+                                       context->events[SQ_BENCH_H2D_START],
+                                       context->events[SQ_BENCH_H2D_STOP]),
+                  return SQ_ERR_CUDA);
       sample->h2d_ms = elapsed;
     }
     if (copy_outputs) {
-      error =
-          cudaEventElapsedTime(&elapsed, context->d2h_start, context->d2h_stop);
-      if (error != cudaSuccess) {
-        return SQ_ERR_CUDA;
-      }
+      SQ_CUDA_TRY(error,
+                  cudaEventElapsedTime(&elapsed,
+                                       context->events[SQ_BENCH_D2H_START],
+                                       context->events[SQ_BENCH_D2H_STOP]),
+                  return SQ_ERR_CUDA);
       sample->d2h_ms = elapsed;
     }
   }
@@ -1438,9 +1434,7 @@ static sq_status run_bench_graph(sq_cuda_bench_context *context,
                                  sq_bench_sample *samples, double *capture_ms) {
   const size_t payload_bytes =
       bit_width == SQ_Q4_BITS ? count / 2 + (count & 1) : count;
-  const uint64_t block_count = count / SQ_CUDA_REDUCTION_THREADS +
-                               (count % SQ_CUDA_REDUCTION_THREADS != 0);
-  uint64_t padded_count = 1, index;
+  uint64_t index;
   uint32_t host_validation_flags = 0;
   int host_status = SQ_OK;
   sq_rng_stream stream_state;
@@ -1453,10 +1447,6 @@ static sq_status run_bench_graph(sq_cuda_bench_context *context,
       SQ_RNG_OK) {
     return SQ_ERR_ID_OVERFLOW;
   }
-  while (padded_count < block_count) {
-    padded_count <<= 1;
-  }
-
   /* Poison the payload left by the preflight so parity proves K3 ran in the
    * graph. */
   if (payload_bytes != 0) {
@@ -1465,53 +1455,30 @@ static sq_status run_bench_graph(sq_cuda_bench_context *context,
     }
     /* A pageable copy can return before its DMA lands; the graph stream does
      * not wait for it. */
-    if (cudaMemcpy(context->device_payload, context->host_payload,
-                   payload_bytes, cudaMemcpyHostToDevice) != cudaSuccess ||
-        cudaDeviceSynchronize() != cudaSuccess) {
-      return SQ_ERR_CUDA;
-    }
+    SQ_CUDA_TRY(error,
+                cudaMemcpy(context->device_payload, context->host_payload,
+                           payload_bytes, cudaMemcpyHostToDevice),
+                return SQ_ERR_CUDA);
+    SQ_CUDA_TRY(error, cudaDeviceSynchronize(), return SQ_ERR_CUDA);
   }
 
   const auto capture_start = std::chrono::steady_clock::now();
-  error = cudaStreamBeginCapture(context->stream, cudaStreamCaptureModeGlobal);
-  if (error != cudaSuccess) {
-    return SQ_ERR_CUDA;
-  }
+  SQ_CUDA_TRY(
+      error,
+      cudaStreamBeginCapture(context->stream, cudaStreamCaptureModeGlobal),
+      return SQ_ERR_CUDA);
   if (count != 0) {
-    capture_error = cudaMemsetAsync(context->device_validation_flags, 0,
-                                    sizeof(uint32_t), context->stream);
-    if (capture_error == cudaSuccess) {
-      capture_error = (cudaError_t)sq_cuda_launch_k1(
-          context->device_values, count, context->device_max_partials,
-          context->device_invalid_partials, context->device_sums_a,
-          context->device_sums_b, block_count, padded_count,
-          prescribed_scale_seen ? context->device_k1_scale
-                                : context->device_scale,
-          context->device_status, grid_size, context->stream);
-    }
-    if (capture_error == cudaSuccess) {
-      capture_error = (cudaError_t)sq_cuda_launch_k2(
-          bit_width, context->device_values, count, context->device_scale,
-          context->device_words, prescribed_words_seen, stream_state,
-          context->device_codes, context->device_validation_flags, block_size,
-          grid_size, context->stream);
-    }
-    if (capture_error == cudaSuccess) {
-      capture_error = (cudaError_t)sq_cuda_launch_k3(
-          bit_width, context->device_codes, count, context->device_payload,
-          block_size, grid_size, context->stream);
-    }
+    capture_error = enqueue_resident(
+        context, bit_width, count, prescribed_scale_seen, prescribed_words_seen,
+        stream_state, block_size, grid_size, NULL);
   }
   /* End the capture even after a failed launch so the stream leaves capture
    * mode. */
-  error = cudaStreamEndCapture(context->stream, &graph);
-  if (capture_error != cudaSuccess || error != cudaSuccess) {
+  SQ_CUDA_TRY(error, cudaStreamEndCapture(context->stream, &graph), goto done);
+  if (capture_error != cudaSuccess) {
     goto done;
   }
-  error = cudaGraphInstantiate(&graph_exec, graph, 0);
-  if (error != cudaSuccess) {
-    goto done;
-  }
+  SQ_CUDA_TRY(error, cudaGraphInstantiate(&graph_exec, graph, 0), goto done);
   if (capture_ms != NULL) {
     *capture_ms = std::chrono::duration<double, std::milli>(
                       std::chrono::steady_clock::now() - capture_start)
@@ -1522,13 +1489,8 @@ static sq_status run_bench_graph(sq_cuda_bench_context *context,
     sq_bench_sample *sample =
         index < warmups ? NULL : &samples[index - warmups];
     const auto wall_start = std::chrono::steady_clock::now();
-    error = cudaGraphLaunch(graph_exec, context->stream);
-    if (error == cudaSuccess) {
-      error = cudaDeviceSynchronize();
-    }
-    if (error != cudaSuccess) {
-      goto done;
-    }
+    SQ_CUDA_TRY(error, cudaGraphLaunch(graph_exec, context->stream), goto done);
+    SQ_CUDA_TRY(error, cudaDeviceSynchronize(), goto done);
     if (sample != NULL) {
       const auto wall_stop = std::chrono::steady_clock::now();
       sample->wall_ms =
@@ -1545,30 +1507,28 @@ static sq_status run_bench_graph(sq_cuda_bench_context *context,
 
   if (count != 0) {
     if (payload_bytes != 0) {
-      error = cudaMemcpyAsync(context->host_payload, context->device_payload,
-                              payload_bytes, cudaMemcpyDeviceToHost,
-                              context->stream);
+      SQ_CUDA_TRY(error,
+                  cudaMemcpyAsync(context->host_payload,
+                                  context->device_payload, payload_bytes,
+                                  cudaMemcpyDeviceToHost, context->stream),
+                  goto done);
     }
-    if (error == cudaSuccess) {
-      error = cudaMemcpyAsync(&context->host->scale, context->device_scale,
-                              sizeof(float), cudaMemcpyDeviceToHost,
-                              context->stream);
-    }
-    if (error == cudaSuccess) {
-      error = cudaMemcpyAsync(&host_status, context->device_status, sizeof(int),
-                              cudaMemcpyDeviceToHost, context->stream);
-    }
-    if (error == cudaSuccess) {
-      error = cudaMemcpyAsync(
-          &host_validation_flags, context->device_validation_flags,
-          sizeof(uint32_t), cudaMemcpyDeviceToHost, context->stream);
-    }
-    if (error == cudaSuccess) {
-      error = cudaDeviceSynchronize();
-    }
-    if (error != cudaSuccess) {
-      goto done;
-    }
+    SQ_CUDA_TRY(error,
+                cudaMemcpyAsync(&context->host->scale, context->device_scale,
+                                sizeof(float), cudaMemcpyDeviceToHost,
+                                context->stream),
+                goto done);
+    SQ_CUDA_TRY(error,
+                cudaMemcpyAsync(&host_status, context->device_status,
+                                sizeof(int), cudaMemcpyDeviceToHost,
+                                context->stream),
+                goto done);
+    SQ_CUDA_TRY(error,
+                cudaMemcpyAsync(
+                    &host_validation_flags, context->device_validation_flags,
+                    sizeof(uint32_t), cudaMemcpyDeviceToHost, context->stream),
+                goto done);
+    SQ_CUDA_TRY(error, cudaDeviceSynchronize(), goto done);
     result = check_bench_result(context->host->scale, prescribed_scale_seen,
                                 host_status, host_validation_flags);
     if (result != SQ_OK) {
@@ -1608,8 +1568,7 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
                         boundary == SQ_CUDA_BENCH_GPU_ORIGIN;
   sq_status result = SQ_ERR_CUDA;
   cudaError_t error;
-  int device_count = 0;
-  uint64_t total_runs, block_count, padded_count = 1, index;
+  uint64_t total_runs, index;
   size_t payload_bytes;
 
   if (capture_ms != NULL) {
@@ -1623,8 +1582,7 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
       count > SIZE_MAX / sizeof(float) || count > SIZE_MAX / sizeof(uint32_t)) {
     return SQ_ERR_ARGUMENT;
   }
-  if (block_size <= 0 || block_size > SQ_CUDA_MAX_BLOCK_SIZE || grid_size < 0 ||
-      grid_size > SQ_CUDA_MAX_GRID_SIZE ||
+  if (!valid_launch_geometry(block_size, grid_size) ||
       (boundary != SQ_CUDA_BENCH_RESIDENT &&
        boundary != SQ_CUDA_BENCH_HOST_ORIGIN &&
        boundary != SQ_CUDA_BENCH_RESIDENT_GRAPH &&
@@ -1651,52 +1609,13 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
     return SQ_ERR_SCALE;
   }
 
-  error = cudaGetDeviceCount(&device_count);
-  if (error != cudaSuccess || device_count == 0) {
-    (void)cudaGetLastError();
+  if (!cuda_device_available()) {
     return SQ_ERR_CUDA;
   }
-  error = cudaStreamCreateWithFlags(&context.stream, cudaStreamNonBlocking);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.k1_start);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.k1_stop);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.k2_start);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.k2_stop);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.k3_start);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.k3_stop);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.h2d_start);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.h2d_stop);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.d2h_start);
-  if (error != cudaSuccess) {
-    goto done;
-  }
-  error = cudaEventCreate(&context.d2h_stop);
+  SQ_CUDA_TRY(error,
+              cudaStreamCreateWithFlags(&context.stream, cudaStreamNonBlocking),
+              goto done);
+  error = create_events(context.events, SQ_BENCH_EVENT_COUNT);
   if (error != cudaSuccess) {
     goto done;
   }
@@ -1728,70 +1647,77 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
     context.h2d_source = context.host_values;
   }
   if (count != 0) {
-#define BENCH_ALLOCATE(pointer, bytes)                                         \
-  do {                                                                         \
-    error = cudaMalloc(reinterpret_cast<void **>(&(pointer)), (bytes));        \
-    if (error != cudaSuccess)                                                  \
-      goto done;                                                               \
-  } while (0)
-    BENCH_ALLOCATE(context.device_values, count * sizeof(float));
-    BENCH_ALLOCATE(context.device_scale, sizeof(float));
-    BENCH_ALLOCATE(context.device_status, sizeof(int));
-    BENCH_ALLOCATE(context.device_validation_flags, sizeof(uint32_t));
-    BENCH_ALLOCATE(context.device_codes, count * sizeof(uint8_t));
-    BENCH_ALLOCATE(context.device_payload,
-                   (payload_bytes == 0 ? 1 : payload_bytes) * sizeof(uint8_t));
+    SQ_CUDA_TRY(error,
+                cudaMalloc(reinterpret_cast<void **>(&context.device_values),
+                           count * sizeof(float)),
+                goto done);
+    SQ_CUDA_TRY(error,
+                cudaMalloc(reinterpret_cast<void **>(&context.device_scale),
+                           sizeof(float)),
+                goto done);
+    SQ_CUDA_TRY(error,
+                cudaMalloc(reinterpret_cast<void **>(&context.device_status),
+                           sizeof(int)),
+                goto done);
+    SQ_CUDA_TRY(
+        error,
+        cudaMalloc(reinterpret_cast<void **>(&context.device_validation_flags),
+                   sizeof(uint32_t)),
+        goto done);
+    SQ_CUDA_TRY(error,
+                cudaMalloc(reinterpret_cast<void **>(&context.device_codes),
+                           count * sizeof(uint8_t)),
+                goto done);
+    SQ_CUDA_TRY(
+        error,
+        cudaMalloc(reinterpret_cast<void **>(&context.device_payload),
+                   (payload_bytes == 0 ? 1 : payload_bytes) * sizeof(uint8_t)),
+        goto done);
     if (prescribed_scale_seen) {
-      BENCH_ALLOCATE(context.device_k1_scale, sizeof(float));
+      SQ_CUDA_TRY(
+          error,
+          cudaMalloc(reinterpret_cast<void **>(&context.device_k1_scale),
+                     sizeof(float)),
+          goto done);
     }
     if (prescribed_words != NULL) {
-      BENCH_ALLOCATE(context.device_words, count * sizeof(uint32_t));
+      SQ_CUDA_TRY(error,
+                  cudaMalloc(reinterpret_cast<void **>(&context.device_words),
+                             count * sizeof(uint32_t)),
+                  goto done);
     }
-    block_count = count / SQ_CUDA_REDUCTION_THREADS +
-                  (count % SQ_CUDA_REDUCTION_THREADS != 0);
-    while (padded_count < block_count) {
-      if (padded_count > UINT64_MAX / 2) {
-        result = SQ_ERR_COUNT;
-        goto done;
-      }
-      padded_count <<= 1;
+    result = set_k1_workspace_geometry(&context.k1_workspace, count);
+    if (result != SQ_OK) {
+      goto done;
     }
-    BENCH_ALLOCATE(context.device_max_partials, block_count * sizeof(float));
-    BENCH_ALLOCATE(context.device_invalid_partials,
-                   block_count * sizeof(uint32_t));
-    BENCH_ALLOCATE(context.device_sums_a, padded_count * sizeof(float));
-    BENCH_ALLOCATE(context.device_sums_b, padded_count * sizeof(float));
-#undef BENCH_ALLOCATE
+    error = allocate_k1_workspace(&context.k1_workspace);
+    if (error != cudaSuccess) {
+      goto done;
+    }
     if (prescribed_scale_seen) {
-      error = cudaMemcpyAsync(context.device_scale, &prescribed_scale,
-                              sizeof(float), cudaMemcpyHostToDevice,
-                              context.stream);
-      if (error != cudaSuccess) {
-        goto done;
-      }
+      SQ_CUDA_TRY(error,
+                  cudaMemcpyAsync(context.device_scale, &prescribed_scale,
+                                  sizeof(float), cudaMemcpyHostToDevice,
+                                  context.stream),
+                  goto done);
     }
     if (prescribed_words != NULL) {
-      error = cudaMemcpyAsync(context.device_words, prescribed_words,
-                              count * sizeof(uint32_t), cudaMemcpyHostToDevice,
-                              context.stream);
-      if (error != cudaSuccess) {
-        goto done;
-      }
+      SQ_CUDA_TRY(error,
+                  cudaMemcpyAsync(context.device_words, prescribed_words,
+                                  count * sizeof(uint32_t),
+                                  cudaMemcpyHostToDevice, context.stream),
+                  goto done);
     }
     if (boundary == SQ_CUDA_BENCH_RESIDENT ||
         boundary == SQ_CUDA_BENCH_RESIDENT_GRAPH ||
         boundary == SQ_CUDA_BENCH_GPU_ORIGIN) {
-      error =
-          cudaMemcpyAsync(context.device_values, values, count * sizeof(float),
-                          cudaMemcpyHostToDevice, context.stream);
-      if (error != cudaSuccess) {
-        goto done;
-      }
+      SQ_CUDA_TRY(error,
+                  cudaMemcpyAsync(context.device_values, values,
+                                  count * sizeof(float), cudaMemcpyHostToDevice,
+                                  context.stream),
+                  goto done);
     }
-    error = cudaStreamSynchronize(context.stream);
-    if (error != cudaSuccess) {
-      goto done;
-    }
+    SQ_CUDA_TRY(error, cudaStreamSynchronize(context.stream), goto done);
   }
 
   if (count == 0) {
@@ -1808,11 +1734,7 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
       sq_bench_sample *sample =
           index < warmups ? NULL : &samples[index - warmups];
       const auto start = std::chrono::steady_clock::now();
-      error = cudaDeviceSynchronize();
-      if (error != cudaSuccess) {
-        result = SQ_ERR_CUDA;
-        goto done;
-      }
+      SQ_CUDA_TRY(error, cudaDeviceSynchronize(), goto done);
       if (sample != NULL) {
         const auto stop = std::chrono::steady_clock::now();
         sample->wall_ms =
@@ -1879,8 +1801,7 @@ done:
 struct sq_cuda_staging {
   sq_cuda_transfer_policy transfer_policy;
   cudaStream_t stream;
-  cudaEvent_t start;
-  cudaEvent_t stop;
+  cudaEvent_t events[SQ_CUDA_TIMING_COUNT];
   float *device_values;
   float *landing;
   size_t count;
@@ -1894,12 +1815,7 @@ void sq_cuda_staging_destroy(sq_cuda_staging *staging) {
     (void)cudaFree(staging->device_values);
   }
   free_host(staging->landing, staging->transfer_policy);
-  if (staging->start != NULL) {
-    (void)cudaEventDestroy(staging->start);
-  }
-  if (staging->stop != NULL) {
-    (void)cudaEventDestroy(staging->stop);
-  }
+  destroy_events(staging->events, SQ_CUDA_TIMING_COUNT);
   if (staging->stream != NULL) {
     (void)cudaStreamDestroy(staging->stream);
   }
@@ -1910,7 +1826,6 @@ sq_status sq_cuda_staging_create(const float *values, size_t count,
                                  sq_cuda_transfer_policy transfer_policy,
                                  sq_cuda_staging **staging) {
   sq_cuda_staging *created;
-  int device_count = 0;
   cudaError_t error;
 
   if (staging == NULL) {
@@ -1922,9 +1837,7 @@ sq_status sq_cuda_staging_create(const float *values, size_t count,
        transfer_policy != SQ_CUDA_TRANSFER_PINNED)) {
     return SQ_ERR_ARGUMENT;
   }
-  error = cudaGetDeviceCount(&device_count);
-  if (error != cudaSuccess || device_count == 0) {
-    (void)cudaGetLastError();
+  if (!cuda_device_available()) {
     return SQ_ERR_CUDA;
   }
   created = (sq_cuda_staging *)calloc(1, sizeof *created);
@@ -1939,19 +1852,37 @@ sq_status sq_cuda_staging_create(const float *values, size_t count,
     sq_cuda_staging_destroy(created);
     return SQ_ERR_MEMORY;
   }
-  if (cudaStreamCreateWithFlags(&created->stream, cudaStreamNonBlocking) !=
-          cudaSuccess ||
-      cudaEventCreate(&created->start) != cudaSuccess ||
-      cudaEventCreate(&created->stop) != cudaSuccess ||
-      cudaMalloc(reinterpret_cast<void **>(&created->device_values),
-                 count == 0 ? 1 : count * sizeof(float)) != cudaSuccess ||
-      (count != 0 &&
-       cudaMemcpy(created->device_values, values, count * sizeof(float),
-                  cudaMemcpyHostToDevice) != cudaSuccess) ||
-      cudaDeviceSynchronize() != cudaSuccess) {
+  SQ_CUDA_TRY(
+      error, cudaStreamCreateWithFlags(&created->stream, cudaStreamNonBlocking),
+      {
+        sq_cuda_staging_destroy(created);
+        return SQ_ERR_CUDA;
+      });
+  error = create_events(created->events, SQ_CUDA_TIMING_COUNT);
+  if (error != cudaSuccess) {
     sq_cuda_staging_destroy(created);
     return SQ_ERR_CUDA;
   }
+  SQ_CUDA_TRY(error,
+              cudaMalloc(reinterpret_cast<void **>(&created->device_values),
+                         count == 0 ? 1 : count * sizeof(float)),
+              {
+                sq_cuda_staging_destroy(created);
+                return SQ_ERR_CUDA;
+              });
+  if (count != 0) {
+    SQ_CUDA_TRY(error,
+                cudaMemcpy(created->device_values, values,
+                           count * sizeof(float), cudaMemcpyHostToDevice),
+                {
+                  sq_cuda_staging_destroy(created);
+                  return SQ_ERR_CUDA;
+                });
+  }
+  SQ_CUDA_TRY(error, cudaDeviceSynchronize(), {
+    sq_cuda_staging_destroy(created);
+    return SQ_ERR_CUDA;
+  });
   *staging = created;
   return SQ_OK;
 }
@@ -1963,17 +1894,30 @@ sq_status sq_cuda_staging_download(sq_cuda_staging *staging,
   if (staging == NULL || landing == NULL || d2h_ms == NULL) {
     return SQ_ERR_ARGUMENT;
   }
-  if (cudaEventRecord(staging->start, staging->stream) != cudaSuccess ||
-      (staging->count != 0 &&
-       cudaMemcpyAsync(staging->landing, staging->device_values,
-                       staging->count * sizeof(float), cudaMemcpyDeviceToHost,
-                       staging->stream) != cudaSuccess) ||
-      cudaEventRecord(staging->stop, staging->stream) != cudaSuccess ||
-      cudaStreamSynchronize(staging->stream) != cudaSuccess ||
-      cudaEventElapsedTime(&elapsed, staging->start, staging->stop) !=
-          cudaSuccess) {
-    return SQ_ERR_CUDA;
+  cudaError_t error;
+
+  SQ_CUDA_TRY(
+      error,
+      cudaEventRecord(staging->events[SQ_CUDA_TIMING_START], staging->stream),
+      return SQ_ERR_CUDA);
+  if (staging->count != 0) {
+    SQ_CUDA_TRY(error,
+                cudaMemcpyAsync(staging->landing, staging->device_values,
+                                staging->count * sizeof(float),
+                                cudaMemcpyDeviceToHost, staging->stream),
+                return SQ_ERR_CUDA);
   }
+  SQ_CUDA_TRY(
+      error,
+      cudaEventRecord(staging->events[SQ_CUDA_TIMING_STOP], staging->stream),
+      return SQ_ERR_CUDA);
+  SQ_CUDA_TRY(error, cudaStreamSynchronize(staging->stream),
+              return SQ_ERR_CUDA);
+  SQ_CUDA_TRY(error,
+              cudaEventElapsedTime(&elapsed,
+                                   staging->events[SQ_CUDA_TIMING_START],
+                                   staging->events[SQ_CUDA_TIMING_STOP]),
+              return SQ_ERR_CUDA);
   *landing = staging->landing;
   *d2h_ms = elapsed;
   return SQ_OK;

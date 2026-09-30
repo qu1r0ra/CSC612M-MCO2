@@ -54,13 +54,6 @@ extern "C" {
 int sq_cuda_select_k1(int variant);
 
 /* Stage launchers accept device pointers and an opaque CUDA stream handle. */
-int sq_cuda_launch_k1(const float *device_values, uint64_t count,
-                      float *device_max_partials,
-                      uint32_t *device_invalid_partials, float *device_sums_a,
-                      float *device_sums_b, uint64_t block_count,
-                      uint64_t padded_count, float *device_scale,
-                      int *device_status, int grid_size, void *stream);
-
 int sq_cuda_launch_k2(uint8_t bit_width, const float *device_values,
                       uint64_t count, const float *device_scale,
                       const uint32_t *device_words, int prescribed_words,
