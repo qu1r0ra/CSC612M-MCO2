@@ -136,10 +136,6 @@ def _run_family(command: list[str]) -> str:
     return "dense"
 
 
-def _snapshot_directories(root: Path) -> set[Path]:
-    return discover(root)
-
-
 def _explicit_output_directory(root: Path, command: list[str]) -> Path | None:
     for index, argument in enumerate(command):
         value = None
@@ -165,7 +161,7 @@ def _snapshot_for_run(
             return partial
         if explicit.exists():
             return explicit
-    candidates = _snapshot_directories(root) - previous_snapshots
+    candidates = discover(root) - previous_snapshots
     return max(candidates, key=lambda path: path.stat().st_mtime, default=None)
 
 
@@ -249,7 +245,7 @@ def _terminal_message(
 def _run_command(command: list[str], root: Path, config: Mapping[str, str | int]) -> int:
     family = _run_family(command)
     heartbeat_seconds = int(config["heartbeat_seconds"])
-    previous_snapshots = _snapshot_directories(root)
+    previous_snapshots = discover(root)
     started_at = datetime.now(UTC)
 
     try:
