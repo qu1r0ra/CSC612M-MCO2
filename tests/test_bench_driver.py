@@ -81,7 +81,7 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "3.2"
+    assert manifest["manifest_version"] == "3.3"
     assert manifest["build_stamp"]["recipe"] in ("build-cpu", "build-cuda")
     assert manifest["build_stamp"]["binary_sha256"]
     assert manifest["transfer_policies"] == ["pageable"]
@@ -180,7 +180,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "3.2"
+    assert manifest["manifest_version"] == "3.3"
     assert "date" in manifest
     assert "created_at_utc" in manifest
     assert "git_provenance" in manifest
@@ -1104,11 +1104,11 @@ def test_inverted_pageable_twin_vetoes_the_pinning_comparison():
 
 READY_FACTS = {
     "uptime_seconds": 600.0,
-    "app_windows": [
-        {"process": "WindowsTerminal", "title": "Terminal"},
-        {"process": "TextInputHost", "title": "Windows Input Experience"},
-    ],
-    "launcher_processes": ["python", "uv", "just", "pwsh", "WindowsTerminal", "explorer"],
+    "physical_memory": {
+        "total_bytes": 16 * 1024**3,
+        "available_bytes": 8 * 1024**3,
+        "used_percent": 50.0,
+    },
     "stoquant_pids": [],
     "git_dirty_files": [],
     "gpu_clock_event_reasons": "0x0000000000000001",
@@ -1121,25 +1121,28 @@ def test_readiness_passes_on_a_quiet_fresh_machine():
     assert check_readiness(READY_FACTS) == []
 
 
-def test_readiness_passes_with_only_shell_windows_and_no_launcher_chain():
-    shell_only = {
+def test_readiness_does_not_depend_on_open_app_windows():
+    with_open_windows = {
         **READY_FACTS,
-        "app_windows": [{"process": "TextInputHost", "title": "Windows Input Experience"}],
-        "launcher_processes": [],
+        "app_windows": [{"process": "Settings", "title": "Settings"}],
     }
-    assert check_readiness(shell_only) == []
+    assert check_readiness(with_open_windows) == []
 
 
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
-        ({"uptime_seconds": 31 * 60.0}, "uptime 31 min"),
+        ({"uptime_seconds": 61 * 60.0}, "uptime 61 min"),
         (
-            {"app_windows": [*READY_FACTS["app_windows"], {"process": "firefox", "title": "x"}]},
-            "open app window: firefox",
+            {
+                "physical_memory": {
+                    **READY_FACTS["physical_memory"],
+                    "available_bytes": int(READY_FACTS["physical_memory"]["total_bytes"] * 0.199),
+                    "used_percent": 80.1,
+                }
+            },
+            "80.1%",
         ),
-        # The terminal window passes only because the terminal launched the sweep.
-        ({"launcher_processes": []}, "open app window: WindowsTerminal"),
         ({"stoquant_pids": [4242]}, "stoquant already running (pid 4242)"),
         ({"gpu_clock_event_reasons": "0x0000000000000024"}, "SwPowerCap, SwThermalSlowdown"),
         ({"gpu_clock_event_reasons": None}, "clock-event reasons unavailable"),
@@ -1157,10 +1160,9 @@ def test_readiness_names_a_failed_probe_from_the_probe_seam(monkeypatch):
     monkeypatch.setattr(host, "uptime_seconds", lambda: 600.0)
     monkeypatch.setattr(
         host,
-        "list_app_windows",
-        lambda: (_ for _ in ()).throw(RuntimeError("PowerShell exited with status 1")),
+        "physical_memory_status",
+        lambda: (_ for _ in ()).throw(RuntimeError("memory probe failed")),
     )
-    monkeypatch.setattr(host, "list_launcher_processes", list)
     monkeypatch.setattr(host, "list_processes", lambda _name: [])
     monkeypatch.setattr(host, "collect_git_provenance", lambda _root: {"dirty_files": []})
     monkeypatch.setattr(host, "query_power_plan", lambda: "Balanced")
@@ -1170,57 +1172,8 @@ def test_readiness_names_a_failed_probe_from_the_probe_seam(monkeypatch):
     failures = check_readiness(facts)
 
     assert failures == [
-        "host probe failed: list_app_windows: RuntimeError: PowerShell exited with status 1"
+        "host probe failed: physical_memory_status: RuntimeError: memory probe failed"
     ]
-
-
-@pytest.mark.parametrize(
-    ("returncode", "stdout", "stderr", "message"),
-    [
-        (1, "", "PowerShell failed", "list_app_windows exited with status 1"),
-        (0, "warning: unexpected output", "", "list_app_windows returned unparseable JSON"),
-        (0, '{"process":"terminal","title":"Terminal"}', "", "expected an array"),
-        (0, '[{"process":"terminal"}]', "", "returned an unparseable row"),
-    ],
-)
-def test_app_window_probe_rejects_failed_or_unparseable_output(
-    monkeypatch, returncode, stdout, stderr, message
-):
-    if host.os.name != "nt":
-        pytest.skip("list_app_windows invokes PowerShell on Windows")
-    result = host.subprocess.CompletedProcess(
-        args=["powershell.exe"],
-        returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
-    )
-    monkeypatch.setattr(host.subprocess, "run", lambda *_args, **_kwargs: result)
-
-    with pytest.raises(RuntimeError, match=message):
-        host.list_app_windows()
-
-
-def test_launcher_probe_parses_json_process_names(monkeypatch):
-    if host.os.name != "nt":
-        pytest.skip("list_launcher_processes invokes PowerShell on Windows")
-    result = host.subprocess.CompletedProcess(
-        args=["powershell.exe"],
-        returncode=0,
-        stdout='["python", "Windows Terminal"]',
-        stderr="",
-    )
-    calls = {}
-
-    def fake_run(*args, **kwargs):
-        calls["args"] = args
-        calls["kwargs"] = kwargs
-        return result
-
-    monkeypatch.setattr(host.subprocess, "run", fake_run)
-
-    assert host.list_launcher_processes() == ["python", "Windows Terminal"]
-    assert calls["kwargs"]["encoding"] == "utf-8"
-    assert "[Console]::OutputEncoding = [Text.Encoding]::UTF8" in calls["args"][0][-1]
 
 
 def test_process_probe_rejects_non_json_output(monkeypatch):
@@ -1246,8 +1199,7 @@ def test_dirty_tree_is_judged_only_by_the_sweep_gate():
 def test_readiness_fails_while_a_stoquant_process_runs(monkeypatch):
     monkeypatch.setattr(host, "query_gpu_state", lambda: {"clocks_event_reasons.active": "0x1"})
     monkeypatch.setattr(host, "uptime_seconds", lambda: 600.0)
-    monkeypatch.setattr(host, "list_app_windows", list)
-    monkeypatch.setattr(host, "list_launcher_processes", list)
+    monkeypatch.setattr(host, "physical_memory_status", lambda: READY_FACTS["physical_memory"])
     monkeypatch.setattr(host, "collect_git_provenance", lambda root: {"dirty_files": []})
     monkeypatch.setattr(host, "query_power_plan", lambda: "Balanced")
     monkeypatch.setattr(host, "query_hags", lambda: "unset")

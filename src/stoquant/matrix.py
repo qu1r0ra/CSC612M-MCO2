@@ -39,8 +39,8 @@ from stoquant.design import (
     trial_orders,
 )
 from stoquant.host import (
+    MAX_MEMORY_USED_PERCENT,
     MAX_UPTIME_SECONDS,
-    WINDOW_ALLOWLIST,
     benchmark_process_affinity,
     check_readiness,
     probe_readiness_facts,
@@ -298,7 +298,7 @@ def run_benchmark_matrix(
                 "enforced": not pilot,
                 "facts": facts,
                 "max_uptime_seconds": MAX_UPTIME_SECONDS,
-                "window_allowlist": list(WINDOW_ALLOWLIST),
+                "max_memory_used_percent": MAX_MEMORY_USED_PERCENT,
             },
         }
 
@@ -989,7 +989,7 @@ def write_manifest(
     conditions["evidence"] = bool(conditions["evidence"] and not failed_case_ids)
     conditions["non_evidence_reasons"] = reasons
     manifest_data = {
-        "manifest_version": "3.2",
+        "manifest_version": "3.3",
         "date": date_str,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,
