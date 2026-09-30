@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -85,9 +86,11 @@ from stoquant.schema import (
     write_manifest as write_manifest_record,
 )
 from stoquant.snapshot_store import (
+    ACTIVE_SNAPSHOT_REGISTRATION_ENV,
     RunPlan,
     check_snapshot,
     create_snapshot,
+    register_active_snapshot,
     snapshot_path,
     write_run_plan,
 )
@@ -307,6 +310,9 @@ def run_benchmark_matrix(
             "applied_to": "driver process before any benchmark or probe process; inherited",
         }
         snapshot = create_snapshot(target_dir, git_prov, allow_dirty=allow_dirty)
+        registration = os.environ.get(ACTIVE_SNAPSHOT_REGISTRATION_ENV)
+        registration_file = Path(registration) if registration is not None else None
+        register_active_snapshot(snapshot.partial, registration_file)
         sweep_matrix(
             root=root,
             target_dir=snapshot.partial,
@@ -334,7 +340,9 @@ def run_benchmark_matrix(
             k1=k1,
             monitoring=monitoring,
         )
-        return snapshot.commit()
+        final_snapshot = snapshot.commit()
+        register_active_snapshot(final_snapshot, registration_file)
+        return final_snapshot
 
 
 @dataclass(frozen=True)
@@ -886,7 +894,9 @@ def write_case_outputs(
                 ("speedup_ci_high", "speedup_ci_high", 4),
             ):
                 if source in stats:
-                    row[destination] = f"{stats[source]:.{precision}f}"
+                    value = stats[source]
+                    if isinstance(value, (int, float)) and math.isfinite(value):
+                        row[destination] = f"{value:.{precision}f}"
             for source in ("stable", "unstable_rev2", "boundary_inversion"):
                 if source in stats:
                     row[source] = csv_flag(stats[source])

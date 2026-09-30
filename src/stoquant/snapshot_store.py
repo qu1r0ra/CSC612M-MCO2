@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,6 +22,9 @@ class SnapshotProgress:
     completed_cases: int
     total_cases: int | None
     input_family: str | None
+
+
+ACTIVE_SNAPSHOT_REGISTRATION_ENV = "STOQUANT_MONITORING_SNAPSHOT_REGISTRATION"
 
 
 def snapshot_path(
@@ -94,6 +98,37 @@ def write_run_plan(snapshot: Path, plan: RunPlan) -> None:
     (snapshot / "run-plan.json").write_text(
         json.dumps(plan, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
+
+
+def register_active_snapshot(snapshot: Path, registration_file: Path | None) -> None:
+    """Publish the active snapshot location for a supervising notifier, when present."""
+    if registration_file is None:
+        return
+    registration_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary = registration_file.with_name(f"{registration_file.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps({"snapshot": str(snapshot.resolve())}) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    temporary.replace(registration_file)
+
+
+def registered_snapshot(registration_file: Path | None) -> Path | None:
+    """Read a driver's active-snapshot registration, ignoring absent or incomplete state."""
+    if registration_file is None:
+        return None
+    try:
+        record = json.loads(registration_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    path = record.get("snapshot")
+    if not isinstance(path, str):
+        return None
+    snapshot = Path(path)
+    return snapshot if snapshot.is_dir() else None
 
 
 def progress(snapshot: Path | None, root: Path) -> SnapshotProgress | None:

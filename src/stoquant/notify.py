@@ -6,6 +6,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,7 +21,14 @@ from stoquant.monitoring import (
     parse_monitoring_config,
     with_heartbeat,
 )
-from stoquant.snapshot_store import SnapshotProgress, discover, new_since, progress
+from stoquant.snapshot_store import (
+    ACTIVE_SNAPSHOT_REGISTRATION_ENV,
+    SnapshotProgress,
+    discover,
+    new_since,
+    progress,
+    registered_snapshot,
+)
 
 
 class NotificationError(RuntimeError):
@@ -113,6 +121,15 @@ def _terminal_message(
     return "\n".join(parts)
 
 
+def _snapshot_progress(
+    root: Path, previous: set[Path], registration_file: Path
+) -> SnapshotProgress | None:
+    selected = registered_snapshot(registration_file)
+    if selected is None:
+        selected = new_since(root, previous)
+    return progress(selected, root)
+
+
 def _run_command(command: list[str], root: Path, config: MonitoringConfig) -> int:
     heartbeat_seconds = config.heartbeat_seconds
     previous_snapshots = discover(root)
@@ -135,57 +152,67 @@ def _run_command(command: list[str], root: Path, config: MonitoringConfig) -> in
         print(f"ntfy start notification failed: {exc}", file=sys.stderr, flush=True)
         return 2
 
-    child_env = os.environ.copy()
-    for key in ("NTFY_SERVER", "NTFY_TOPIC", "NTFY_TOKEN", "NTFY_HEARTBEAT_SECONDS"):
-        child_env.pop(key, None)
-    child_env["STOQUANT_MONITORING_PROVIDER"] = "ntfy"
-    child_env["STOQUANT_MONITORING_HEARTBEAT_SECONDS"] = str(heartbeat_seconds)
-
-    exit_code = 127
-    child: subprocess.Popen[bytes] | None = None
-    started = time.monotonic()
+    registration_dir = tempfile.TemporaryDirectory(prefix="stoquant-notify-")
+    registration_file = Path(registration_dir.name) / "active-snapshot.json"
     try:
-        if command[0] == "python":
-            command = [sys.executable, *command[1:]]
-        child = subprocess.Popen(command, cwd=root, env=child_env)
-        next_heartbeat = time.monotonic() + heartbeat_seconds
-        while True:
-            remaining = max(0, next_heartbeat - time.monotonic())
-            try:
-                exit_code = child.wait(timeout=remaining)
-                break
-            except subprocess.TimeoutExpired:
-                elapsed = time.monotonic() - started
-                selected = new_since(root, previous_snapshots)
-                state = progress(selected, root)
-                _notify_best_effort(
-                    config,
-                    f"stoquant {_family(state)} heartbeat",
-                    _heartbeat_message(elapsed, state),
-                )
-                next_heartbeat = time.monotonic() + heartbeat_seconds
-    except KeyboardInterrupt:
-        if child is not None and child.poll() is None:
-            child.terminate()
-            try:
-                child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-        exit_code = child.returncode if child is not None and child.returncode else 130
-    except OSError as exc:
-        print(f"Could not start the benchmark command: {exc}", file=sys.stderr, flush=True)
+        child_env = os.environ.copy()
+        for key in (
+            "NTFY_SERVER",
+            "NTFY_TOPIC",
+            "NTFY_TOKEN",
+            "NTFY_HEARTBEAT_SECONDS",
+            ACTIVE_SNAPSHOT_REGISTRATION_ENV,
+        ):
+            child_env.pop(key, None)
+        child_env["STOQUANT_MONITORING_PROVIDER"] = "ntfy"
+        child_env["STOQUANT_MONITORING_HEARTBEAT_SECONDS"] = str(heartbeat_seconds)
+        child_env[ACTIVE_SNAPSHOT_REGISTRATION_ENV] = str(registration_file)
 
-    elapsed = time.monotonic() - started
-    snapshot = new_since(root, previous_snapshots)
-    state = progress(snapshot, root)
-    outcome = "succeeded" if exit_code == 0 else "failed"
-    _notify_best_effort(
-        config,
-        f"stoquant {_family(state)} {outcome}",
-        _terminal_message(exit_code, elapsed, state),
-    )
-    return exit_code
+        exit_code = 127
+        child: subprocess.Popen[bytes] | None = None
+        started = time.monotonic()
+        try:
+            if command[0] == "python":
+                command = [sys.executable, *command[1:]]
+            child = subprocess.Popen(command, cwd=root, env=child_env)
+            next_heartbeat = time.monotonic() + heartbeat_seconds
+            while True:
+                remaining = max(0, next_heartbeat - time.monotonic())
+                try:
+                    exit_code = child.wait(timeout=remaining)
+                    break
+                except subprocess.TimeoutExpired:
+                    elapsed = time.monotonic() - started
+                    state = _snapshot_progress(root, previous_snapshots, registration_file)
+                    _notify_best_effort(
+                        config,
+                        f"stoquant {_family(state)} heartbeat",
+                        _heartbeat_message(elapsed, state),
+                    )
+                    next_heartbeat = time.monotonic() + heartbeat_seconds
+        except KeyboardInterrupt:
+            if child is not None and child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+            exit_code = child.returncode if child is not None and child.returncode else 130
+        except OSError as exc:
+            print(f"Could not start the benchmark command: {exc}", file=sys.stderr, flush=True)
+
+        elapsed = time.monotonic() - started
+        state = _snapshot_progress(root, previous_snapshots, registration_file)
+        outcome = "succeeded" if exit_code == 0 else "failed"
+        _notify_best_effort(
+            config,
+            f"stoquant {_family(state)} {outcome}",
+            _terminal_message(exit_code, elapsed, state),
+        )
+        return exit_code
+    finally:
+        registration_dir.cleanup()
 
 
 def main(argv: list[str] | None = None) -> int:
