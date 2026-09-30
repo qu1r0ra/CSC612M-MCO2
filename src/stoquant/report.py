@@ -16,36 +16,28 @@ from typing import Any
 
 import numpy as np
 
+from stoquant.design import (
+    AVX2_COMPARATOR,
+    COMPARATOR,
+    CUDA_GPU_ORIGIN,
+    CUDA_HOST_ORIGIN,
+    CUDA_RESIDENT,
+    CUDA_RESIDENT_GRAPH,
+    REPORT_LABELS,
+    REPORT_PATHS,
+)
 from stoquant.plotting import pyplot
 from stoquant.snapshot_store import derived_directory
 from stoquant.stats import compute_stage_medians
 
 # "optimized" is the opt-in AVX2 CPU comparator (issue #22): an F1 line and a
 # descriptive F2 line only. It never enters T1, the crossovers or a claim.
-PATHS = ("comparator", "optimized", "resident", "resident-graph", "host-origin")
-CUDA_PATHS = ("resident", "resident-graph", "host-origin")
-STAGE_PATHS = ("resident", "host-origin")
-LABELS = {
-    "comparator": "C comparator",
-    "optimized": "AVX2 comparator (descriptive)",
-    "resident": "CUDA resident",
-    "resident-graph": "CUDA resident-graph",
-    "host-origin": "CUDA host-origin",
-}
-COLORS = {
-    "comparator": "#555555",
-    "optimized": "#CC79A7",
-    "resident": "#0072B2",
-    "resident-graph": "#009E73",
-    "host-origin": "#E69F00",
-}
-MARKERS = {
-    "comparator": "s",
-    "optimized": "v",
-    "resident": "o",
-    "resident-graph": "D",
-    "host-origin": "^",
-}
+PATHS = tuple(path.key for path in REPORT_PATHS)
+CUDA_PATHS = tuple(path.key for path in REPORT_PATHS if path.backend == "cuda")
+STAGE_PATHS = (CUDA_RESIDENT.key, CUDA_HOST_ORIGIN.key)
+LABELS = dict(zip(PATHS, REPORT_LABELS, strict=True))
+COLORS = dict(zip(PATHS, ("#555555", "#CC79A7", "#0072B2", "#009E73", "#E69F00"), strict=True))
+MARKERS = dict(zip(PATHS, ("s", "v", "o", "D", "^"), strict=True))
 STAGE_COUNTS = (1 << 14, 1 << 18, 1 << 22, 1 << 26)
 STAGES = (
     ("k1_ms", "scale (K1)", "#0072B2"),
@@ -218,7 +210,7 @@ def plot_time(indexed, counts, bit_widths, out: Path) -> None:
 
 def plot_descriptive_speedup(ax, indexed, counts, bits) -> None:
     """The AVX2 comparator as a dashed CI line with no claim markers."""
-    path = "optimized"
+    path = AVX2_COMPARATOR.key
     rows = [indexed[(n, bits, path)] for n in counts if (n, bits, path) in indexed]
     rows = [r for r in rows if "speedup_vs_cpu" in r["statistics"]]
     if not rows:
@@ -356,9 +348,9 @@ def plot_graph_vs_resident(indexed, counts, bit_widths, out: Path) -> None:
     for ax, bits in zip(axes[0], bit_widths, strict=True):
         ax.axhline(1.0, color="black", linewidth=0.8, linestyle="--")
         rows = [
-            indexed[(n, bits, "resident-graph")]
+            indexed[(n, bits, CUDA_RESIDENT_GRAPH.key)]
             for n in counts
-            if (n, bits, "resident-graph") in indexed
+            if (n, bits, CUDA_RESIDENT_GRAPH.key) in indexed
         ]
         rows = [r for r in rows if (r.get("statistics") or {}).get("vs_resident")]
         if not rows:
@@ -381,31 +373,33 @@ def plot_graph_vs_resident(indexed, counts, bit_widths, out: Path) -> None:
                 for v in vs_res_list
             ]
         )
-        plot_interval(ax, x, y, bounds, COLORS["resident-graph"], LABELS["resident-graph"])
+        plot_interval(
+            ax, x, y, bounds, COLORS[CUDA_RESIDENT_GRAPH.key], LABELS[CUDA_RESIDENT_GRAPH.key]
+        )
         direction = np.array([direction_supported(v) for v in vs_res_list])
         magnitude = np.array([bool(magnitude_supported(v)) for v in vs_res_list])
         ax.scatter(
             x[magnitude],
             y[magnitude],
-            marker=MARKERS["resident-graph"],
-            color=COLORS["resident-graph"],
+            marker=MARKERS[CUDA_RESIDENT_GRAPH.key],
+            color=COLORS[CUDA_RESIDENT_GRAPH.key],
             zorder=3,
         )
         only = direction & ~magnitude
         ax.scatter(
             x[only],
             y[only],
-            marker=MARKERS["resident-graph"],
+            marker=MARKERS[CUDA_RESIDENT_GRAPH.key],
             facecolors="white",
-            edgecolors=COLORS["resident-graph"],
+            edgecolors=COLORS[CUDA_RESIDENT_GRAPH.key],
             zorder=3,
         )
         ax.scatter(
             x[~direction],
             y[~direction],
-            marker=MARKERS["resident-graph"],
+            marker=MARKERS[CUDA_RESIDENT_GRAPH.key],
             facecolors="white",
-            edgecolors=COLORS["resident-graph"],
+            edgecolors=COLORS[CUDA_RESIDENT_GRAPH.key],
             alpha=0.35,
             zorder=3,
         )
@@ -448,7 +442,7 @@ def t1_table(
     ]
     for count in counts:
         for bits in bit_widths:
-            cpu = indexed.get((count, bits, "comparator"))
+            cpu = indexed.get((count, bits, COMPARATOR.key))
             c_ms = fmt_ms(cpu["statistics"]["median_ms"]) if cpu else "failed"
             for path in cuda_paths:
                 cells = [power_label(count), str(bits), LABELS[path], c_ms]
@@ -514,7 +508,7 @@ def render_report(
     manifest, cases = load_snapshot(snapshot)
     if any(
         case.get("input_family", "dense") != "dense"
-        or case.get("timing_boundary") == "gpu-origin"
+        or case.get("timing_boundary") == CUDA_GPU_ORIGIN.boundary
         or case.get("transfer_policy") == "pinned"
         for case in cases
     ):

@@ -251,7 +251,9 @@ def run_benchmark_matrix(
 
         # Revision 3: judge the machine before any benchmark process starts. A pilot is
         # non-evidence by design, so it records the check without enforcing it.
-        facts = probe_readiness_facts(root) if readiness_facts is None else readiness_facts
+        facts = (
+            probe_readiness_facts(root, git_prov) if readiness_facts is None else readiness_facts
+        )
         failures = check_readiness(facts)
         if failures and not (ignore_readiness or pilot):
             raise RuntimeError(
@@ -359,6 +361,7 @@ class SweepSettings:
 
 class RunSetup(NamedTuple):
     binary: Path
+    build_stamp: dict[str, Any]
     toolchain_prov: dict[str, Any]
     build_prov: dict[str, Any]
     host_tokens: list[str]
@@ -431,7 +434,7 @@ def sweep_matrix(
         model_limit=model_limit,
         k1=k1,
     )
-    setup = set_up_run(root, target_dir, settings)
+    setup = set_up_run(root, target_dir, settings, git_prov)
     inputs = generate_inputs(setup, settings)
     vec_report_path = write_vectorization_reports(root, target_dir, setup, settings)
     order = order_and_warm_up(setup, inputs, settings)
@@ -490,9 +493,11 @@ def sweep_matrix(
     return target_dir
 
 
-def set_up_run(root: Path, target_dir: Path, settings: SweepSettings) -> RunSetup:
+def set_up_run(
+    root: Path, target_dir: Path, settings: SweepSettings, git_prov: dict[str, Any]
+) -> RunSetup:
     """Binary, provenance and starting GPU state, then the snapshot and scratch folders."""
-    binary = find_binary(root)
+    verified = find_binary(root, require_cuda=settings.cuda, git_prov=git_prov)
     toolchain_prov = collect_hardware_and_toolchain(root)
     build_prov = collect_build_commands(root)
     host_tokens = build_prov.pop("_host_tokens")
@@ -504,7 +509,8 @@ def set_up_run(root: Path, target_dir: Path, settings: SweepSettings) -> RunSetu
     temp_dir = target_dir / "_temp"
     temp_dir.mkdir()
     return RunSetup(
-        binary,
+        verified.path,
+        verified.stamp,
         toolchain_prov,
         build_prov,
         host_tokens,
@@ -950,7 +956,7 @@ def write_manifest(
     paths = settings.paths
     dense = settings.dense
     manifest_data = {
-        "manifest_version": "3.1",
+        "manifest_version": "3.2",
         "date": date_str,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,
@@ -959,6 +965,7 @@ def write_manifest(
         **({"device": device_attributes} if device_attributes is not None else {}),
         "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
         "build_flags": setup.build_prov,
+        "build_stamp": setup.build_stamp,
         "transfer_policies": list(settings.transfer_policies),
         "gpu_state": {
             "note": (

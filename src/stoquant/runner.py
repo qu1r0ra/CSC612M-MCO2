@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from stoquant.design import CUDA_RESIDENT
+
 DEFAULT_WARMUPS = 10
 DEFAULT_REPS = 30
 DEFAULT_COMPRESSION_SEED = 42
@@ -126,7 +128,7 @@ def warm_up_gpu(
             bits=8,
             backend="cuda",
             k1=k1,
-            extra_args=["--boundary", "resident"],
+            extra_args=["--boundary", CUDA_RESIDENT.boundary],
             seed=DEFAULT_COMPRESSION_SEED,
             warmups=0,
             reps=GPU_WARMUP_REPS,

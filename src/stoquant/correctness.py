@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from stoquant.design import BenchPath, build_paths
+from stoquant.design import COMPARATOR, BenchPath, build_paths
 from stoquant.oracle import HEADER_STRUCT, decode_record, fp64_error_bounds, reference_fp64
 from stoquant.runner import (
     DEFAULT_COMPRESSION_SEED,
@@ -228,7 +228,7 @@ def record_other_paths(run: RecordRun, paths: Sequence[BenchPath]) -> dict[Bench
     bench_paths: dict[BenchPath, Path] = {
         path: run.record_path(f"bench_{path.label}")
         for path in paths
-        if path.boundary != "comparator"
+        if path.boundary != COMPARATOR.boundary
     }
     for path, record_path in bench_paths.items():
         res_bench = run.bench(path.backend, record_path, path.extra_args)
