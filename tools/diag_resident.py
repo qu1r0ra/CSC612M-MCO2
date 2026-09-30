@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from stoquant import layout
+from stoquant.design import CUDA_RESIDENT
 from stoquant.inputs import generate_inputs
 from stoquant.provenance import collect_git_provenance, find_binary, query_gpu_state
 from stoquant.runner import DEFAULT_COMPRESSION_SEED, run_bench_process, warm_up_gpu
@@ -62,7 +63,7 @@ def kernel_sums(payload: dict[str, Any]) -> list[float]:
 def run_one(binary: Path, input_path: Path, bits: int, spec: dict[str, Any]) -> dict[str, Any]:
     if spec["gap_s"]:
         time.sleep(spec["gap_s"])
-    extra = ["--boundary", "resident", "--timings"]
+    extra = ["--boundary", CUDA_RESIDENT.boundary, "--timings"]
     if spec["high_priority"]:
         # run_bench_process has no creationflags hook; start the same command directly.
         cmd = [
@@ -233,7 +234,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = layout.ROOT
-    binary = find_binary(root)
+    binary = find_binary(root).path
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
     inputs = generate_inputs(args.counts, out / "inputs")

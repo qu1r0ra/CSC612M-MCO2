@@ -8,6 +8,16 @@ from typing import Any
 
 import numpy as np
 
+from stoquant.design import (
+    AVX2_COMPARATOR,
+    COMPARATOR,
+    CUDA_RESIDENT,
+    CUDA_RESIDENT_GRAPH,
+    PINNED_PAIRS,
+    PUBLICATION_LABELS,
+    PUBLICATION_PATHS,
+    BenchPath,
+)
 from stoquant.plotting import pyplot
 from stoquant.report import (
     FIGURES,
@@ -24,18 +34,7 @@ from stoquant.report import (
 )
 
 PUBLICATION_FIGURES = {**FIGURES, "bandwidth": "appendix_bandwidth.png"}
-PATH_LABELS = {
-    "cpu-comparator": "C comparator",
-    "cpu-avx2-optimized": "AVX2 comparator (descriptive)",
-    "cuda-resident": "CUDA resident",
-    "cuda-resident-graph": "CUDA resident-graph",
-    "cuda-host-origin": "CUDA host-origin pageable",
-    "cuda-host-origin-pinned": "CUDA host-origin pinned",
-    "cpu-gpu-origin": "CPU GPU-origin pageable",
-    "cuda-gpu-origin": "CUDA GPU-origin pageable",
-    "cpu-gpu-origin-pinned": "CPU GPU-origin pinned",
-    "cuda-gpu-origin-pinned": "CUDA GPU-origin pinned",
-}
+PATH_LABELS = dict(zip((path.label for path in PUBLICATION_PATHS), PUBLICATION_LABELS, strict=True))
 
 
 def _path_colors(plt) -> dict[str, Any]:
@@ -44,11 +43,7 @@ def _path_colors(plt) -> dict[str, Any]:
     return dict(zip(PATH_LABELS, colors, strict=True))
 
 
-TRANSFER_PAIRS = (
-    ("cuda-host-origin", "cuda-host-origin-pinned"),
-    ("cpu-gpu-origin", "cpu-gpu-origin-pinned"),
-    ("cuda-gpu-origin", "cuda-gpu-origin-pinned"),
-)
+TRANSFER_PAIRS = tuple((pageable.label, pinned.label) for pageable, pinned in PINNED_PAIRS)
 
 
 def _usable(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -63,8 +58,8 @@ def _usable(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _path(case: dict[str, Any]) -> str:
     if "path_label" in case:
         return case["path_label"]
-    suffix = "-pinned" if case.get("transfer_policy") == "pinned" else ""
-    return f"{case['backend']}-{case['timing_boundary']}{suffix}"
+    policy = case.get("transfer_policy", "pageable")
+    return BenchPath(case["backend"], case["timing_boundary"], policy).label
 
 
 def _key(case: dict[str, Any]) -> str:
@@ -156,7 +151,7 @@ def plot_publication_speedup(cases: list[dict[str, Any]], out: Path) -> None:
     for ax, bits in zip(axes, (4, 8), strict=True):
         ax.axhline(1, color="black", linewidth=0.8, linestyle="--")
         for path, label in PATH_LABELS.items():
-            if path == "cpu-comparator":
+            if path == COMPARATOR.label:
                 continue
             selected = _rows(cases, path, bits)
             if not selected:
@@ -168,7 +163,7 @@ def plot_publication_speedup(cases: list[dict[str, Any]], out: Path) -> None:
             y = np.array([item["speedup_vs_cpu"] for item in stats])
             bounds = np.array([speedup_interval(item) for item in stats])
             color = colors[path]
-            descriptive = path == "cpu-avx2-optimized"
+            descriptive = path == AVX2_COMPARATOR.label
             ax.plot(x, y, color=color, linestyle="--" if descriptive else "-", label=label)
             ax.vlines(x, bounds[:, 0], bounds[:, 1], color=color, linewidth=0.8)
             if not descriptive:
@@ -191,7 +186,9 @@ def plot_publication_speedup(cases: list[dict[str, Any]], out: Path) -> None:
 def plot_publication_stages(cases: list[dict[str, Any]], out: Path) -> None:
     plt = pyplot()
     paths = [
-        path for path in PATH_LABELS if path.startswith("cuda-") and path != "cuda-resident-graph"
+        path.label
+        for path in PUBLICATION_PATHS
+        if path.backend == "cuda" and path != CUDA_RESIDENT_GRAPH
     ]
     fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
     for ax, bits in zip(axes, (4, 8), strict=True):
@@ -285,7 +282,7 @@ def plot_bandwidth(
     ceiling = max(float(size["best_gbps"]) for size in dram_probe)
     plt = pyplot()
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    resident = [case for case in cases if _path(case) == "cuda-resident"]
+    resident = [case for case in cases if _path(case) == CUDA_RESIDENT.label]
     if not resident:
         raise ValueError("publication matrix lacks CUDA resident cases")
     for bits in (4, 8):
@@ -429,7 +426,12 @@ def _report_lines(cases: list[dict[str, Any]], manifest: dict[str, Any]) -> list
         paths = [
             path
             for path in PATH_LABELS
-            if path.startswith("cuda-") and path != "cuda-resident-graph"
+            if path
+            in (
+                candidate.label
+                for candidate in PUBLICATION_PATHS
+                if candidate.backend == "cuda" and candidate != CUDA_RESIDENT_GRAPH
+            )
         ]
         for bits in (4, 8):
             for path in paths:
@@ -478,7 +480,7 @@ def render_publication_report(
     legacy = {
         (case["count"], case["bits"], case["timing_boundary"]): case
         for case in usable
-        if _path(case) == f"cuda-{case['timing_boundary']}"
+        if _path(case) == BenchPath("cuda", case["timing_boundary"], "pageable").label
     }
     plot_graph_vs_resident(
         legacy,

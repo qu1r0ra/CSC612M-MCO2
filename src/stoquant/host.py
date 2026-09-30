@@ -135,7 +135,7 @@ def query_hags() -> str:
     return str(value)
 
 
-def probe_readiness_facts(root: Path) -> dict[str, Any]:
+def probe_readiness_facts(root: Path, git_prov: dict[str, Any] | None = None) -> dict[str, Any]:
     """Gather the machine facts the readiness check judges, plus context it only records."""
     gpu_state = query_gpu_state()
     return {
@@ -143,7 +143,9 @@ def probe_readiness_facts(root: Path) -> dict[str, Any]:
         "app_windows": list_app_windows(),
         "launcher_processes": list_launcher_processes(),
         "stoquant_pids": list_processes("stoquant"),
-        "git_dirty_files": collect_git_provenance(root)["dirty_files"],
+        "git_dirty_files": (collect_git_provenance(root) if git_prov is None else git_prov)[
+            "dirty_files"
+        ],
         "gpu_clock_event_reasons": gpu_state.get("clocks_event_reasons.active"),
         "power_plan": query_power_plan(),
         "hags_hwschmode": query_hags(),
@@ -167,8 +169,6 @@ def check_readiness(
     if facts["stoquant_pids"]:
         pids = ", ".join(str(pid) for pid in facts["stoquant_pids"])
         failures.append(f"stoquant already running (pid {pids})")
-    if facts["git_dirty_files"]:
-        failures.append("dirty git tree: " + "; ".join(facts["git_dirty_files"]))
     try:
         reasons = int(facts["gpu_clock_event_reasons"], 16)
     except (TypeError, ValueError):

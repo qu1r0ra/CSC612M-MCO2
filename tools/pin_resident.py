@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from stoquant import layout
+from stoquant.design import CUDA_RESIDENT
 from stoquant.inputs import generate_inputs
 from stoquant.provenance import collect_git_provenance, find_binary, query_gpu_state
 from stoquant.runner import DEFAULT_COMPRESSION_SEED, warm_up_gpu
@@ -47,7 +48,7 @@ def run_one(
         str(binary), "bench", "--input", str(input_path),
         "--seed", str(DEFAULT_COMPRESSION_SEED), "--bits", str(bits),
         "--tensor-id", "0", "--invocation-id", "0", "--backend", "cuda",
-        "--warmup", str(warmups), "--reps", str(reps), "--boundary", "resident", "--timings",
+        "--warmup", str(warmups), "--reps", str(reps), "--boundary", CUDA_RESIDENT.boundary, "--timings",
     ]  # fmt: skip
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
     if proc.returncode != 0:
@@ -87,7 +88,7 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     root = layout.ROOT
-    binary = find_binary(root)
+    binary = find_binary(root).path
     input_path = Path(generate_inputs([args.count], args.input_dir)[args.count]["_path"])
     plan: list[int | None] = [None] * args.unpinned
     plan += [c for c in args.cores for _ in range(args.per_core)]
