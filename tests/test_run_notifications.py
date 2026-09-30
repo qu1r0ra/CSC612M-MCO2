@@ -247,6 +247,7 @@ import time
 
 snapshot = Path('results/pilots/fake-run')
 snapshot.mkdir(parents=True)
+(snapshot / 'run-plan.json').write_text(json.dumps({'total_cases': 2, 'input_family': 'sparse'}))
 (snapshot / 'case_one.json').write_text('{}')
 print('fake benchmark stdout', flush=True)
 print('fake benchmark stderr', file=sys.stderr, flush=True)
@@ -286,7 +287,7 @@ Path('credential-forwarded').write_text(str('NTFY_TOKEN' in os.environ))
     assert (tmp_path / "credential-forwarded").read_text() == "False"
     assert [message["title"] for message in server.messages] == [
         "stoquant ntfy preflight",
-        "stoquant sparse started",
+        "stoquant benchmark started",
         "stoquant sparse heartbeat",
         "stoquant sparse succeeded",
     ]
@@ -330,8 +331,8 @@ raise SystemExit(7)
     assert result.stderr.count("Warning: ntfy notification failed") == 2
     assert "test-only-token" not in result.stderr
     assert server.messages[0]["title"] == "stoquant ntfy preflight"
-    assert server.messages[1]["title"] == "stoquant dense started"
-    assert server.messages[2]["title"] == "stoquant dense heartbeat"
-    assert server.messages[3]["title"] == "stoquant dense failed"
+    assert server.messages[1]["title"] == "stoquant benchmark started"
+    assert server.messages[2]["title"] == "stoquant benchmark heartbeat"
+    assert server.messages[3]["title"] == "stoquant benchmark failed"
     assert "event: failure" in server.messages[3]["body"]
     assert "exit code: 7" in server.messages[3]["body"]

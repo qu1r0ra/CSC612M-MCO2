@@ -20,7 +20,7 @@ from stoquant.host import (
     benchmark_process_affinity,
     probe_readiness_facts,
 )
-from stoquant.inputs import generate_inputs
+from stoquant.inputs import InputProvenance, generate_inputs
 from stoquant.provenance import (
     BUILD_RECIPE,
     VerifiedBinary,
@@ -100,7 +100,7 @@ class ResidentExperimentRun:
     initial_gpu_warm_up: dict[str, Any]
     readiness: dict[str, Any] | None
     record_identity: list[dict[str, Any]]
-    inputs: dict[int, dict[str, Any]]
+    inputs: dict[int, InputProvenance]
     cells: list[tuple[int, int]]
     records: list[ResidentExperimentRecord]
     warmups: dict[tuple[int, int, str], int]
@@ -270,9 +270,9 @@ def _run_resident_experiment(
     verified = find_binary(config.root, git_prov=git)
     binary = verified.path
     probe_binary = probe_path(config.root)
-    build = collect_build_commands(config.root)
-    build.pop("_host_tokens", None)
-    if not build["commands"]:
+    build_commands = collect_build_commands(config.root)
+    build = build_commands.as_record()
+    if not build_commands.commands:
         raise RuntimeError(
             f"just --dry-run {BUILD_RECIPE} failed; build provenance cannot be recorded."
         )
@@ -291,11 +291,8 @@ def _run_resident_experiment(
         scratch = Path(scratch_name)
         gpu_state_start = query_gpu_state()
         input_rows = generate_inputs(config.counts, scratch)
-        inputs = {
-            count: {key: value for key, value in input_rows[count].items() if key != "_path"}
-            for count in config.counts
-        }
-        input_paths = {count: Path(input_rows[count]["_path"]) for count in config.counts}
+        inputs = {count: input_rows[count].provenance for count in config.counts}
+        input_paths = {count: input_rows[count].path for count in config.counts}
         identity = (
             _verify_variant_records(binary, input_paths, cells, scratch, variants, adapter)
             if len(variants) > 1

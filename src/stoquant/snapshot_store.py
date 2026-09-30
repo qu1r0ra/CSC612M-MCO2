@@ -7,7 +7,20 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
+
+
+class RunPlan(TypedDict):
+    total_cases: int
+    input_family: str
+
+
+@dataclass(frozen=True)
+class SnapshotProgress:
+    snapshot: str | None
+    completed_cases: int
+    total_cases: int | None
+    input_family: str | None
 
 
 def snapshot_path(
@@ -77,24 +90,36 @@ def derived_directory(snapshot: Path) -> Path:
     return out
 
 
-def progress(snapshot: Path | None) -> tuple[int | None, int | None]:
+def write_run_plan(snapshot: Path, plan: RunPlan) -> None:
+    (snapshot / "run-plan.json").write_text(
+        json.dumps(plan, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
+
+
+def progress(snapshot: Path | None, root: Path) -> SnapshotProgress | None:
     if snapshot is None or not snapshot.is_dir():
-        return None, None
+        return None
     completed = len(list(snapshot.glob("case_*.json")))
     plan = snapshot / "run-plan.json"
+    total: int | None = None
+    family: str | None = None
     if plan.is_file():
         try:
-            total = int(json.loads(plan.read_text(encoding="utf-8"))["total_cases"])
-            return completed, total
+            record = json.loads(plan.read_text(encoding="utf-8"))
+            if isinstance(record, dict):
+                total_value = record.get("total_cases")
+                family_value = record.get("input_family")
+                if isinstance(total_value, int) and total_value >= 0:
+                    total = total_value
+                if isinstance(family_value, str):
+                    family = family_value
         except (OSError, ValueError, KeyError, TypeError):
             pass
-    manifest = snapshot / "manifest.json"
-    if manifest.is_file():
-        try:
-            return completed, len(json.loads(manifest.read_text(encoding="utf-8"))["cases"])
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
-    return completed, None
+    try:
+        label = snapshot.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        label = None
+    return SnapshotProgress(label, completed, total, family)
 
 
 def discover(root: Path) -> set[Path]:
@@ -111,3 +136,9 @@ def discover(root: Path) -> set[Path]:
         else:
             found.add(path)
     return found
+
+
+def new_since(root: Path, previous: set[Path]) -> Path | None:
+    """Find the newest snapshot reserved since the caller's starting point."""
+    candidates = discover(root) - previous
+    return max(candidates, key=lambda path: path.stat().st_mtime, default=None)

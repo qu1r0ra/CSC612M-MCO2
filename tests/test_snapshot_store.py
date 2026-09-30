@@ -52,13 +52,31 @@ def test_derived_outputs_replace_only_derived_and_progress_uses_plan(tmp_path):
     raw = snapshot.partial / "manifest.json"
     raw.write_text(json.dumps({"cases": [1, 2, 3]}), encoding="utf-8")
     (snapshot.partial / "run-plan.json").write_text(
-        json.dumps({"total_cases": 4}), encoding="utf-8"
+        json.dumps({"total_cases": 4, "input_family": "sparse"}), encoding="utf-8"
     )
     (snapshot.partial / "case_0.json").write_text("{}", encoding="utf-8")
-    assert progress(snapshot.partial) == (1, 4)
+    state = progress(snapshot.partial, tmp_path)
+    assert state is not None
+    assert state.completed_cases == 1
+    assert state.total_cases == 4
+    assert state.input_family == "sparse"
+    assert state.snapshot == "run.partial"
     before = raw.read_bytes()
     derived = derived_directory(snapshot.partial)
     (derived / "report.md").write_text("old", encoding="utf-8")
     assert derived_directory(snapshot.partial) == derived
     assert not (derived / "report.md").exists()
     assert raw.read_bytes() == before
+
+
+def test_progress_does_not_infer_a_plan_from_the_manifest(tmp_path):
+    snapshot = create_snapshot(tmp_path / "run", CLEAN)
+    (snapshot.partial / "manifest.json").write_text(
+        json.dumps({"cases": ["case_0", "case_1"]}), encoding="utf-8"
+    )
+    (snapshot.partial / "case_0.json").write_text("{}", encoding="utf-8")
+    state = progress(snapshot.partial, tmp_path)
+    assert state is not None
+    assert state.completed_cases == 1
+    assert state.total_cases is None
+    assert state.input_family is None

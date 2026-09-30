@@ -13,7 +13,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import NotRequired, TypedDict
 
 import numpy as np
 
@@ -24,6 +24,35 @@ BIAS_STD = 0.01
 INPUT_FAMILIES = ("dense", "sparse", "model")
 MODEL_TENSOR_SETS = ("distinct", "all")
 MODEL_NAME = "resnet18-cifar10"
+
+
+class InputProvenance(TypedDict):
+    count: int
+    input_family: NotRequired[str]
+    input_key: NotRequired[str]
+    filename: NotRequired[str]
+    generator: NotRequired[str]
+    bit_generator: NotRequired[str]
+    seed: NotRequired[int | list[int]]
+    sha256: NotRequired[str]
+    dense_source: NotRequired[str]
+    mask_seed: NotRequired[int]
+    zero_fraction_target: NotRequired[float]
+    zero_fraction_realised: NotRequired[float]
+    zero_value: NotRequired[str]
+    model: NotRequired[str]
+    tensor_name: NotRequired[str]
+    tensor_shape: NotRequired[list[int]]
+    tensor_kind: NotRequired[str]
+    std: NotRequired[float]
+
+
+@dataclass(frozen=True)
+class GeneratedInput:
+    """Input file and its public provenance, kept separate from each other."""
+
+    path: Path
+    provenance: InputProvenance
 
 
 @dataclass(frozen=True)
@@ -162,10 +191,10 @@ def generate_inputs(
     counts: Sequence[int],
     directory: Path,
     seed: int = DEFAULT_INPUT_SEED,
-) -> dict[int, dict[str, Any]]:
+) -> dict[int, GeneratedInput]:
     directory.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed)
-    provenance: dict[int, dict[str, Any]] = {}
+    generated: dict[int, GeneratedInput] = {}
 
     for count in counts:
         values = rng.normal(size=count).astype(np.float32)
@@ -174,17 +203,17 @@ def generate_inputs(
         file_path = directory / f"input_n{count}.f32"
         file_path.write_bytes(bytes_data)
 
-        provenance[count] = {
+        input_provenance: InputProvenance = {
             "count": count,
             "filename": file_path.name,
             "generator": "numpy.random.default_rng",
             "bit_generator": type(rng.bit_generator).__name__,
             "seed": seed,
             "sha256": sha256,
-            "_path": str(file_path),
         }
+        generated[count] = GeneratedInput(file_path, input_provenance)
 
-    return provenance
+    return generated
 
 
 def write_input(directory: Path, name: str, values: np.ndarray) -> tuple[str, Path]:
@@ -201,21 +230,24 @@ def generate_family_inputs(
     seed: int = DEFAULT_INPUT_SEED,
     model_tensors: str = "distinct",
     model_limit: int | None = None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, GeneratedInput]:
     """Inputs of one family keyed by input key; dense keys are `n{count}` as in revision 3."""
     if family == "dense":
         return {
-            f"n{count}": {"input_family": "dense", "input_key": f"n{count}", **meta}
-            for count, meta in generate_inputs(counts, directory, seed).items()
+            f"n{count}": GeneratedInput(
+                item.path,
+                {"input_family": "dense", "input_key": f"n{count}", **item.provenance},
+            )
+            for count, item in generate_inputs(counts, directory, seed).items()
         }
     directory.mkdir(parents=True, exist_ok=True)
-    provenance: dict[str, dict[str, Any]] = {}
+    generated: dict[str, GeneratedInput] = {}
     if family == "sparse":
         for count, dense in zip(counts, dense_vectors(counts, seed), strict=True):
             values, realised = sparsify(dense)
             key = f"sparse_n{count}"
             sha256, file_path = write_input(directory, f"input_{key}.f32", values)
-            provenance[key] = {
+            sparse_provenance: InputProvenance = {
                 "input_family": "sparse",
                 "input_key": key,
                 "count": count,
@@ -229,16 +261,16 @@ def generate_family_inputs(
                 "zero_fraction_realised": realised,
                 "zero_value": "+0.0",
                 "sha256": sha256,
-                "_path": str(file_path),
             }
-        return provenance
+            generated[key] = GeneratedInput(file_path, sparse_provenance)
+        return generated
     if family == "model":
         for tensor in select_model_tensors(model_tensors, model_limit):
             key = f"model_{tensor.name}"
             sha256, file_path = write_input(
                 directory, f"input_{key}.f32", model_tensor_values(tensor, seed)
             )
-            provenance[key] = {
+            model_provenance: InputProvenance = {
                 "input_family": "model",
                 "input_key": key,
                 "count": tensor.count,
@@ -252,7 +284,7 @@ def generate_family_inputs(
                 "tensor_kind": tensor.kind,
                 "std": model_tensor_std(tensor),
                 "sha256": sha256,
-                "_path": str(file_path),
             }
-        return provenance
+            generated[key] = GeneratedInput(file_path, model_provenance)
+        return generated
     raise ValueError(f"unknown input family {family!r}; choose from {INPUT_FAMILIES}")

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from stoquant import k1_ab, k1_bandwidth, resident_experiment
-from stoquant.provenance import VerifiedBinary
+from stoquant.provenance import BuildCommands, VerifiedBinary
 
 
 class FakeResidentProcess:
@@ -79,7 +79,15 @@ def test_k1_experiments_use_shared_runner_and_fake_process_adapter(
     monkeypatch.setattr(
         resident_experiment,
         "collect_build_commands",
-        lambda _: {"commands": ["just build-cuda"], "_host_tokens": []},
+        lambda _: BuildCommands(
+            source="test",
+            commands=["just build-cuda"],
+            comparator_c="unknown",
+            avx2_c="unknown",
+            cuda_nvcc="unknown",
+            host_tokens=[],
+            avx2_tokens=None,
+        ),
     )
     monkeypatch.setattr(resident_experiment, "dry_run", lambda _root, recipe: [recipe])
     monkeypatch.setattr(resident_experiment, "file_sha256", lambda _: "a" * 64)

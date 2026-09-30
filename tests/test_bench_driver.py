@@ -42,6 +42,7 @@ from stoquant.matrix import (
     run_benchmark_matrix,
     write_case_outputs,
 )
+from stoquant.monitoring import ConfigurationError
 from stoquant.provenance import find_binary, parse_build_commands
 from stoquant.runner import REAL_BENCH_PROCESS, FakeBenchProcess, in_process_warmups
 from stoquant.stats import (
@@ -654,6 +655,49 @@ def test_p90_p10_spread_ignores_one_outlier_trial():
     assert stats["stable"] is True
 
 
+def test_claim_spread_thresholds_are_inclusive_at_exactly_1_25():
+    p90_boundary = [1.0, 1.0, 1.05, 1.1, 1.15, 1.2, 1.22, 1.24, 1.25, 1.25]
+    p90_exact = compute_case_statistics([[value] for value in p90_boundary])
+    p90_over = compute_case_statistics([[value] for value in p90_boundary[:-2] + [1.2501, 1.2501]])
+    assert p90_exact["spread_p90_p10"] == pytest.approx(1.25)
+    assert p90_exact["stable"] is True
+    assert p90_over["spread_p90_p10"] > 1.25
+    assert p90_over["stable"] is False
+
+    max_min_exact = compute_case_statistics([[1.0], [1.25]])
+    max_min_over = compute_case_statistics([[1.0], [1.2501]])
+    assert max_min_exact["spread_ratio"] == pytest.approx(1.25)
+    assert max_min_exact["unstable_rev2"] is False
+    assert max_min_over["spread_ratio"] > 1.25
+    assert max_min_over["unstable_rev2"] is True
+
+
+def test_verdict_boundaries_are_strict_and_invalid_medians_are_inconclusive():
+    baseline = compute_case_statistics([[2.0], [3.0]])
+    touches_faster_boundary = compute_case_statistics([[1.0], [2.0]])
+    assert compare_speedup(baseline, touches_faster_boundary, "speedup")["verdict"] == (
+        "inconclusive"
+    )
+
+    touches_slower_boundary = compute_case_statistics([[1.0], [2.0]])
+    candidate = compute_case_statistics([[2.0], [3.0]])
+    assert compare_speedup(touches_slower_boundary, candidate, "speedup")["verdict"] == (
+        "inconclusive"
+    )
+
+    for invalid in (0.0, float("nan")):
+        measured = compute_case_statistics([[invalid], [1.0]])
+        comparison = compare_speedup(baseline, measured, "speedup")
+        assert comparison["verdict"] == "inconclusive"
+        assert comparison["speedup"] is None
+        assert comparison["speedup_ci_low"] is None
+        assert claim_support(comparison["verdict"], False, baseline, measured) == {
+            "direction_supported": False,
+            "magnitude_supported": False,
+            "claim_supported_rev2": False,
+        }
+
+
 def test_direction_claim_survives_instability_but_magnitude_does_not():
     cpu = compute_case_statistics([[10.0], [10.2], [10.1], [10.3]])
     # Always faster than the comparator, but its trial medians spread 2x.
@@ -1164,6 +1208,31 @@ def test_failed_readiness_stops_the_sweep_before_any_process(tmp_path):
     assert not (tmp_path / "out").exists()
 
 
+def test_invalid_monitoring_configuration_fails_before_binary_lookup(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOQUANT_MONITORING_HEARTBEAT_SECONDS", "not-an-integer")
+
+    def unexpected_binary_lookup(*_args, **_kwargs):
+        pytest.fail("binary lookup started before monitoring validation")
+
+    monkeypatch.setattr(matrix, "find_binary", unexpected_binary_lookup)
+    with pytest.raises(ConfigurationError, match="positive integer"):
+        run_cpu_snapshot(tmp_path / "out", readiness_facts=READY_FACTS)
+    assert not (tmp_path / "out").exists()
+
+
+def test_duplicate_counts_are_rejected_by_api_and_cli_before_work(tmp_path):
+    with pytest.raises(ValueError, match="counts values must be unique"):
+        run_benchmark_matrix(
+            root=ROOT,
+            output_dir=tmp_path / "api",
+            counts=[1024, 1024],
+            backends=["cpu"],
+        )
+    with pytest.raises(SystemExit):
+        matrix.main(["--counts", "1024", "1024"])
+    assert not (tmp_path / "api").exists()
+
+
 def test_readiness_override_marks_the_snapshot_non_evidence(tmp_path):
     busy = {**READY_FACTS, "stoquant_pids": [4242]}
     before = get_process_affinity()
@@ -1222,9 +1291,9 @@ def test_dense_family_inputs_match_revision_3_generator(tmp_path):
     assert list(family) == ["n1024", "n4096"]
     for count in (1024, 4096):
         meta = family[f"n{count}"]
-        assert meta["input_family"] == "dense"
-        assert meta["sha256"] == legacy[count]["sha256"]
-        assert Path(meta["_path"]).read_bytes() == Path(legacy[count]["_path"]).read_bytes()
+        assert meta.provenance.get("input_family") == "dense"
+        assert meta.provenance.get("sha256") == legacy[count].provenance.get("sha256")
+        assert meta.path.read_bytes() == legacy[count].path.read_bytes()
 
 
 def test_sparse_family_masks_the_dense_input(tmp_path):
@@ -1233,15 +1302,15 @@ def test_sparse_family_masks_the_dense_input(tmp_path):
     assert list(sparse) == ["sparse_n1024", "sparse_n16384"]
     for count in (1024, 16384):
         meta = sparse[f"sparse_n{count}"]
-        values = np.frombuffer(Path(meta["_path"]).read_bytes(), dtype="<f4")
-        source = np.frombuffer(Path(dense[f"n{count}"]["_path"]).read_bytes(), dtype="<f4")
+        values = np.frombuffer(meta.path.read_bytes(), dtype="<f4")
+        source = np.frombuffer(dense[f"n{count}"].path.read_bytes(), dtype="<f4")
         zeros = values == 0
         assert not np.signbit(values[zeros]).any()
         np.testing.assert_array_equal(values[~zeros], source[~zeros])
-        assert meta["zero_fraction_realised"] == pytest.approx(zeros.mean())
-        assert abs(meta["zero_fraction_realised"] - 0.9) < 0.03
-        assert meta["mask_seed"] == SPARSE_MASK_SEED
-        assert meta["count"] == count
+        assert meta.provenance.get("zero_fraction_realised") == pytest.approx(zeros.mean())
+        assert abs(meta.provenance.get("zero_fraction_realised", 0.0) - 0.9) < 0.03
+        assert meta.provenance.get("mask_seed") == SPARSE_MASK_SEED
+        assert meta.provenance["count"] == count
 
 
 def test_model_family_records_tensor_provenance(tmp_path):
@@ -1252,12 +1321,12 @@ def test_model_family_records_tensor_provenance(tmp_path):
         "model_layer1.0.conv1.weight",
     ]
     conv = inputs["model_conv1.weight"]
-    assert conv["tensor_shape"] == [64, 3, 3, 3]
-    assert conv["count"] == 1728
-    assert conv["seed"] == [2026, 0]
-    assert conv["std"] == pytest.approx(np.sqrt(2.0 / 27))
-    assert Path(conv["_path"]).stat().st_size == 4 * 1728
-    assert inputs["model_bn1.weight"]["std"] == 0.01
+    assert conv.provenance.get("tensor_shape") == [64, 3, 3, 3]
+    assert conv.provenance["count"] == 1728
+    assert conv.provenance.get("seed") == [2026, 0]
+    assert conv.provenance.get("std") == pytest.approx(np.sqrt(2.0 / 27))
+    assert conv.path.stat().st_size == 4 * 1728
+    assert inputs["model_bn1.weight"].provenance.get("std") == 0.01
 
 
 def test_resnet18_cifar_tensor_table():
@@ -1413,12 +1482,13 @@ def test_build_flags_are_selected_by_source_file():
         r"./tools/with-msvc.ps1 nvcc -O3 --fmad=false -c native\quantizer_cuda.cu -o build\k.obj",
     ]
     flags = parse_build_commands(commands)
-    assert flags["comparator_c"] == "/O2 /fp:strict /DSQ_ENABLE_CUDA"
-    assert flags["avx2_c"] == "/O2 /fp:precise /arch:AVX2 /openmp"
-    assert flags["cuda_nvcc"] == "-O3 --fmad=false"
-    assert flags["_host_tokens"] == ["/O2", "/fp:strict", "/DSQ_ENABLE_CUDA"]
-    assert flags["_avx2_tokens"] == ["/O2", "/fp:precise", "/arch:AVX2", "/openmp"]
-    assert parse_build_commands([])["avx2_c"] == "unknown"
+    assert flags.comparator_c == "/O2 /fp:strict /DSQ_ENABLE_CUDA"
+    assert flags.avx2_c == "/O2 /fp:precise /arch:AVX2 /openmp"
+    assert flags.cuda_nvcc == "-O3 --fmad=false"
+    assert flags.host_tokens == ["/O2", "/fp:strict", "/DSQ_ENABLE_CUDA"]
+    assert flags.avx2_tokens == ["/O2", "/fp:precise", "/arch:AVX2", "/openmp"]
+    assert "host_tokens" not in flags.as_record()
+    assert parse_build_commands([]).avx2_c == "unknown"
 
 
 def test_correctness_gate_checks_the_avx2_path_without_cuda(tmp_path):

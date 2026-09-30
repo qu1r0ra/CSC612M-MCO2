@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -23,16 +23,16 @@ from stoquant.report import (
     FIGURES,
     REPORT,
     STAGES,
-    direction_supported,
     find_crossovers,
-    load_snapshot,
-    magnitude_supported,
+    has_speedup_data,
     plot_graph_vs_resident,
     power_label,
     speedup_interval,
     stage_medians,
 )
+from stoquant.schema import read_snapshot
 from stoquant.snapshot_store import derived_directory
+from stoquant.stats import direction_supported, magnitude_supported
 
 PUBLICATION_FIGURES = {**FIGURES, "bandwidth": "appendix_bandwidth.png"}
 PATH_LABELS = dict(zip((path.label for path in PUBLICATION_PATHS), PUBLICATION_LABELS, strict=True))
@@ -155,6 +155,7 @@ def plot_publication_speedup(cases: list[dict[str, Any]], out: Path) -> None:
             if path == COMPARATOR.label:
                 continue
             selected = _rows(cases, path, bits)
+            selected = [case for case in selected if has_speedup_data(case["statistics"])]
             if not selected:
                 continue
             stats = [case["statistics"] for case in selected]
@@ -324,6 +325,8 @@ def _comparison(item: dict[str, Any]) -> str:
     if speedup is None:
         return "—"
     ci = speedup_interval(item)
+    if ci[0] is None or ci[1] is None:
+        return "—"
     return (
         f"{speedup:.3g}× [{ci[0]:.3g}, {ci[1]:.3g}]; "
         f"{item['verdict']}; direction={direction_supported(item)}; "
@@ -468,7 +471,8 @@ def render_publication_report(
         )
     second = None
     if second_platform is not None:
-        _, second_cases = load_snapshot(second_platform)
+        _, typed_second_cases = read_snapshot(second_platform)
+        second_cases = [cast(dict[str, Any], case) for case in typed_second_cases]
         second = _usable(second_cases)
     if k1_ab is None:
         candidates = sorted(snapshot.parent.glob("*-k1-ab/summary.json"))

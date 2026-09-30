@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import json
+import math
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -27,8 +27,14 @@ from stoquant.design import (
     REPORT_PATHS,
 )
 from stoquant.plotting import pyplot
+from stoquant.schema import read_snapshot
 from stoquant.snapshot_store import derived_directory
-from stoquant.stats import compute_stage_medians
+from stoquant.stats import (
+    compute_stage_medians,
+    direction_supported,
+    magnitude_supported,
+    rev2_supported,
+)
 
 # "optimized" is the opt-in AVX2 CPU comparator (issue #22): an F1 line and a
 # descriptive F2 line only. It never enters T1, the crossovers or a claim.
@@ -56,15 +62,6 @@ FIGURES = {
 REPORT = "report.md"
 
 
-def load_snapshot(snapshot: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
-    cases = [
-        json.loads((snapshot / f"{case_id}.json").read_text(encoding="utf-8"))
-        for case_id in manifest["cases"]
-    ]
-    return manifest, cases
-
-
 def index_cases(cases: list[dict[str, Any]]) -> dict[tuple[int, int, str], dict[str, Any]]:
     """Passing revision 3 cases keyed by (count, bits, timing boundary).
 
@@ -88,26 +85,21 @@ def stage_medians(case: dict[str, Any]) -> dict[str, float] | None:
     return case.get("stage_medians_ms") or compute_stage_medians(case["trial_runs"])
 
 
-def direction_supported(stats: dict[str, Any]) -> bool:
-    # Revision 2 snapshots predate the field; the rule is recomputable from them.
-    if "direction_supported" in stats:
-        return bool(stats["direction_supported"])
-    return stats["verdict"] in ("faster", "slower") and not stats.get("boundary_inversion")
-
-
-def magnitude_supported(stats: dict[str, Any]) -> bool | None:
-    return stats.get("magnitude_supported")
-
-
-def rev2_supported(stats: dict[str, Any]) -> bool:
-    return bool(stats.get("claim_supported_rev2", stats.get("claim_supported")))
-
-
-def speedup_interval(stats: dict[str, Any]) -> tuple[float, float]:
+def speedup_interval(stats: dict[str, Any]) -> tuple[float | None, float | None]:
     """The bootstrap CI, or the trial-median range for snapshots without one."""
-    if "speedup_ci_low" in stats:
-        return stats["speedup_ci_low"], stats["speedup_ci_high"]
-    return stats["speedup_low"], stats["speedup_high"]
+    low, high = stats.get("speedup_ci_low"), stats.get("speedup_ci_high")
+    if low is not None and high is not None:
+        return low, high
+    return stats.get("speedup_low"), stats.get("speedup_high")
+
+
+def has_speedup_data(stats: dict[str, Any], point_key: str = "speedup_vs_cpu") -> bool:
+    """Whether a comparison has a point and finite interval to draw or print."""
+    point = stats.get(point_key)
+    low, high = speedup_interval(stats)
+    return all(
+        isinstance(value, (int, float)) and math.isfinite(value) for value in (point, low, high)
+    )
 
 
 def plot_interval(ax, x, y, bounds, color, label) -> None:
@@ -212,7 +204,7 @@ def plot_descriptive_speedup(ax, indexed, counts, bits) -> None:
     """The AVX2 comparator as a dashed CI line with no claim markers."""
     path = AVX2_COMPARATOR.key
     rows = [indexed[(n, bits, path)] for n in counts if (n, bits, path) in indexed]
-    rows = [r for r in rows if "speedup_vs_cpu" in r["statistics"]]
+    rows = [r for r in rows if has_speedup_data(r["statistics"])]
     if not rows:
         return
     x = np.array([r["count"] for r in rows])
@@ -232,7 +224,7 @@ def plot_speedup(indexed, counts, bit_widths, out: Path) -> None:
         plot_descriptive_speedup(ax, indexed, counts, bits)
         for path in CUDA_PATHS:
             rows = [indexed[(n, bits, path)] for n in counts if (n, bits, path) in indexed]
-            rows = [r for r in rows if "speedup_vs_cpu" in r["statistics"]]
+            rows = [r for r in rows if has_speedup_data(r["statistics"])]
             if not rows:
                 continue
             x = np.array([r["count"] for r in rows])
@@ -352,7 +344,14 @@ def plot_graph_vs_resident(indexed, counts, bit_widths, out: Path) -> None:
             for n in counts
             if (n, bits, CUDA_RESIDENT_GRAPH.key) in indexed
         ]
-        rows = [r for r in rows if (r.get("statistics") or {}).get("vs_resident")]
+        rows = [
+            r
+            for r in rows
+            if has_speedup_data(
+                ((r.get("statistics") or {}).get("vs_resident") or {}),
+                "speedup_vs_resident",
+            )
+        ]
         if not rows:
             ax.set_xscale("log", base=2)
             ax.set_title(f"{bits}-bit")
@@ -452,15 +451,34 @@ def t1_table(
                     lines.append("| " + " | ".join(cells) + " |")
                     continue
                 stats = case["statistics"]
+                speedup = stats.get("speedup_vs_cpu")
+                speedup_text = (
+                    f"{speedup:.3g}×"
+                    if isinstance(speedup, (int, float)) and math.isfinite(speedup)
+                    else "—"
+                )
+                low, high = stats.get("speedup_low"), stats.get("speedup_high")
+                trial_range = (
+                    f"[{low:.3g}, {high:.3g}]"
+                    if isinstance(low, (int, float))
+                    and isinstance(high, (int, float))
+                    and math.isfinite(low)
+                    and math.isfinite(high)
+                    else "—"
+                )
+                ci_low, ci_high = stats.get("speedup_ci_low"), stats.get("speedup_ci_high")
                 ci = (
-                    f"[{stats['speedup_ci_low']:.3g}, {stats['speedup_ci_high']:.3g}]"
-                    if "speedup_ci_low" in stats
+                    f"[{ci_low:.3g}, {ci_high:.3g}]"
+                    if isinstance(ci_low, (int, float))
+                    and isinstance(ci_high, (int, float))
+                    and math.isfinite(ci_low)
+                    and math.isfinite(ci_high)
                     else "—"
                 )
                 cells += [
                     fmt_ms(stats["median_ms"]),
-                    f"{stats['speedup_vs_cpu']:.3g}×",
-                    f"[{stats['speedup_low']:.3g}, {stats['speedup_high']:.3g}]",
+                    speedup_text,
+                    trial_range,
                     ci,
                     stats["verdict"],
                     yes_no(direction_supported(stats)),
@@ -505,7 +523,9 @@ def render_report(
     k1_ab: Path | None = None,
     second_platform: Path | None = None,
 ) -> dict[str, Any]:
-    manifest, cases = load_snapshot(snapshot)
+    typed_manifest, typed_cases = read_snapshot(snapshot)
+    manifest = cast(dict[str, Any], typed_manifest)
+    cases = [cast(dict[str, Any], case) for case in typed_cases]
     if any(
         case.get("input_family", "dense") != "dense"
         or case.get("timing_boundary") == CUDA_GPU_ORIGIN.boundary
