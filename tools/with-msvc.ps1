@@ -12,6 +12,10 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
     Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
 }
 
-$command, $rest = $args
+$command = $args[0]
+$rest = @()
+if ($args.Count -gt 1) {
+    $rest = @($args[1..($args.Count - 1)])
+}
 & $command @rest
 exit $LASTEXITCODE

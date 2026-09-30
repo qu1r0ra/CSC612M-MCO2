@@ -235,3 +235,16 @@ def process_affinity(mask: int) -> Iterator[None]:
         yield
     finally:
         set_process_affinity(previous)
+
+
+@contextlib.contextmanager
+def benchmark_process_affinity() -> Iterator[dict[str, Any]]:
+    """Apply the benchmark core-exclusion policy and expose its recorded state."""
+    previous_mask = get_process_affinity()
+    mask = affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, previous_mask)
+    with process_affinity(mask):
+        yield {
+            "excluded_logical_cpus": EXCLUDED_LOGICAL_CPUS,
+            "mask": mask,
+            "previous_mask": previous_mask,
+        }

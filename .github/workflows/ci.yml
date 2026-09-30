@@ -38,6 +38,13 @@ jobs:
       - run: uv sync --locked
       - run: just test-cpu
 
+  test-cpu-asan:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: extractions/setup-just@v4
+      - run: just test-cpu-asan
+
   vec-report:
     runs-on: windows-latest
     steps:

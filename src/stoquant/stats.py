@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -182,19 +182,24 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
     comparator = stats_by_label[COMPARATOR.label]
     avx2 = stats_by_label.get(AVX2_COMPARATOR.label)
     # CPU gpu-origin adds a full input download to the comparator, so it must not beat it.
+    selected_labels = {path.label for path in paths}
     cpu_inversion = {}
     for policy in ("pageable", "pinned"):
         cpu_path = BenchPath("cpu", CPU_GPU_ORIGIN.boundary, policy)
         candidate = stats_by_label.get(cpu_path.label)
         baseline = stats_by_label.get(cpu_path.nested_paths[0].label)
-        cpu_inversion[policy] = (
-            candidate is not None
-            and baseline is not None
-            and candidate["median_ms"] < baseline["median_ms"]
-        )
+        if cpu_path.label not in selected_labels:
+            cpu_inversion[policy] = False
+        else:
+            cpu_inversion[policy] = (
+                candidate is None
+                or baseline is None
+                or candidate["median_ms"] < baseline["median_ms"]
+            )
+    selected_cuda_keys = {path.key for path in paths if path.backend == "cuda"}
     cuda_inversion = {
-        "pageable": boundary_inversion(cuda_medians),
-        "pinned": boundary_inversion(cuda_medians, "pinned"),
+        "pageable": boundary_inversion(cuda_medians, selected_keys=selected_cuda_keys),
+        "pinned": boundary_inversion(cuda_medians, "pinned", selected_keys=selected_cuda_keys),
     }
 
     def path_inversion(path: BenchPath) -> bool:
@@ -290,26 +295,37 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         }
 
 
-def boundary_inversion(medians: dict[str, float], policy: str = "pageable") -> bool:
+def boundary_inversion(
+    medians: dict[str, float],
+    policy: str = "pageable",
+    *,
+    selected_keys: set[str] | None = None,
+) -> bool:
     """CUDA boundaries nest by the work they add; a path must not beat one it contains.
 
-    Keys are CUDA path keys; policy picks one transfer policy.
+    Keys are CUDA path keys; policy picks one transfer policy. Selected paths
+    with missing medians veto dependent claims, while omitted paths do not.
     Host-origin adds copies to a resident path, gpu-origin adds the output copy to
     resident, and host-origin adds the input copy to gpu-origin.
     """
+    selected = medians.keys() if selected_keys is None else selected_keys
     for boundary in (CUDA_HOST_ORIGIN.boundary, CUDA_GPU_ORIGIN.boundary):
         path = BenchPath("cuda", boundary, policy)
+        if path.key not in selected:
+            continue
         candidate = medians.get(path.key)
         if candidate is None:
-            continue
-        if any(
-            candidate < medians[nested.key] for nested in path.nested_paths if nested.key in medians
-        ):
             return True
+        for nested in path.nested_paths:
+            if nested.key not in selected:
+                continue
+            nested_median = medians.get(nested.key)
+            if nested_median is None or candidate < nested_median:
+                return True
     return False
 
 
-def compute_stage_medians(runs: Sequence[dict[str, Any]]) -> dict[str, float] | None:
+def compute_stage_medians(runs: Sequence[Mapping[str, Any]]) -> dict[str, float] | None:
     """Median of each timed stage and of the untimed remainder of each repetition."""
     keys = [k for k in STAGE_KEYS if all(k in run for run in runs)]
     if not runs or not keys:

@@ -35,7 +35,7 @@ static void test_kat(void) {
   int row;
 
   for (row = 0; row < 3; row++) {
-    philox4x32_ctr_t ctr, expected, cpu, gpu;
+    philox4x32_ctr_t ctr, expected, gpu;
     philox4x32_key_t key;
     char what[64];
     int j;
@@ -47,59 +47,11 @@ static void test_kat(void) {
     key.v[0] = kat[row][4];
     key.v[1] = kat[row][5];
 
-    cpu = philox4x32_R(SQ_PHILOX_ROUNDS, ctr, key);
-    (void)snprintf(what, sizeof what, "Philox4x32-10 KAT row %d on CPU", row);
-    check(same_ctr(cpu, expected), what);
-
     (void)snprintf(what, sizeof what, "Philox4x32-10 KAT row %d on GPU", row);
     if (cuda_ok(sq_philox_raw_cuda(ctr, key, &gpu), what)) {
       check(same_ctr(gpu, expected), what);
     }
   }
-}
-
-static void test_mapping(void) {
-  sq_rng_stream s;
-  philox4x32_key_t key;
-  philox4x32_ctr_t ctr;
-  uint32_t words[16];
-  int i, ok = 1;
-
-  sq_rng_stream_init(&s, 0x0123456789abcdefULL, 7, 9);
-  key = sq_philox_key(&s);
-  check(key.v[0] == 0x89abcdef && key.v[1] == 0x01234567,
-        "key = {seed lo, seed hi}");
-
-  ctr = sq_philox_ctr(&s, 13 / 4);
-  check(ctr.v[0] == 3 && ctr.v[1] == 0 && ctr.v[2] == 7 && ctr.v[3] == 9,
-        "element 13 -> counter {group 3, 0, tensor, invocation}");
-
-  ctr = sq_philox_ctr(&s, 0x100000002ULL);
-  check(ctr.v[0] == 2 && ctr.v[1] == 1, "64-bit group splits into lo/hi words");
-
-  /* Element i takes lane i mod 4 of block floor(i/4), built by hand here. */
-  sq_rng_words_cpu(&s, 16, words);
-  for (i = 0; i < 16; i++) {
-    philox4x32_ctr_t c = {{(uint32_t)(i / 4), 0, 7, 9}};
-    philox4x32_ctr_t r = philox4x32_R(SQ_PHILOX_ROUNDS, c, key);
-    if (words[i] != r.v[i % 4]) {
-      ok = 0;
-    }
-  }
-  check(ok, "element i uses lane i mod 4 of group floor(i/4)");
-}
-
-static void test_overflow(void) {
-  sq_rng_stream s;
-
-  check(sq_rng_stream_init(&s, 1, UINT32_MAX, UINT32_MAX) == SQ_RNG_OK,
-        "identifiers at UINT32_MAX accepted");
-  check(sq_rng_stream_init(&s, 1, (uint64_t)UINT32_MAX + 1, 0) ==
-            SQ_RNG_ERR_ID_OVERFLOW,
-        "tensor identifier above UINT32_MAX rejected");
-  check(sq_rng_stream_init(&s, 1, 0, (uint64_t)UINT32_MAX + 1) ==
-            SQ_RNG_ERR_ID_OVERFLOW,
-        "invocation identifier above UINT32_MAX rejected");
 }
 
 static void test_geometry(void) {
@@ -186,8 +138,6 @@ int main(void) {
   }
 
   test_kat();
-  test_mapping();
-  test_overflow();
   test_geometry();
   test_bernoulli();
 

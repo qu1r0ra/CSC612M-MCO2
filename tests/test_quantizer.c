@@ -118,6 +118,7 @@ int main(void) {
   /* Edge case: non-multiple length (5, 257) round trips */
   {
     static const size_t odd_lengths[] = {1, 3, 5, 257};
+    static const uint8_t expected_last_nibbles[] = {0x0A, 0x0C, 0x0C, 0x0D};
     size_t l_idx;
     for (l_idx = 0; l_idx < sizeof odd_lengths / sizeof odd_lengths[0];
          l_idx++) {
@@ -128,19 +129,46 @@ int main(void) {
       float *out_vals = NULL;
       size_t out_count = 0;
       size_t k;
+      int decode_status;
+      int decoded_match = 1;
 
       for (k = 0; k < n; k++) {
         test_in[k] = (float)(k + 1);
+        test_words[k] = UINT32_MAX;
       }
       check(sq_header_encode(4, (uint64_t)n, (float)(n + 1), rec) == SQ_OK,
             "non-multiple length header encode");
       check(sq_encode_payload(4, test_in, n, (float)(n + 1), test_words,
                               rec + SQ_HEADER_SIZE) == SQ_OK,
             "non-multiple length payload encode");
-      check(sq_decode_record(rec, SQ_HEADER_SIZE + (n + 1) / 2, &out_vals,
-                             &out_count) == SQ_OK &&
-                out_count == n,
+      check((rec[SQ_HEADER_SIZE + n / 2] & 0x0F) ==
+                expected_last_nibbles[l_idx],
+            "odd-length 4-bit encoder preserves the final element nibble");
+      decode_status = sq_decode_record(rec, SQ_HEADER_SIZE + (n + 1) / 2,
+                                       &out_vals, &out_count);
+      check(decode_status == SQ_OK && out_count == n && out_vals != NULL,
             "non-multiple length decodes without error");
+#pragma warning(push)
+#pragma warning(disable : 6001)
+      /* A successful sq_decode_record initializes every returned value. */
+      if (decode_status == SQ_OK && out_vals != NULL && out_count == n) {
+        for (k = 0; k < n; k++) {
+          uint8_t byte = rec[SQ_HEADER_SIZE + k / 2];
+          uint8_t nibble = (k % 2 == 0) ? (byte & 0x0F) : (byte >> 4);
+          float expected_value =
+              ((float)((int)nibble - 7) / 7.0f) * (float)(n + 1);
+          if (out_vals[k] != expected_value) {
+            decoded_match = 0;
+          }
+        }
+        check(decoded_match,
+              "odd-length 4-bit round trip preserves every decoded value");
+      }
+#pragma warning(pop)
+      if (n % 2 != 0) {
+        check((rec[SQ_HEADER_SIZE + n / 2] & 0xF0) == 0,
+              "odd-length 4-bit payload leaves the unused high nibble clear");
+      }
       free(out_vals);
       free(rec);
       free(test_words);

@@ -9,7 +9,6 @@ Status: accepted protocol; executable benchmark implemented with frozen course s
 | `mco2` binary, process and subcommands (`mco2 bench`, `mco2 compress`, `mco2 --threads`) | `stoquant` (`build/stoquant`) |
 | `benchmark_driver.py` | `src/stoquant/matrix.py` (entry point), split across `provenance`, `inputs`, `vectorization`, `host` (readiness, `WINDOW_ALLOWLIST`), `design`, `runner`, `correctness`, `stats` and `oracle` |
 | `bench_report.py` | `src/stoquant/report.py` |
-| `scripts/diag_resident.py` | `tools/diag_resident.py` |
 
 The benchmark must expose the cost of normalization, random-number generation, rounding, packing, and required transfers.
 Do not headline a CUDA speedup from Python interpreter overhead or from separately timed stages summed into a complete path.
@@ -75,7 +74,7 @@ This revision was fixed before its sweep ran. Run 1 stays the pre-registered res
 
 #### Diagnosis
 
-`scripts/diag_resident.py` runs the resident path, 8-bit, at `2^14` and `2^20` as 36 separate processes for each condition, with conditions interleaved in a shuffled order. It logs `nvidia-smi` clocks and power state every 50 ms. A process counts as slow when its kernel-event median exceeds 1.5× the fastest process of that size. The spread column groups consecutive processes in sixes, as one case's six trials would be, and counts the groups within the 1.25 limit. The evidence is in `results/diag-2026-09-26-issue-26/`; its inputs are regenerated from the fixed seed and not committed.
+The resident path was measured at 8-bit, at `2^14` and `2^20`, as 36 separate processes for each condition, with conditions interleaved in a shuffled order. GPU clocks and power state were logged every 50 ms. A process counts as slow when its kernel-event median exceeds 1.5× the fastest process of that size. The spread column groups consecutive processes in sixes, as one case's six trials would be, and counts the groups within the 1.25 limit. These were diagnostic runs and support no claim; their raw outputs have been retired.
 
 | Run | Condition | Slow processes `2^14` | Slow processes `2^20` | Groups within 1.25, `2^14` / `2^20` |
 | --- | --- | --- | --- | --- |
@@ -161,7 +160,7 @@ This revision was fixed and merged before its pilot and its sweep ran. The run 1
 
 #### Diagnosis
 
-The evidence is in [`results/trace-2026-09-26-issue-30/`](../results/trace-2026-09-26-issue-30/README.md). It ran from an uncommitted tree and supports no claim.
+The diagnosis ran from an uncommitted tree and supports no claim. Its raw outputs have been retired.
 
 - **The resident path is launch-bound below about `2^21`.** Under Nsight Systems, kernel busy time was 9.0 µs per repetition in all 72 traced processes at `2^14`, 8-bit. Span per repetition ran from 136 to 920 µs, so GPU compute was under 7% of it.
 - **Slow processes are slow on the CPU side, and the level is per process.** The `cudaLaunchKernel` median fell into discrete levels (about 6, 9, 30 and 48 µs). A process kept its level for its whole life, and the GPU gaps followed the API interval.

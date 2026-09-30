@@ -40,14 +40,11 @@ from stoquant.design import (
     trial_orders,
 )
 from stoquant.host import (
-    EXCLUDED_LOGICAL_CPUS,
     MAX_UPTIME_SECONDS,
     WINDOW_ALLOWLIST,
-    affinity_mask_excluding,
+    benchmark_process_affinity,
     check_readiness,
-    get_process_affinity,
     probe_readiness_facts,
-    process_affinity,
 )
 from stoquant.inputs import (
     DEFAULT_INPUT_SEED,
@@ -238,9 +235,7 @@ def run_benchmark_matrix(
     trial_orders(paths, trials)
 
     # Revision 3: every probe and benchmark process runs off physical core 0.
-    previous_mask = get_process_affinity()
-    mask = affinity_mask_excluding(EXCLUDED_LOGICAL_CPUS, previous_mask)
-    with process_affinity(mask):
+    with benchmark_process_affinity() as affinity:
         git_prov = collect_git_provenance(root)
 
         target_dir = output_dir or snapshot_path(
@@ -287,9 +282,10 @@ def run_benchmark_matrix(
         }
 
         run_conditions["affinity"] = {
-            "excluded_logical_cpus": list(EXCLUDED_LOGICAL_CPUS),
-            "mask": hex(mask),
-            "previous_mask": hex(previous_mask),
+            **affinity,
+            "excluded_logical_cpus": list(affinity["excluded_logical_cpus"]),
+            "mask": hex(affinity["mask"]),
+            "previous_mask": hex(affinity["previous_mask"]),
             "applied_to": "driver process before any benchmark or probe process; inherited",
         }
         snapshot = create_snapshot(target_dir, git_prov, allow_dirty=allow_dirty)
@@ -824,7 +820,7 @@ def write_case_outputs(
             json.dumps(case, indent=2), encoding="utf-8"
         )
         stats = case["statistics"]
-        if case["correctness"]["status"] != "passed" or stats is None or "verdict" not in stats:
+        if case["correctness"]["status"] != "passed":
             rows.append(
                 failed_row(
                     count,
@@ -841,7 +837,8 @@ def write_case_outputs(
                 )
             )
             continue
-        rows.append(
+        row: dict[str, Any] = dict.fromkeys(SUMMARY_FIELDS, "")
+        row.update(
             {
                 "count": count,
                 "input_family": input_family,
@@ -855,27 +852,42 @@ def write_case_outputs(
                 "warmup": case["warmup"],
                 "reps": reps,
                 "trials": trials,
-                "median_ms": f"{stats['median_ms']:.6f}",
-                "iqr_ms": f"{stats['iqr_ms']:.6f}",
-                "trial_median_min_ms": f"{stats['trial_median_min_ms']:.6f}",
-                "trial_median_max_ms": f"{stats['trial_median_max_ms']:.6f}",
-                "spread_ratio": f"{stats['spread_ratio']:.4f}",
-                "spread_p90_p10": f"{stats['spread_p90_p10']:.4f}",
-                "stable": csv_flag(stats["stable"]),
-                "unstable_rev2": csv_flag(stats["unstable_rev2"]),
-                "baseline": stats["baseline"],
-                "speedup_vs_c": f"{stats['speedup_vs_cpu']:.4f}",
-                "speedup_low": f"{stats['speedup_low']:.4f}",
-                "speedup_high": f"{stats['speedup_high']:.4f}",
-                "speedup_ci_low": f"{stats['speedup_ci_low']:.4f}",
-                "speedup_ci_high": f"{stats['speedup_ci_high']:.4f}",
-                "verdict": stats["verdict"],
-                "boundary_inversion": csv_flag(stats["boundary_inversion"]),
-                "direction_supported": csv_flag(stats["direction_supported"]),
-                "magnitude_supported": csv_flag(stats["magnitude_supported"]),
-                "claim_supported_rev2": csv_flag(stats["claim_supported_rev2"]),
             }
         )
+        if stats is not None:
+            for source, destination, precision in (
+                ("median_ms", "median_ms", 6),
+                ("iqr_ms", "iqr_ms", 6),
+                ("trial_median_min_ms", "trial_median_min_ms", 6),
+                ("trial_median_max_ms", "trial_median_max_ms", 6),
+                ("spread_ratio", "spread_ratio", 4),
+                ("spread_p90_p10", "spread_p90_p10", 4),
+                ("speedup_vs_cpu", "speedup_vs_c", 4),
+                ("speedup_low", "speedup_low", 4),
+                ("speedup_high", "speedup_high", 4),
+                ("speedup_ci_low", "speedup_ci_low", 4),
+                ("speedup_ci_high", "speedup_ci_high", 4),
+            ):
+                if source in stats:
+                    row[destination] = f"{stats[source]:.{precision}f}"
+            for source in ("stable", "unstable_rev2", "boundary_inversion"):
+                if source in stats:
+                    row[source] = csv_flag(stats[source])
+            for source in (
+                "baseline",
+                "verdict",
+                "direction_supported",
+                "magnitude_supported",
+                "claim_supported_rev2",
+            ):
+                if source in stats:
+                    row[source] = (
+                        csv_flag(stats[source])
+                        if source
+                        in {"direction_supported", "magnitude_supported", "claim_supported_rev2"}
+                        else stats[source]
+                    )
+        rows.append(row)
     return rows
 
 
@@ -955,6 +967,15 @@ def write_manifest(
     in_process_warmup_seconds = settings.in_process_warmup_seconds
     paths = settings.paths
     dense = settings.dense
+    failed_case_ids = [
+        case["case_id"] for case in case_results if case["correctness"]["status"] != "passed"
+    ]
+    conditions = dict(run_conditions)
+    reasons = list(conditions["non_evidence_reasons"])
+    if failed_case_ids:
+        reasons.append("failed benchmark cases: " + ", ".join(failed_case_ids))
+    conditions["evidence"] = bool(conditions["evidence"] and not failed_case_ids)
+    conditions["non_evidence_reasons"] = reasons
     manifest_data = {
         "manifest_version": "3.2",
         "date": date_str,
@@ -1059,7 +1080,7 @@ def write_manifest(
                 "rule": BOOTSTRAP_RULE,
             },
         },
-        "run_conditions": run_conditions,
+        "run_conditions": conditions,
         # Dense inputs stay keyed by count, as in revision 3.
         "inputs": {
             (meta["count"] if dense else key): meta for key, meta in inputs.clean_meta.items()
@@ -1067,7 +1088,7 @@ def write_manifest(
         "summary_csv": csv_path.name,
         "msvc_vectorization_report": vec_report_path.name,
         "cases": [c["case_id"] for c in case_results],
-        "all_cases_passed": all(c["correctness"]["status"] == "passed" for c in case_results),
+        "all_cases_passed": not failed_case_ids,
     }
 
     manifest_path = target_dir / "manifest.json"
@@ -1222,6 +1243,15 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
             model_limit=args.model_limit,
             k1=args.k1,
         )
+        manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+        if not manifest["all_cases_passed"]:
+            reasons = manifest["run_conditions"]["non_evidence_reasons"]
+            print(
+                "Benchmark completed with failed cases; snapshot is non-evidence. "
+                f"Reasons: {'; '.join(reasons)}. Snapshot: {snapshot_dir}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         print(f"Benchmark completed successfully. Snapshot written to: {snapshot_dir}")
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
         print(f"Benchmark driver failed: {exc}", file=sys.stderr)
