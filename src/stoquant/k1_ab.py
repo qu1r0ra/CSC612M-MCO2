@@ -73,6 +73,12 @@ from stoquant.runner import (
     run_bench_process,
     warm_up_gpu,
 )
+from stoquant.snapshot_store import (
+    check_snapshot,
+    create_snapshot,
+    derived_directory,
+    snapshot_path,
+)
 from stoquant.stats import (
     claim_support,
     compare_speedup,
@@ -332,21 +338,18 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
 
     if args.figure is not None:
         summary = json.loads((args.figure / "summary.json").read_text(encoding="utf-8"))
-        plot_f5(summary, args.figure / "f5_k1_stages.png")
+        plot_f5(summary, derived_directory(args.figure) / "f5_k1_stages.png")
         return
-    if args.output_dir is None:
-        sys.exit("--output-dir is required unless --figure is given.")
     counts = args.counts or list(K1_AB_PILOT_COUNTS if args.pilot else DEFAULT_COUNTS)
     processes = args.processes or (PILOT_PROCESSES if args.pilot else DEFAULT_PROCESSES)
     evidence = is_default_design(args, counts, processes)
 
     root = layout.ROOT
     git = collect_git_provenance(root)
-    if git["git_dirty"] and not args.allow_dirty:
-        sys.exit("Working tree is dirty; an A/B run must trace to a committed revision.")
-    out = args.output_dir
-    if out.exists() and any(out.iterdir()):
-        sys.exit(f"{out} is not empty; snapshots are never overwritten.")
+    final = args.output_dir or snapshot_path(
+        root, git["code_revision_short"], "k1-ab", pilot=args.pilot
+    )
+    check_snapshot(final, git, allow_dirty=args.allow_dirty)
     binary = find_binary(root)
     probe_binary = probe_path(root)
     build = collect_build_commands(root)
@@ -392,7 +395,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         gpu_probe_end = query_gpu_state()
         device = probe["device"]
         ceiling = probe_ceiling(probe, device["l2_bytes"])
-        out.mkdir(parents=True, exist_ok=True)
+        snapshot = create_snapshot(final, git, allow_dirty=args.allow_dirty)
+        out = snapshot.partial
         (out / "stream_probe.json").write_text(json.dumps(probe, indent=2), encoding="utf-8")
         warmups = {}
         for count, bits in cells:
@@ -480,7 +484,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         "decision": keep_decision(cell_summaries),
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    plot_f5(summary, out / "f5_k1_stages.png")
+    plot_f5(summary, derived_directory(out) / "f5_k1_stages.png")
+    snapshot.commit()
     for cell in cell_summaries:
         k1 = cell["k1_comparison"]
         arms = cell["arms"]

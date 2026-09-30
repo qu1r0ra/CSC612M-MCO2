@@ -15,6 +15,7 @@ from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from stoquant import layout
+from stoquant.snapshot_store import discover, progress
 
 DEFAULT_SERVER = "https://ntfy.sh"
 DEFAULT_HEARTBEAT_SECONDS = 3600
@@ -136,18 +137,7 @@ def _run_family(command: list[str]) -> str:
 
 
 def _snapshot_directories(root: Path) -> set[Path]:
-    results = root / "results"
-    if not results.is_dir():
-        return set()
-    snapshots: set[Path] = set()
-    for path in results.iterdir():
-        if not path.is_dir():
-            continue
-        if path.name == "pilots":
-            snapshots.update(child for child in path.iterdir() if child.is_dir())
-        else:
-            snapshots.add(path)
-    return snapshots
+    return discover(root)
 
 
 def _explicit_output_directory(root: Path, command: list[str]) -> Path | None:
@@ -169,8 +159,12 @@ def _snapshot_for_run(
     previous_snapshots: set[Path],
 ) -> Path | None:
     explicit = _explicit_output_directory(root, command)
-    if explicit is not None and explicit.exists():
-        return explicit
+    if explicit is not None:
+        partial = explicit.with_name(explicit.name + ".partial")
+        if partial.exists():
+            return partial
+        if explicit.exists():
+            return explicit
     candidates = _snapshot_directories(root) - previous_snapshots
     return max(candidates, key=lambda path: path.stat().st_mtime, default=None)
 
@@ -185,19 +179,7 @@ def _snapshot_progress(
     except ValueError:
         relative = None
 
-    completed = len(list(snapshot.glob("case_*.json")))
-    manifest_path = snapshot / "manifest.json"
-    total = None
-    if manifest_path.is_file():
-        try:
-            import json
-
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            cases = manifest.get("cases")
-            if isinstance(cases, list):
-                total = len(cases)
-        except (OSError, ValueError):
-            pass
+    completed, total = progress(snapshot)
     return relative, completed, total
 
 

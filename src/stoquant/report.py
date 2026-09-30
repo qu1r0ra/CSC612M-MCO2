@@ -2,7 +2,7 @@
 
 Reads a frozen snapshot (manifest.json plus one JSON per case) and writes
 F1-F4 as PNG files and ``report.md`` into the output directory, which defaults
-to the snapshot itself. Nothing in the snapshot is rewritten.
+to the snapshot's ``derived/`` folder. Raw snapshot files are never rewritten.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from stoquant.plotting import pyplot
+from stoquant.snapshot_store import derived_directory
 from stoquant.stats import compute_stage_medians
 
 # "optimized" is the opt-in AVX2 CPU comparator (issue #22): an F1 line and a
@@ -522,7 +523,7 @@ def render_report(
         return render_publication_report(
             snapshot, manifest, cases, output_dir, k1_ab, second_platform
         )
-    out = output_dir or snapshot
+    out = output_dir if output_dir is not None else derived_directory(snapshot)
     out.mkdir(parents=True, exist_ok=True)
     indexed = index_cases(cases)
     counts = sorted({c["count"] for c in cases})
@@ -588,7 +589,7 @@ def render_report(
         *[f"- ![{key.upper()}]({name})" for key, name in FIGURES.items()],
         "",
     ]
-    (out / REPORT).write_text("\n".join(report), encoding="utf-8")
+    (out / REPORT).write_text("\n".join(report), encoding="utf-8", newline="\n")
     return {
         "figures": [out / name for name in FIGURES.values()],
         "report": out / REPORT,

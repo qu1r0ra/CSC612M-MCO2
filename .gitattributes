@@ -1,0 +1,3 @@
+* text=auto eol=lf
+tests/golden/** text eol=lf
+results/**/report.md text eol=lf

@@ -68,7 +68,6 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
         reps=2,
         trials=2,
         in_process_warmup_seconds=0,
-        allow_existing=True,
         allow_dirty=True,
         readiness_facts=READY_FACTS,
     )
@@ -165,7 +164,6 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
         gpu_warmup_seconds=0.5,
         case_warmup_seconds=0.2,
         in_process_warmup_seconds=0.01,
-        allow_existing=True,
         allow_dirty=True,
         readiness_facts=READY_FACTS,
     )
@@ -427,7 +425,6 @@ def test_driver_extension_matrix_adds_gpu_origin_and_pinned_paths(tmp_path):
         gpu_warmup_seconds=0.2,
         case_warmup_seconds=0.1,
         in_process_warmup_seconds=0.01,
-        allow_existing=True,
         allow_dirty=True,
         readiness_facts=READY_FACTS,
         boundaries=["gpu-origin"],
@@ -517,7 +514,6 @@ def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
         bench_process=FakeBenchProcess(
             [subprocess.CompletedProcess(["stoquant", "compress"], 1, "", "forced failure")]
         ),
-        allow_existing=True,
         allow_dirty=True,
         readiness_facts=READY_FACTS,
     )
@@ -563,7 +559,6 @@ def test_driver_refuses_to_overwrite_existing_snapshot(tmp_path):
             bit_widths=[4],
             warmups=1,
             reps=1,
-            allow_existing=False,
             allow_dirty=True,
         )
 
@@ -1170,7 +1165,6 @@ def test_driver_cpu_only_family_snapshot(tmp_path, family, extra, keys):
         reps=2,
         trials=2,
         in_process_warmup_seconds=0,
-        allow_existing=True,
         allow_dirty=True,
         readiness_facts=READY_FACTS,
         input_family=family,
@@ -1325,7 +1319,6 @@ def test_driver_cpu_avx2_snapshot_records_threads_and_flags(tmp_path):
         reps=2,
         trials=2,
         in_process_warmup_seconds=0,
-        allow_existing=True,
         allow_dirty=True,
         readiness_facts=READY_FACTS,
     )

@@ -287,6 +287,8 @@ def live_runs(work: Path) -> dict[str, Any]:
         # Exit codes are compared: 8 seeds are too few for the unbiasedness gate.
         result = run([*INVOCATION[command], "--output-dir", target, *args], log)
         if not target.exists():
+            target = target.with_name(target.name + ".partial")
+        if not target.exists():
             raise SystemExit(f"{name} wrote nothing ({result.returncode}), log {log}")
         out[name] = {"exit_code": result.returncode, "files": fingerprint_live_dir(target)}
     return out
@@ -396,7 +398,7 @@ def outcome(
         last = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else ""
         return {"error": BINARY_NAME.sub("<binary>", scrub_paths(last, work, REPO))}
     files = hash_tree(target)
-    return {k: v for k, v in files.items() if only is None or k == only}
+    return {k: v for k, v in files.items() if only is None or Path(k).name == only}
 
 
 def results_state() -> tuple[str, dict[str, str]]:

@@ -53,6 +53,7 @@ from stoquant.runner import (
     run_bench_process,
     warm_up_gpu,
 )
+from stoquant.snapshot_store import check_snapshot, create_snapshot, snapshot_path
 from stoquant.stats import compute_case_statistics
 
 # SQ_CUDA_REDUCTION_THREADS in native/quantizer_cuda.cu.
@@ -223,7 +224,7 @@ def run_resident(binary: Path, input_path: Path, bits: int, warmups: int, reps: 
 
 def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     parser = argparse.ArgumentParser(prog=prog, description=__doc__)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--counts", type=int, nargs="+", default=list(DEFAULT_COUNTS))
     parser.add_argument("--bits", type=int, nargs="+", default=list(DEFAULT_BITS))
     parser.add_argument("--processes", type=int, default=DEFAULT_PROCESSES)
@@ -239,11 +240,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
 
     root = layout.ROOT
     git = collect_git_provenance(root)
-    if git["git_dirty"] and not args.allow_dirty:
-        sys.exit("Working tree is dirty; a baseline must trace to a committed revision.")
-    out = args.output_dir
-    if out.exists() and any(out.iterdir()):
-        sys.exit(f"{out} is not empty; snapshots are never overwritten.")
+    final = args.output_dir or snapshot_path(root, git["code_revision_short"], "k1-baseline")
+    check_snapshot(final, git, allow_dirty=args.allow_dirty)
     binary = find_binary(root)
     probe_binary = probe_path(root)
     build = collect_build_commands(root)
@@ -275,7 +273,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         gpu_probe_end = query_gpu_state()
         device = probe["device"]
         ceiling = probe_ceiling(probe, device["l2_bytes"])
-        out.mkdir(parents=True, exist_ok=True)
+        snapshot = create_snapshot(final, git, allow_dirty=args.allow_dirty)
+        out = snapshot.partial
         (out / "stream_probe.json").write_text(json.dumps(probe, indent=2), encoding="utf-8")
         warmups = {}
         for count, bits in cells:
@@ -367,6 +366,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         "cells": cell_summaries,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    snapshot.commit()
     for cell in cell_summaries:
         fraction = cell["fraction_of_peak"]
         print(

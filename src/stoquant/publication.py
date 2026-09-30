@@ -22,6 +22,7 @@ from stoquant.report import (
     speedup_interval,
     stage_medians,
 )
+from stoquant.snapshot_store import derived_directory
 
 PUBLICATION_FIGURES = {**FIGURES, "bandwidth": "appendix_bandwidth.png"}
 PATH_LABELS = {
@@ -456,7 +457,7 @@ def render_publication_report(
     k1_ab: Path | None,
     second_platform: Path | None,
 ) -> dict[str, Any]:
-    out = output_dir or snapshot
+    out = output_dir if output_dir is not None else derived_directory(snapshot)
     out.mkdir(parents=True, exist_ok=True)
     usable = _usable(cases)
     if len(usable) != len(cases):
@@ -487,7 +488,9 @@ def render_publication_report(
         out / FIGURES["f4"],
     )
     bandwidth = plot_bandwidth(manifest, usable, k1_ab, out / PUBLICATION_FIGURES["bandwidth"])
-    (out / REPORT).write_text("\n".join(_report_lines(usable, manifest)), encoding="utf-8")
+    (out / REPORT).write_text(
+        "\n".join(_report_lines(usable, manifest)), encoding="utf-8", newline="\n"
+    )
     return {
         "figures": [out / name for name in PUBLICATION_FIGURES.values()],
         "report": out / REPORT,
