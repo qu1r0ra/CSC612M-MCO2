@@ -58,6 +58,86 @@ class BenchPath:
             args += ["--transfer-policy", "pinned"]
         return args
 
+    @property
+    def baseline(self) -> BenchPath | None:
+        """The policy-matched path used for claims against this path."""
+        if self == COMPARATOR:
+            return None
+        if self.backend == "cuda" and self.boundary == "gpu-origin":
+            return BenchPath("cpu", "gpu-origin", self.policy)
+        return COMPARATOR
+
+    @property
+    def pageable_twin(self) -> BenchPath:
+        return BenchPath(self.backend, self.boundary, "pageable")
+
+    @property
+    def nested_paths(self) -> tuple[BenchPath, ...]:
+        """Paths whose measured work is contained in this path's work."""
+        if self.backend == "cpu" and self.boundary == CPU_GPU_ORIGIN.boundary:
+            return (COMPARATOR,)
+        if self.backend == "cuda" and self.boundary == CUDA_GPU_ORIGIN.boundary:
+            return (CUDA_RESIDENT,)
+        if self.backend == "cuda" and self.boundary == CUDA_HOST_ORIGIN.boundary:
+            return (
+                CUDA_RESIDENT,
+                CUDA_RESIDENT_GRAPH,
+                BenchPath("cuda", CUDA_GPU_ORIGIN.boundary, self.policy),
+            )
+        return ()
+
+
+COMPARATOR = BenchPath("cpu", "comparator", "none")
+AVX2_COMPARATOR = BenchPath("cpu-avx2", "optimized", "none")
+CUDA_RESIDENT = BenchPath("cuda", "resident", "none")
+CUDA_RESIDENT_GRAPH = BenchPath("cuda", "resident-graph", "none")
+CUDA_HOST_ORIGIN = BenchPath("cuda", "host-origin", "pageable")
+CUDA_HOST_ORIGIN_PINNED = BenchPath("cuda", "host-origin", "pinned")
+CPU_GPU_ORIGIN = BenchPath("cpu", "gpu-origin", "pageable")
+CUDA_GPU_ORIGIN = BenchPath("cuda", "gpu-origin", "pageable")
+CPU_GPU_ORIGIN_PINNED = BenchPath("cpu", "gpu-origin", "pinned")
+CUDA_GPU_ORIGIN_PINNED = BenchPath("cuda", "gpu-origin", "pinned")
+
+REPORT_PATHS = (
+    COMPARATOR,
+    AVX2_COMPARATOR,
+    CUDA_RESIDENT,
+    CUDA_RESIDENT_GRAPH,
+    CUDA_HOST_ORIGIN,
+)
+PUBLICATION_PATHS = (
+    *REPORT_PATHS,
+    CUDA_HOST_ORIGIN_PINNED,
+    CPU_GPU_ORIGIN,
+    CUDA_GPU_ORIGIN,
+    CPU_GPU_ORIGIN_PINNED,
+    CUDA_GPU_ORIGIN_PINNED,
+)
+REPORT_LABELS = (
+    "C comparator",
+    "AVX2 comparator (descriptive)",
+    "CUDA resident",
+    "CUDA resident-graph",
+    "CUDA host-origin",
+)
+PUBLICATION_LABELS = (
+    "C comparator",
+    "AVX2 comparator (descriptive)",
+    "CUDA resident",
+    "CUDA resident-graph",
+    "CUDA host-origin pageable",
+    "CUDA host-origin pinned",
+    "CPU GPU-origin pageable",
+    "CUDA GPU-origin pageable",
+    "CPU GPU-origin pinned",
+    "CUDA GPU-origin pinned",
+)
+PINNED_PAIRS = (
+    (CUDA_HOST_ORIGIN, CUDA_HOST_ORIGIN_PINNED),
+    (CPU_GPU_ORIGIN, CPU_GPU_ORIGIN_PINNED),
+    (CUDA_GPU_ORIGIN, CUDA_GPU_ORIGIN_PINNED),
+)
+
 
 def build_paths(
     backends: Sequence[str],
@@ -78,17 +158,13 @@ def build_paths(
         raise ValueError("the publication extension needs the 'cuda' backend")
     policies = [policy for policy in TRANSFER_POLICIES if policy in transfer_policies]
 
-    paths = [BenchPath("cpu", "comparator", "none")]
+    paths = [COMPARATOR]
     if "cpu-avx2" in backends:
-        paths.append(BenchPath("cpu-avx2", "optimized", "none"))
+        paths.append(AVX2_COMPARATOR)
     if "cuda" in backends:
-        paths += [
-            BenchPath("cuda", "resident", "none"),
-            BenchPath("cuda", "resident-graph", "none"),
-            BenchPath("cuda", "host-origin", "pageable"),
-        ]
+        paths += [CUDA_RESIDENT, CUDA_RESIDENT_GRAPH, CUDA_HOST_ORIGIN]
         if "pinned" in policies:
-            paths.append(BenchPath("cuda", "host-origin", "pinned"))
+            paths.append(CUDA_HOST_ORIGIN_PINNED)
     if "gpu-origin" in boundaries:
         for policy in policies:
             paths += [

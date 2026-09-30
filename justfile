@@ -77,11 +77,13 @@ toolchain:
 build-rng:
     New-Item -ItemType Directory -Force build | Out-Null
     ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_warn_flags}} {{rng_sources}} -o build/test_rng.exe
+    uv run python -m stoquant.build_stamp build-rng build/test_rng.exe
 
 [unix]
 build-rng:
     mkdir -p build
     nvcc {{nvcc_flags}} {{nvcc_warn_flags}} {{rng_sources}} -o build/test_rng
+    uv run python -m stoquant.build_stamp build-rng build/test_rng
 
 # Run the RNG checks on CPU and GPU; exits nonzero on any failure
 test-rng: build-rng
@@ -100,6 +102,7 @@ build-cpu:
     ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} /c native\rng_cpu.c /Fo:build\rng_cpu.obj
     ./tools/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c native\quantizer_avx2.c /Fo:build\quantizer_avx2.obj
     ./tools/with-msvc.ps1 cl.exe /nologo build\main.obj build\cli.obj build\bench_report.obj build\sq_status.obj build\codec.obj build\quantizer.obj build\rng_cpu.obj build\quantizer_avx2.obj /Fe:build\stoquant.exe
+    uv run python -m stoquant.build_stamp build-cpu build/stoquant.exe
 
 [unix]
 build-cpu:
@@ -113,6 +116,7 @@ build-cpu:
     ${CC:-cc} {{cc_host_flags}} {{cc_includes}} -c native/rng_cpu.c -o build/rng_cpu.o
     ${CC:-cc} {{avx2_cc_flags}} -c native/quantizer_avx2.c -o build/quantizer_avx2.o
     ${CC:-cc} -fopenmp build/main.o build/cli.o build/bench_report.o build/sq_status.o build/codec.o build/quantizer.o build/rng_cpu.o build/quantizer_avx2.o -lm -o build/stoquant
+    uv run python -m stoquant.build_stamp build-cpu build/stoquant
 
 # Build the CUDA-enabled 4-bit and 8-bit compression CLI. Keep host sources in C mode
 # so the CPU and CUDA paths share the same C implementation and ABI.
@@ -129,6 +133,7 @@ build-cuda:
     ./tools/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c native\quantizer_avx2.c /Fo:build\quantizer_avx2_cuda.obj
     ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -c native\quantizer_cuda.cu -o build\quantizer_cuda.obj
     ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} build\main_cuda.obj build\cli_cuda.obj build\bench_report_cuda.obj build\sq_status_cuda.obj build\codec_cuda.obj build\quantizer_cuda_host.obj build\rng_cpu_cuda.obj build\quantizer_avx2_cuda.obj build\quantizer_cuda.obj -o build\stoquant.exe
+    uv run python -m stoquant.build_stamp build-cuda build/stoquant.exe
 
 [unix]
 build-cuda:
@@ -143,6 +148,7 @@ build-cuda:
     ${CC:-cc} {{avx2_cc_flags}} -c native/quantizer_avx2.c -o build/quantizer_avx2_cuda.o
     nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -c native/quantizer_cuda.cu -o build/quantizer_cuda.o
     nvcc {{nvcc_flags}} {{nvcc_fp_flags}} build/main_cuda.o build/cli_cuda.o build/bench_report_cuda.o build/sq_status_cuda.o build/codec_cuda.o build/quantizer_cuda_host.o build/rng_cpu_cuda.o build/quantizer_avx2_cuda.o build/quantizer_cuda.o -lm -Xcompiler -fopenmp -o build/stoquant
+    uv run python -m stoquant.build_stamp build-cuda build/stoquant
 
 # Build a fault-injection CLI beside the evidence binary (test only; never
 # overwrites build/stoquant)
@@ -150,32 +156,38 @@ build-cuda:
 build-cuda-fault: build-cuda
     ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -DSQ_CUDA_FAULT_INJECTION -c native\quantizer_cuda.cu -o build\quantizer_cuda_fault.obj
     ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} build\main_cuda.obj build\cli_cuda.obj build\bench_report_cuda.obj build\sq_status_cuda.obj build\codec_cuda.obj build\quantizer_cuda_host.obj build\rng_cpu_cuda.obj build\quantizer_avx2_cuda.obj build\quantizer_cuda_fault.obj -o build\stoquant_fault.exe
+    uv run python -m stoquant.build_stamp build-cuda-fault build/stoquant_fault.exe
 
 [unix]
 build-cuda-fault: build-cuda
     nvcc {{nvcc_flags}} {{nvcc_fp_flags}} {{nvcc_warn_flags}} -DSQ_CUDA_FAULT_INJECTION -c native/quantizer_cuda.cu -o build/quantizer_cuda_fault.o
     nvcc {{nvcc_flags}} {{nvcc_fp_flags}} build/main_cuda.o build/cli_cuda.o build/bench_report_cuda.o build/sq_status_cuda.o build/codec_cuda.o build/quantizer_cuda_host.o build/rng_cpu_cuda.o build/quantizer_avx2_cuda.o build/quantizer_cuda_fault.o -lm -Xcompiler -fopenmp -o build/stoquant_fault
+    uv run python -m stoquant.build_stamp build-cuda-fault build/stoquant_fault
 
 # Build the device-attribute and streaming-read probe for the K1 baseline
 [windows]
 build-stream-probe:
     New-Item -ItemType Directory -Force build | Out-Null
     ./tools/with-msvc.ps1 nvcc {{nvcc_flags}} {{nvcc_warn_flags}} native\stream_probe.cu -o build\stream_probe.exe
+    uv run python -m stoquant.build_stamp build-stream-probe build/stream_probe.exe
 
 [unix]
 build-stream-probe:
     mkdir -p build
     nvcc {{nvcc_flags}} {{nvcc_warn_flags}} native/stream_probe.cu -o build/stream_probe
+    uv run python -m stoquant.build_stamp build-stream-probe build/stream_probe
 
 [windows]
 build-codec-test:
     New-Item -ItemType Directory -Force build | Out-Null
     ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} tests\test_codec.c native\codec.c /Fo:build\ /Fe:build\test_codec.exe
+    uv run python -m stoquant.build_stamp build-codec-test build/test_codec.exe
 
 [unix]
 build-codec-test:
     mkdir -p build
     ${CC:-cc} {{cc_strict_flags}} {{cc_includes}} tests/test_codec.c native/codec.c -o build/test_codec
+    uv run python -m stoquant.build_stamp build-codec-test build/test_codec
 
 # Build the AVX2-versus-scalar differential test
 [windows]
@@ -184,6 +196,7 @@ build-avx2-test:
     ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} /c tests\test_quantizer_avx2.c /Fo:build\test_quantizer_avx2.obj
     ./tools/with-msvc.ps1 cl.exe {{avx2_cl_flags}} /c native\quantizer_avx2.c /Fo:build\quantizer_avx2_test.obj
     ./tools/with-msvc.ps1 cl.exe {{cl_host_flags}} {{cl_includes}} build\test_quantizer_avx2.obj build\quantizer_avx2_test.obj native\quantizer.c native\codec.c native\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer_avx2.exe
+    uv run python -m stoquant.build_stamp build-avx2-test build/test_quantizer_avx2.exe
 
 [unix]
 build-avx2-test:
@@ -191,6 +204,7 @@ build-avx2-test:
     ${CC:-cc} {{cc_strict_flags}} {{cc_includes}} -c tests/test_quantizer_avx2.c -o build/test_quantizer_avx2.o
     ${CC:-cc} {{avx2_cc_flags}} -c native/quantizer_avx2.c -o build/quantizer_avx2_test.o
     ${CC:-cc} {{cc_host_flags}} -fopenmp {{cc_includes}} build/test_quantizer_avx2.o build/quantizer_avx2_test.o native/quantizer.c native/codec.c native/rng_cpu.c -lm -o build/test_quantizer_avx2
+    uv run python -m stoquant.build_stamp build-avx2-test build/test_quantizer_avx2
 
 # Check that MSVC reports every tagged AVX2 hot loop as vectorized
 [windows]
@@ -201,11 +215,13 @@ vec-report:
 build-quantizer-test:
     New-Item -ItemType Directory -Force build | Out-Null
     ./tools/with-msvc.ps1 cl.exe {{cl_test_flags}} {{cl_includes}} tests\test_quantizer.c native\quantizer.c native\codec.c native\rng_cpu.c /Fo:build\ /Fe:build\test_quantizer.exe
+    uv run python -m stoquant.build_stamp build-quantizer-test build/test_quantizer.exe
 
 [unix]
 build-quantizer-test:
     mkdir -p build
     ${CC:-cc} {{cc_strict_flags}} {{cc_includes}} tests/test_quantizer.c native/quantizer.c native/codec.c native/rng_cpu.c -lm -o build/test_quantizer
+    uv run python -m stoquant.build_stamp build-quantizer-test build/test_quantizer
 
 # Build the CPU tool, verify the C seams, and run the independent Python oracle/CLI suite
 [windows]

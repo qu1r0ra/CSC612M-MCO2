@@ -7,7 +7,16 @@ from typing import Any
 
 import numpy as np
 
-from stoquant.design import BenchPath
+from stoquant.design import (
+    AVX2_COMPARATOR,
+    COMPARATOR,
+    CPU_GPU_ORIGIN,
+    CUDA_GPU_ORIGIN,
+    CUDA_HOST_ORIGIN,
+    CUDA_RESIDENT,
+    CUDA_RESIDENT_GRAPH,
+    BenchPath,
+)
 
 STAGE_KEYS = ("k1_ms", "k2_ms", "k3_ms", "h2d_ms", "d2h_ms", "cpu_ms")
 
@@ -157,11 +166,8 @@ def claim_support(
 
 def baseline_label(path: BenchPath) -> str | None:
     """The policy-matched CPU path each path is measured against."""
-    if path.boundary == "comparator":
-        return None
-    if path.backend == "cuda" and path.boundary == "gpu-origin":
-        return BenchPath("cpu", "gpu-origin", path.policy).label
-    return "cpu-comparator"
+    baseline = path.baseline
+    return baseline.label if baseline is not None else None
 
 
 def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPath]) -> None:
@@ -173,30 +179,32 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         for path in paths
         if path.backend == "cuda" and stats_by_label[path.label] is not None
     }
-    comparator = stats_by_label["cpu-comparator"]
-    avx2 = stats_by_label.get("cpu-avx2-optimized")
+    comparator = stats_by_label[COMPARATOR.label]
+    avx2 = stats_by_label.get(AVX2_COMPARATOR.label)
     # CPU gpu-origin adds a full input download to the comparator, so it must not beat it.
-    cpu_inversion = {
-        policy: (
-            stats_by_label.get(f"cpu-gpu-origin{suffix}") is not None
-            and comparator is not None
-            and stats_by_label[f"cpu-gpu-origin{suffix}"]["median_ms"] < comparator["median_ms"]
+    cpu_inversion = {}
+    for policy in ("pageable", "pinned"):
+        cpu_path = BenchPath("cpu", CPU_GPU_ORIGIN.boundary, policy)
+        candidate = stats_by_label.get(cpu_path.label)
+        baseline = stats_by_label.get(cpu_path.nested_paths[0].label)
+        cpu_inversion[policy] = (
+            candidate is not None
+            and baseline is not None
+            and candidate["median_ms"] < baseline["median_ms"]
         )
-        for policy, suffix in (("pageable", ""), ("pinned", "-pinned"))
-    }
     cuda_inversion = {
         "pageable": boundary_inversion(cuda_medians),
-        "pinned": boundary_inversion(cuda_medians, "-pinned"),
+        "pinned": boundary_inversion(cuda_medians, "pinned"),
     }
 
     def path_inversion(path: BenchPath) -> bool:
         group = "pinned" if path.policy == "pinned" else "pageable"
-        if path.backend == "cpu-avx2":
+        if path == AVX2_COMPARATOR:
             # Same boundary and work as the comparator: nothing it could invert.
             return False
         if path.backend == "cpu":
             return cpu_inversion[group]
-        if path.boundary == "gpu-origin":
+        if path.boundary == CUDA_GPU_ORIGIN.boundary:
             return cuda_inversion[group] or cpu_inversion[group]
         return cuda_inversion[group]
 
@@ -204,7 +212,7 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         stats = stats_by_label[path.label]
         if stats is None:
             continue
-        if path.boundary == "comparator":
+        if path == COMPARATOR:
             stats.update(
                 {
                     "baseline": "",
@@ -229,7 +237,7 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         stats["baseline"] = base_label
         stats.update(compare_speedup(base_stats, stats, "speedup_vs_cpu"))
         stats["boundary_inversion"] = inversion
-        if path.backend == "cpu-avx2":
+        if path == AVX2_COMPARATOR:
             # Descriptive only: the paper's claims stay against the scalar comparator.
             stats.update(
                 {
@@ -248,7 +256,7 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
             }
 
         if path.policy == "pinned":
-            twin_path = BenchPath(path.backend, path.boundary, "pageable")
+            twin_path = path.pageable_twin
             twin = stats_by_label.get(twin_path.label)
             if twin is not None:
                 # Either side's inversion vetoes the pinning comparison.
@@ -259,15 +267,19 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
                     "boundary_inversion": pair_inversion,
                     **claim_support(vs_pageable["verdict"], pair_inversion, twin, stats),
                 }
-        if path.backend == "cuda" and path.boundary == "gpu-origin" and comparator is not None:
+        if (
+            path.backend == "cuda"
+            and path.boundary == CUDA_GPU_ORIGIN.boundary
+            and comparator is not None
+        ):
             # Descriptive only: the two sides start from different data locations.
             stats["vs_comparator"] = {
                 **compare_speedup(comparator, stats, "speedup_vs_comparator"),
                 "descriptive": True,
             }
 
-    resident = stats_by_label.get("cuda-resident")
-    graph = stats_by_label.get("cuda-resident-graph")
+    resident = stats_by_label.get(CUDA_RESIDENT.label)
+    graph = stats_by_label.get(CUDA_RESIDENT_GRAPH.label)
     if resident is not None and graph is not None:
         inversion = cuda_inversion["pageable"]
         vs_res = compare_speedup(resident, graph, "speedup_vs_resident")
@@ -278,23 +290,23 @@ def compare_case_group(cases: Sequence[dict[str, Any]], paths: Sequence[BenchPat
         }
 
 
-def boundary_inversion(medians: dict[str, float], suffix: str = "") -> bool:
+def boundary_inversion(medians: dict[str, float], policy: str = "pageable") -> bool:
     """CUDA boundaries nest by the work they add; a path must not beat one it contains.
 
-    Keys are CUDA path keys; `suffix` ("" or "-pinned") picks one transfer policy.
+    Keys are CUDA path keys; policy picks one transfer policy.
     Host-origin adds copies to a resident path, gpu-origin adds the output copy to
     resident, and host-origin adds the input copy to gpu-origin.
     """
-    host_origin = medians.get(f"host-origin{suffix}")
-    gpu_origin = medians.get(f"gpu-origin{suffix}")
-    resident = medians.get("resident")
-    if host_origin is not None and any(
-        host_origin < median for key, median in medians.items() if key.startswith("resident")
-    ):
-        return True
-    if gpu_origin is not None and resident is not None and gpu_origin < resident:
-        return True
-    return host_origin is not None and gpu_origin is not None and host_origin < gpu_origin
+    for boundary in (CUDA_HOST_ORIGIN.boundary, CUDA_GPU_ORIGIN.boundary):
+        path = BenchPath("cuda", boundary, policy)
+        candidate = medians.get(path.key)
+        if candidate is None:
+            continue
+        if any(
+            candidate < medians[nested.key] for nested in path.nested_paths if nested.key in medians
+        ):
+            return True
+    return False
 
 
 def compute_stage_medians(runs: Sequence[dict[str, Any]]) -> dict[str, float] | None:

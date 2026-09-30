@@ -78,7 +78,9 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "3.1"
+    assert manifest["manifest_version"] == "3.2"
+    assert manifest["build_stamp"]["recipe"] in ("build-cpu", "build-cuda")
+    assert manifest["build_stamp"]["binary_sha256"]
     assert manifest["transfer_policies"] == ["pageable"]
     assert manifest["matrix_parameters"]["paths"] == ["cpu-comparator"]
     assert manifest["matrix_parameters"]["k1"] == "reference"
@@ -176,7 +178,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "3.1"
+    assert manifest["manifest_version"] == "3.2"
     assert "date" in manifest
     assert "created_at_utc" in manifest
     assert "git_provenance" in manifest
@@ -712,10 +714,10 @@ def test_boundary_inversion_nests_gpu_origin_between_resident_and_host_origin():
         "gpu-origin-pinned": 1.5,
     }
     assert boundary_inversion(medians) is False
-    assert boundary_inversion(medians, "-pinned") is False
+    assert boundary_inversion(medians, "pinned") is False
     medians["gpu-origin-pinned"] = 0.5
     assert boundary_inversion(medians) is False
-    assert boundary_inversion(medians, "-pinned") is True
+    assert boundary_inversion(medians, "pinned") is True
 
 
 def test_default_paths_are_the_revision_3_paths():
@@ -943,7 +945,6 @@ def test_readiness_passes_with_only_shell_windows_and_no_launcher_chain():
         # The terminal window passes only because the terminal launched the sweep.
         ({"launcher_processes": []}, "open app window: WindowsTerminal"),
         ({"stoquant_pids": [4242]}, "stoquant already running (pid 4242)"),
-        ({"git_dirty_files": [" M benchmark_driver.py"]}, "dirty git tree"),
         ({"gpu_clock_event_reasons": "0x0000000000000024"}, "SwPowerCap, SwThermalSlowdown"),
         ({"gpu_clock_event_reasons": None}, "clock-event reasons unavailable"),
         ({"gpu_clock_event_reasons": "[N/A]"}, "clock-event reasons unavailable"),
@@ -953,6 +954,11 @@ def test_readiness_names_each_failure(change, reason):
     failures = check_readiness({**READY_FACTS, **change})
     assert len(failures) == 1
     assert reason in failures[0]
+
+
+def test_dirty_tree_is_judged_only_by_the_sweep_gate():
+    facts = {**READY_FACTS, "git_dirty_files": [" M src/stoquant/design.py"]}
+    assert check_readiness(facts) == []
 
 
 def test_readiness_fails_while_a_stoquant_process_runs(monkeypatch):
@@ -1048,7 +1054,7 @@ def test_manifest_records_monitoring_without_topic_or_token(tmp_path, monkeypatc
 
 
 def test_failed_sweep_restores_the_affinity_mask(tmp_path, monkeypatch):
-    def missing_binary(root):
+    def missing_binary(root, **kwargs):
         raise FileNotFoundError("no binary")
 
     monkeypatch.setattr(matrix, "find_binary", missing_binary)
@@ -1270,7 +1276,7 @@ def test_correctness_gate_checks_the_avx2_path_without_cuda(tmp_path):
     input_path.write_bytes(values.astype("<f4").tobytes())
     backends = ["cpu", "cpu-avx2"]
     passed, info = verify_correctness(
-        find_binary(ROOT),
+        find_binary(ROOT, require_cuda=False).path,
         input_path,
         len(values),
         4,
@@ -1299,7 +1305,7 @@ def test_an_avx2_mismatch_is_not_reported_as_a_cpu_cuda_divergence(tmp_path):
 
     backends = ["cpu", "cpu-avx2"]
     passed, info = verify_correctness(
-        find_binary(ROOT),
+        find_binary(ROOT, require_cuda=False).path,
         input_path,
         len(values),
         4,

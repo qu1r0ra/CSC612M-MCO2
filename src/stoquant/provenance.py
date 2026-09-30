@@ -10,7 +10,9 @@ import subprocess
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
+
+from stoquant.build_stamp import tree_fingerprint, verify_stamp
 
 GPU_STATE_FIELDS = (
     "pstate",
@@ -24,14 +26,36 @@ GPU_STATE_FIELDS = (
 BUILD_RECIPE = "build-cuda"
 
 
-def find_binary(root: Path) -> Path:
-    binary_name = "stoquant.exe" if os.name == "nt" else "stoquant"
+class VerifiedBinary(NamedTuple):
+    path: Path
+    stamp: dict[str, Any]
+
+
+def find_binary(
+    root: Path,
+    *,
+    require_cuda: bool = True,
+    git_prov: dict[str, Any] | None = None,
+    binary_name: str | None = None,
+) -> VerifiedBinary:
+    binary_name = binary_name or ("stoquant.exe" if os.name == "nt" else "stoquant")
     path = root / "build" / binary_name
     if not path.is_file():
         raise FileNotFoundError(
             f"stoquant binary not found at {path}. Build it first with just build-cuda."
         )
-    return path
+    git = collect_git_provenance(root) if git_prov is None else git_prov
+    if git["code_revision"] == "unknown":
+        raise RuntimeError("cannot verify a build stamp without git provenance")
+    stamp = verify_stamp(
+        root,
+        path,
+        revision=git["code_revision"],
+        tree_dirty=git["git_dirty"],
+        fingerprint=git["tree_fingerprint"],
+        require_cuda=require_cuda,
+    )
+    return VerifiedBinary(path, stamp)
 
 
 def query_device_attributes(root: Path) -> dict[str, Any] | None:
@@ -64,15 +88,18 @@ def collect_git_provenance(root: Path) -> dict[str, Any]:
         short_rev = run_command(["git", "rev-parse", "--short", "HEAD"], root)
         status_output = run_command(["git", "status", "--porcelain"], root)
         dirty_files = [line for line in status_output.splitlines() if line.strip()]
+        fingerprint = tree_fingerprint(root)
     except (subprocess.SubprocessError, OSError, RuntimeError):
         rev = "unknown"
         short_rev = "unknown"
         dirty_files = ["<git status unavailable>"]
+        fingerprint = "unknown"
     return {
         "code_revision": rev,
         "code_revision_short": short_rev,
         "git_dirty": bool(dirty_files),
         "dirty_files": dirty_files,
+        "tree_fingerprint": fingerprint,
     }
 
 

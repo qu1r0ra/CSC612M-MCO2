@@ -1,6 +1,6 @@
 ---
 status: accepted
-updated: 2026-09-27
+updated: 2026-09-29
 ---
 # GPU-origin boundary, pinned transfers, and policy-matched baselines
 
@@ -21,3 +21,26 @@ The publication matrix adds a GPU-origin, host-ready boundary for both backends 
 - **The comparator as the only baseline.** Rejected for CUDA GPU-origin for the reason above; kept for every path whose input starts on the host or on a resident device.
 - **A GPU-origin variant of `resident-graph`.** Rejected: the revision 3 spec put graph variants of other paths out of scope, and the graph path answers the launch-overhead question on its own.
 - **Random orders or a subset of permutations.** Rejected: neither guarantees that each path holds each position and follows each other path equally often.
+
+## Addendum: build stamp (2026-09-29)
+
+Every native build writes a stamp file beside its binary. The stamp records:
+
+- the full revision and whether the tree was clean;
+- the recipe that ran and the exact compiler flags it passed, including any defines;
+- the SHA-256 of the binary.
+
+The binary locator reads the stamp and returns the binary together with its verified build facts, or refuses. It refuses when:
+
+- the stamp is missing;
+- the hash does not match the binary;
+- the revision is not HEAD;
+- the recipe cannot serve the requested paths (for example, a CPU-only build for a CUDA path);
+- the flags include a test-only define, such as CUDA fault injection.
+
+The manifest records the verified stamp, so each timing ties back to one exact binary. Issue #53 holds the spec; this lands in its batch B.
+
+- **Why here.** Before this, the manifest stamped the current revision on whatever binary sat in the build folder. A binary left over from an earlier revision, or one built by `build-cpu`, could be stamped as current, and nothing would show it.
+- **Considered: record only the binary's hash.** Rejected: a hash identifies a binary but not the source or flags it came from.
+- **Considered: rebuild inside every driver run.** Rejected: it puts the compiler into the measurement session and couples the drivers to the toolchain. A verified stamp gives the same guarantee without either cost.
+- **Considered: compile the revision into the binary.** Rejected: a per-commit define changes the compiler's inputs at every revision. The object files, and the SASS identity check that timed refactors rely on, would then differ even when the code has not changed.

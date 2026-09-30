@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from stoquant import layout
-from stoquant.design import DEFAULT_BITS, DEFAULT_COUNTS
+from stoquant.design import CUDA_RESIDENT, DEFAULT_BITS, DEFAULT_COUNTS
 from stoquant.inputs import generate_inputs
 from stoquant.provenance import (
     BUILD_RECIPE,
@@ -211,7 +211,7 @@ def run_resident(binary: Path, input_path: Path, bits: int, warmups: int, reps: 
         input_path,
         bits=bits,
         backend="cuda",
-        extra_args=["--boundary", "resident"],
+        extra_args=["--boundary", CUDA_RESIDENT.boundary],
         seed=DEFAULT_COMPRESSION_SEED,
         warmups=warmups,
         reps=reps,
@@ -244,7 +244,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     out = args.output_dir
     if out.exists() and any(out.iterdir()):
         sys.exit(f"{out} is not empty; snapshots are never overwritten.")
-    binary = find_binary(root)
+    verified = find_binary(root, git_prov=git)
+    binary = verified.path
     probe_binary = probe_path(root)
     build = collect_build_commands(root)
     build.pop("_host_tokens", None)
@@ -255,6 +256,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     except RuntimeError as error:
         sys.exit(str(error))
     build_record = {
+        "build_stamp": verified.stamp,
         BUILD_RECIPE: build["commands"],
         PROBE_RECIPE: probe_commands,
         "sha256": {

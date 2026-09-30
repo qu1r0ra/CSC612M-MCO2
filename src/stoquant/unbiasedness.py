@@ -369,7 +369,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
     created = not target.exists()
     work_dir = target / "_temp"
     try:
-        binary = find_binary(root)
+        verified = find_binary(root, require_cuda="cuda" in args.backends, git_prov=git_prov)
+        binary = verified.path
         target.mkdir(parents=True, exist_ok=True)
         results, plot_data = run_suite(
             binary, work_dir, args.seeds, tuple(args.backends), args.input_seed
@@ -381,6 +382,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> None:
         report = {
             "created_at_utc": now.isoformat(),
             "git_provenance": git_prov,
+            "build_stamp": verified.stamp,
             "evidence": not reasons,
             "non_evidence_reasons": reasons,
             "seeds": args.seeds,
