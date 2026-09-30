@@ -148,8 +148,10 @@ int main(void) {
                                        &out_vals, &out_count);
       check(decode_status == SQ_OK && out_count == n && out_vals != NULL,
             "non-multiple length decodes without error");
+#if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 6001)
+#endif
       /* A successful sq_decode_record initializes every returned value. */
       if (decode_status == SQ_OK && out_vals != NULL && out_count == n) {
         for (k = 0; k < n; k++) {
@@ -164,7 +166,9 @@ int main(void) {
         check(decoded_match,
               "odd-length 4-bit round trip preserves every decoded value");
       }
+#if defined(_MSC_VER)
 #pragma warning(pop)
+#endif
       if (n % 2 != 0) {
         check((rec[SQ_HEADER_SIZE + n / 2] & 0xF0) == 0,
               "odd-length 4-bit payload leaves the unused high nibble clear");

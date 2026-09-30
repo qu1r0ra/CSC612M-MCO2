@@ -162,7 +162,7 @@ build-avx2-test:
 
 # Check that MSVC reports every tagged AVX2 hot loop as vectorized
 [windows]
-vec-report:
+vec-report: build-cpu
     uv run python -m stoquant vec-report
 
 [windows]

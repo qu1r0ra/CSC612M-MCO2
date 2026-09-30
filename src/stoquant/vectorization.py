@@ -1,7 +1,7 @@
 """Check that MSVC vectorizes every AVX2 hot loop (issue #22).
 
-Recompiles `native/quantizer_avx2.c` with the exact flags of the `build-cuda`
-recipe plus /Qvec-report:2, writes the report, and fails unless each loop
+Recompiles `native/quantizer_avx2.c` with the exact AVX2 flags from a native
+build plus /Qvec-report:2, writes the report, and fails unless each loop
 tagged `/* avx2-hot */` is reported as "loop vectorized" (info C5001) and no
 inlined copy of it as "loop not vectorized" (info C5002).
 
