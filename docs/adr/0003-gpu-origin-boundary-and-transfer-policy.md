@@ -13,7 +13,7 @@ The publication matrix adds a GPU-origin, host-ready boundary for both backends 
 - **Every timed-transfer host buffer pinned.** Under `pinned`, the payload, scale, status, validation-flag and landing buffers, and a page-locked copy of the host-origin input, all use `cudaHostAlloc`. Pinning only some of them would mix both policies in one measurement. Pinned paths report both the policy-matched baseline and the comparison with their pageable twin, so the pinning gain is visible on its own.
 - **Nested inversion.** Within each policy, resident ⊂ GPU-origin ⊂ host-origin by the work each does, and CPU GPU-origin contains the comparator's work. A path that beats one it contains vetoes the claims of its group, as host-origin below resident did in revision 3.
 - **Stage times are diagnosis only.** `d2h_ms` and `cpu_ms` show where time goes. As with revision 3's stage medians, no claim is made from separately timed stages.
-- **Williams design above four paths.** 9! orderings cannot run, and cycling through a subset would unbalance positions. A Williams design balances position and immediate predecessor in 18 orders for nine paths, so `--trials` must be a multiple of the design length. The manifest records the design; its version is 3.1.
+- **Williams design above four paths.** 9! orderings cannot run, and cycling through a subset would unbalance positions. A Williams design balances position and immediate predecessor in 18 orders for nine paths, so `--trials` must be a multiple of the design length. The original extension manifest recorded the design at version 3.1; the build-stamp addendum below advances it to 3.2.
 
 ## Considered options
 
