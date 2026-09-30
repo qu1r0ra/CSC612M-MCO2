@@ -1152,6 +1152,83 @@ def test_readiness_names_each_failure(change, reason):
     assert reason in failures[0]
 
 
+def test_readiness_names_a_failed_probe_from_the_probe_seam(monkeypatch):
+    monkeypatch.setattr(host, "query_gpu_state", lambda: {"clocks_event_reasons.active": "0x1"})
+    monkeypatch.setattr(host, "uptime_seconds", lambda: 600.0)
+    monkeypatch.setattr(
+        host,
+        "list_app_windows",
+        lambda: (_ for _ in ()).throw(RuntimeError("PowerShell exited with status 1")),
+    )
+    monkeypatch.setattr(host, "list_launcher_processes", list)
+    monkeypatch.setattr(host, "list_processes", lambda _name: [])
+    monkeypatch.setattr(host, "collect_git_provenance", lambda _root: {"dirty_files": []})
+    monkeypatch.setattr(host, "query_power_plan", lambda: "Balanced")
+    monkeypatch.setattr(host, "query_hags", lambda: "unset")
+
+    facts = host.probe_readiness_facts(ROOT)
+    failures = check_readiness(facts)
+
+    assert failures == [
+        "host probe failed: list_app_windows: RuntimeError: PowerShell exited with status 1"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr", "message"),
+    [
+        (1, "", "PowerShell failed", "list_app_windows exited with status 1"),
+        (0, "warning: unexpected output", "", "list_app_windows returned unparseable JSON"),
+        (0, '{"process":"terminal","title":"Terminal"}', "", "expected an array"),
+        (0, '[{"process":"terminal"}]', "", "returned an unparseable row"),
+    ],
+)
+def test_app_window_probe_rejects_failed_or_unparseable_output(
+    monkeypatch, returncode, stdout, stderr, message
+):
+    if host.os.name != "nt":
+        pytest.skip("list_app_windows invokes PowerShell on Windows")
+    result = host.subprocess.CompletedProcess(
+        args=["powershell.exe"],
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+    monkeypatch.setattr(host.subprocess, "run", lambda *_args, **_kwargs: result)
+
+    with pytest.raises(RuntimeError, match=message):
+        host.list_app_windows()
+
+
+def test_launcher_probe_parses_json_process_names(monkeypatch):
+    if host.os.name != "nt":
+        pytest.skip("list_launcher_processes invokes PowerShell on Windows")
+    result = host.subprocess.CompletedProcess(
+        args=["powershell.exe"],
+        returncode=0,
+        stdout='["python", "Windows Terminal"]',
+        stderr="",
+    )
+    monkeypatch.setattr(host.subprocess, "run", lambda *_args, **_kwargs: result)
+
+    assert host.list_launcher_processes() == ["python", "Windows Terminal"]
+
+
+def test_process_probe_rejects_non_json_output(monkeypatch):
+    if host.os.name != "nt":
+        pytest.skip("Windows process listing uses PowerShell")
+    result = host.subprocess.CompletedProcess(
+        args=["powershell.exe"],
+        returncode=0,
+        stdout="not a process ID list",
+        stderr="",
+    )
+    monkeypatch.setattr(host.subprocess, "run", lambda *_args, **_kwargs: result)
+
+    with pytest.raises(RuntimeError, match="list_processes returned unparseable JSON"):
+        host.list_processes("stoquant")
+
+
 def test_dirty_tree_is_judged_only_by_the_sweep_gate():
     facts = {**READY_FACTS, "git_dirty_files": [" M src/stoquant/design.py"]}
     assert check_readiness(facts) == []
@@ -1241,6 +1318,26 @@ def test_readiness_override_marks_the_snapshot_non_evidence(tmp_path):
     conditions = json.loads((out / "manifest.json").read_text(encoding="utf-8"))["run_conditions"]
     assert conditions["evidence"] is False
     assert conditions["readiness"]["overridden"] is True
+    assert "readiness check failed and was overridden" in conditions["non_evidence_reasons"]
+
+
+def test_readiness_probe_override_records_named_failure_as_non_evidence(tmp_path):
+    probe_failure = {
+        **READY_FACTS,
+        "probe_failures": {"list_app_windows": "PowerShell exited with status 1"},
+    }
+
+    out = run_cpu_snapshot(
+        tmp_path / "probe-failure", readiness_facts=probe_failure, ignore_readiness=True
+    )
+    conditions = json.loads((out / "manifest.json").read_text(encoding="utf-8"))["run_conditions"]
+
+    assert conditions["evidence"] is False
+    assert conditions["readiness"]["overridden"] is True
+    assert (
+        "host probe failed: list_app_windows: PowerShell exited with status 1"
+        in conditions["readiness"]["failures"]
+    )
     assert "readiness check failed and was overridden" in conditions["non_evidence_reasons"]
 
 

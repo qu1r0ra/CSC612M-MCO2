@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import json
+import math
 import os
+import re
 import subprocess
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -42,12 +45,37 @@ CLOCK_EVENT_REASONS = {
 BENIGN_CLOCK_EVENTS = 0x1
 
 
+def _checked_probe_output(proc: subprocess.CompletedProcess[str], name: str) -> str:
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip() or "no diagnostic output"
+        raise RuntimeError(f"{name} exited with status {proc.returncode}: {detail}")
+    if proc.stderr.strip():
+        raise RuntimeError(f"{name} wrote to stderr: {proc.stderr.strip()}")
+    return proc.stdout
+
+
+def _parse_json_array(output: str, name: str) -> list[Any]:
+    try:
+        value = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"{name} returned unparseable JSON: {error.msg}") from None
+    if not isinstance(value, list):
+        raise RuntimeError(  # noqa: TRY004 - malformed tool output is a probe failure.
+            f"{name} returned unparseable JSON: expected an array"
+        )
+    return value
+
+
 def uptime_seconds() -> float:
     if os.name == "nt":
         kernel32 = ctypes.windll.kernel32
         kernel32.GetTickCount64.restype = ctypes.c_uint64
-        return kernel32.GetTickCount64() / 1000.0
-    return float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+        uptime = kernel32.GetTickCount64() / 1000.0
+    else:
+        uptime = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+    if not math.isfinite(uptime) or uptime < 0:
+        raise ValueError("uptime probe returned an invalid value")
+    return uptime
 
 
 def list_app_windows() -> list[dict[str, str]]:
@@ -55,9 +83,12 @@ def list_app_windows() -> list[dict[str, str]]:
     if os.name != "nt":
         return []
     script = (
+        "$ErrorActionPreference = 'Stop'; "
         "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-        "Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | "
-        "ForEach-Object { $_.ProcessName + [char]9 + $_.MainWindowTitle }"
+        "$windows = @(Get-Process | "
+        "Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | "
+        "ForEach-Object { [PSCustomObject]@{ process = $_.ProcessName; title = $_.MainWindowTitle } }); "
+        "ConvertTo-Json -InputObject $windows -Compress"
     )
     proc = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", script],
@@ -67,11 +98,19 @@ def list_app_windows() -> list[dict[str, str]]:
         errors="replace",
         check=False,
     )
+    output = _checked_probe_output(proc, "list_app_windows").strip()
+    rows = _parse_json_array(output, "list_app_windows")
     windows = []
-    for line in proc.stdout.splitlines():
-        name, _, title = line.partition("\t")
-        if name.strip():
-            windows.append({"process": name.strip(), "title": title.strip()})
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or not isinstance(row.get("process"), str)
+            or not row["process"].strip()
+            or not isinstance(row.get("title"), str)
+            or not row["title"].strip()
+        ):
+            raise RuntimeError("list_app_windows returned an unparseable row")
+        windows.append({"process": row["process"].strip(), "title": row["title"].strip()})
     return windows
 
 
@@ -80,12 +119,15 @@ def list_launcher_processes() -> list[str]:
     if os.name != "nt":
         return []
     script = (
+        "$ErrorActionPreference = 'Stop'; "
         "$byId = @{}; Get-CimInstance Win32_Process | "
         "ForEach-Object { $byId[[int]$_.ProcessId] = $_ }; "
-        f"$id = {os.getpid()}; $seen = @{{}}; "
+        f"$id = {os.getpid()}; $seen = @{{}}; $processes = @(); "
         "while ($byId.ContainsKey($id) -and -not $seen.ContainsKey($id)) { "
         "$seen[$id] = 1; $p = $byId[$id]; "
-        "[IO.Path]::GetFileNameWithoutExtension($p.Name); $id = [int]$p.ParentProcessId }"
+        "$processes += [IO.Path]::GetFileNameWithoutExtension($p.Name); "
+        "$id = [int]$p.ParentProcessId }; "
+        "ConvertTo-Json -InputObject $processes -Compress"
     )
     proc = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", script],
@@ -93,21 +135,41 @@ def list_launcher_processes() -> list[str]:
         text=True,
         check=False,
     )
-    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    output = _checked_probe_output(proc, "list_launcher_processes").strip()
+    processes = _parse_json_array(output, "list_launcher_processes")
+    if not processes or any(not isinstance(name, str) or not name.strip() for name in processes):
+        raise RuntimeError("list_launcher_processes returned an unparseable process list")
+    return [name.strip() for name in processes]
 
 
 def list_processes(name: str) -> list[int]:
     if os.name == "nt":
-        script = f"(Get-Process -Name '{name}' -ErrorAction SilentlyContinue).Id"
+        script = (
+            "$ErrorActionPreference = 'Stop'; "
+            f"$ids = @(Get-Process | Where-Object {{ $_.ProcessName -eq '{name}' }} | "
+            "ForEach-Object { $_.Id }); "
+            "ConvertTo-Json -InputObject $ids -Compress"
+        )
         proc = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command", script],
             capture_output=True,
             text=True,
             check=False,
         )
+        output = _checked_probe_output(proc, "list_processes").strip()
+        ids = _parse_json_array(output, "list_processes")
+        if any(type(pid) is not int or pid <= 0 for pid in ids):
+            raise RuntimeError("list_processes returned an unparseable process ID")
+        return ids
     else:
         proc = subprocess.run(["pgrep", "-x", name], capture_output=True, text=True, check=False)
-    return [int(pid) for pid in proc.stdout.split() if pid.isdigit()]
+        if proc.returncode == 1 and not proc.stderr.strip() and not proc.stdout.strip():
+            return []
+        output = _checked_probe_output(proc, "list_processes")
+    pids = output.split()
+    if any(not pid.isdecimal() for pid in pids):
+        raise RuntimeError(f"list_processes returned unparseable output: {output.strip()!r}")
+    return [int(pid) for pid in pids]
 
 
 def query_power_plan() -> str:
@@ -116,7 +178,11 @@ def query_power_plan() -> str:
     proc = subprocess.run(
         ["powercfg", "/getactivescheme"], capture_output=True, text=True, check=False
     )
-    return proc.stdout.strip() or "unavailable"
+    output = _checked_probe_output(proc, "query_power_plan").strip()
+    guid = r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}"
+    if not re.search(guid, output):
+        raise RuntimeError("query_power_plan returned unparseable output")
+    return output
 
 
 def query_hags() -> str:
@@ -130,33 +196,69 @@ def query_hags() -> str:
             winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers"
         ) as key:
             value, _ = winreg.QueryValueEx(key, "HwSchMode")
-    except OSError:
+    except FileNotFoundError:
         return "unset"
+    if type(value) is not int:
+        raise RuntimeError("query_hags returned an unparseable registry value")
     return str(value)
 
 
 def probe_readiness_facts(root: Path, git_prov: dict[str, Any] | None = None) -> dict[str, Any]:
     """Gather the machine facts the readiness check judges, plus context it only records."""
-    gpu_state = query_gpu_state()
-    return {
-        "uptime_seconds": uptime_seconds(),
-        "app_windows": list_app_windows(),
-        "launcher_processes": list_launcher_processes(),
-        "stoquant_pids": list_processes("stoquant"),
-        "git_dirty_files": (collect_git_provenance(root) if git_prov is None else git_prov)[
-            "dirty_files"
-        ],
+    probe_failures: dict[str, str] = {}
+
+    def probe(name: str, call: Any, fallback: Any) -> Any:
+        try:
+            return call()
+        except Exception as error:  # noqa: BLE001 - readiness names every failed probe.
+            detail = str(error).strip() or type(error).__name__
+            probe_failures[name] = f"{type(error).__name__}: {detail}"
+            return fallback
+
+    gpu_state = probe("query_gpu_state", query_gpu_state, {})
+    if not isinstance(gpu_state, dict):
+        probe_failures["query_gpu_state"] = "returned an unparseable result"
+        gpu_state = {}
+    git_info = (
+        git_prov
+        if git_prov is not None
+        else probe("collect_git_provenance", lambda: collect_git_provenance(root), {})
+    )
+    if not isinstance(git_info, dict) or not isinstance(git_info.get("dirty_files"), list):
+        probe_failures["collect_git_provenance"] = "returned an unparseable result"
+        dirty_files: list[str] = ["<git status unavailable>"]
+    else:
+        dirty_files = git_info["dirty_files"]
+
+    facts: dict[str, Any] = {
+        "uptime_seconds": probe("uptime_seconds", uptime_seconds, 0.0),
+        "app_windows": probe("list_app_windows", list_app_windows, []),
+        "launcher_processes": probe("list_launcher_processes", list_launcher_processes, []),
+        "stoquant_pids": probe("list_processes", lambda: list_processes("stoquant"), []),
+        "git_dirty_files": dirty_files,
         "gpu_clock_event_reasons": gpu_state.get("clocks_event_reasons.active"),
-        "power_plan": query_power_plan(),
-        "hags_hwschmode": query_hags(),
+        "power_plan": probe("query_power_plan", query_power_plan, "unavailable"),
+        "hags_hwschmode": probe("query_hags", query_hags, "unavailable"),
     }
+    if probe_failures:
+        facts["probe_failures"] = probe_failures
+    return facts
 
 
 def check_readiness(
     facts: dict[str, Any], allowlist: Sequence[str] = WINDOW_ALLOWLIST
 ) -> list[str]:
     """Named reasons the machine is not ready for an evidence sweep; empty when ready."""
-    failures = []
+    probe_failures = facts.get("probe_failures", {})
+    if not isinstance(probe_failures, dict):
+        failures = ["host probe failed: probe_readiness_facts: unparseable failure details"]
+        failed_probe_names: set[str] = set()
+    else:
+        failures = [
+            f"host probe failed: {name}: {detail}"
+            for name, detail in sorted(probe_failures.items())
+        ]
+        failed_probe_names = set(probe_failures)
     uptime = facts["uptime_seconds"]
     if uptime > MAX_UPTIME_SECONDS:
         failures.append(
@@ -174,7 +276,10 @@ def check_readiness(
     except (TypeError, ValueError):
         reasons = None
     if reasons is None:
-        failures.append("GPU clock-event reasons unavailable")
+        if "query_gpu_state" not in failed_probe_names:
+            failures.append(
+                "host probe failed: query_gpu_state: GPU clock-event reasons unavailable"
+            )
     else:
         active = reasons & ~BENIGN_CLOCK_EVENTS
         if active:
