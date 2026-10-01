@@ -1714,23 +1714,18 @@ sq_status sq_cuda_bench(const sq_cuda_config *config, uint8_t *base_payload,
   {
     sq_status inspection_status =
         inspect_host_buffer("payload", context.host_payload, transfer_policy);
-    if (inspection_status != SQ_OK) {
-      result = inspection_status;
-      goto done;
+    if (inspection_status == SQ_OK) {
+      inspection_status =
+          inspect_host_buffer("result", context.host, transfer_policy);
     }
-    inspection_status =
-        inspect_host_buffer("result", context.host, transfer_policy);
-    if (inspection_status != SQ_OK) {
-      result = inspection_status;
-      goto done;
-    }
-    if (boundary == SQ_CUDA_BENCH_HOST_ORIGIN && count != 0) {
+    if (inspection_status == SQ_OK && boundary == SQ_CUDA_BENCH_HOST_ORIGIN &&
+        count != 0) {
       inspection_status = inspect_host_buffer(
           "host-origin input", context.h2d_source, transfer_policy);
-      if (inspection_status != SQ_OK) {
-        result = inspection_status;
-        goto done;
-      }
+    }
+    if (inspection_status != SQ_OK) {
+      destroy_bench_context(&context);
+      return inspection_status;
     }
   }
 #endif
