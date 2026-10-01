@@ -1,0 +1,170 @@
+{
+  "device": {
+    "name": "NVIDIA GeForce RTX 5060",
+    "compute_capability": "12.0",
+    "memory_clock_khz": 14001000,
+    "bus_width_bits": 128,
+    "l2_bytes": 25165824,
+    "multiprocessors": 30,
+    "cuda_runtime_version": 13030,
+    "cuda_driver_version": 13030
+  },
+  "method": {
+    "kernel": "grid-stride float4 read, 256 threads per block",
+    "grids_per_multiprocessor": [
+      4,
+      8,
+      16,
+      32
+    ],
+    "reps": 50,
+    "discarded": 10,
+    "statistic": "best time over kept reps and grids"
+  },
+  "sizes": [
+    {
+      "count": 1024,
+      "bytes": 4096,
+      "best_ms": 0.002688,
+      "best_gbps": 1.524,
+      "best_grid": 480,
+      "best_grid_median_ms": 0.009376
+    },
+    {
+      "count": 2048,
+      "bytes": 8192,
+      "best_ms": 0.003872,
+      "best_gbps": 2.116,
+      "best_grid": 120,
+      "best_grid_median_ms": 0.009152
+    },
+    {
+      "count": 4096,
+      "bytes": 16384,
+      "best_ms": 0.0032,
+      "best_gbps": 5.12,
+      "best_grid": 480,
+      "best_grid_median_ms": 0.009584
+    },
+    {
+      "count": 8192,
+      "bytes": 32768,
+      "best_ms": 0.002176,
+      "best_gbps": 15.059,
+      "best_grid": 480,
+      "best_grid_median_ms": 0.009456
+    },
+    {
+      "count": 16384,
+      "bytes": 65536,
+      "best_ms": 0.002208,
+      "best_gbps": 29.681,
+      "best_grid": 240,
+      "best_grid_median_ms": 0.0096
+    },
+    {
+      "count": 32768,
+      "bytes": 131072,
+      "best_ms": 0.002976,
+      "best_gbps": 44.043,
+      "best_grid": 120,
+      "best_grid_median_ms": 0.009408
+    },
+    {
+      "count": 65536,
+      "bytes": 262144,
+      "best_ms": 0.003456,
+      "best_gbps": 75.852,
+      "best_grid": 960,
+      "best_grid_median_ms": 0.010624
+    },
+    {
+      "count": 131072,
+      "bytes": 524288,
+      "best_ms": 0.003648,
+      "best_gbps": 143.719,
+      "best_grid": 240,
+      "best_grid_median_ms": 0.009424
+    },
+    {
+      "count": 262144,
+      "bytes": 1048576,
+      "best_ms": 0.004192,
+      "best_gbps": 250.137,
+      "best_grid": 960,
+      "best_grid_median_ms": 0.011296
+    },
+    {
+      "count": 524288,
+      "bytes": 2097152,
+      "best_ms": 0.00336,
+      "best_gbps": 624.152,
+      "best_grid": 960,
+      "best_grid_median_ms": 0.011312
+    },
+    {
+      "count": 1048576,
+      "bytes": 4194304,
+      "best_ms": 0.004416,
+      "best_gbps": 949.797,
+      "best_grid": 480,
+      "best_grid_median_ms": 0.011248
+    },
+    {
+      "count": 2097152,
+      "bytes": 8388608,
+      "best_ms": 0.007872,
+      "best_gbps": 1065.626,
+      "best_grid": 480,
+      "best_grid_median_ms": 0.01368
+    },
+    {
+      "count": 4194304,
+      "bytes": 16777216,
+      "best_ms": 0.016928,
+      "best_gbps": 991.093,
+      "best_grid": 480,
+      "best_grid_median_ms": 0.0196
+    },
+    {
+      "count": 8388608,
+      "bytes": 33554432,
+      "best_ms": 0.086304,
+      "best_gbps": 388.793,
+      "best_grid": 960,
+      "best_grid_median_ms": 0.087328
+    },
+    {
+      "count": 16777216,
+      "bytes": 67108864,
+      "best_ms": 0.164192,
+      "best_gbps": 408.722,
+      "best_grid": 480,
+      "best_grid_median_ms": 0.165056
+    },
+    {
+      "count": 33554432,
+      "bytes": 134217728,
+      "best_ms": 0.320032,
+      "best_gbps": 419.388,
+      "best_grid": 960,
+      "best_grid_median_ms": 0.320688
+    },
+    {
+      "count": 67108864,
+      "bytes": 268435456,
+      "best_ms": 0.629152,
+      "best_gbps": 426.662,
+      "best_grid": 960,
+      "best_grid_median_ms": 0.631952
+    },
+    {
+      "count": 134217728,
+      "bytes": 536870912,
+      "best_ms": 1.249504,
+      "best_gbps": 429.667,
+      "best_grid": 480,
+      "best_grid_median_ms": 1.254192
+    }
+  ]
+}
