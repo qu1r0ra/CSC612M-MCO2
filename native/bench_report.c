@@ -1,6 +1,7 @@
 #include "bench_report.h"
 
 #include "codec.h"
+#include "run_invocation.h"
 
 #include <stdio.h>
 
@@ -50,9 +51,8 @@ static void print_double_array(const sq_bench_sample *samples, uint64_t reps,
   putchar(']');
 }
 
-/* A step of 0 prints the base identifier for every run (resident-graph). */
-static void print_invocation_ids(uint64_t base_invocation_id, uint64_t count,
-                                 uint64_t offset, uint64_t step) {
+static void print_invocation_ids(const sq_bench_result *result, uint64_t count,
+                                 uint64_t first_execution_index) {
   uint64_t i;
 
   putchar('[');
@@ -60,14 +60,14 @@ static void print_invocation_ids(uint64_t base_invocation_id, uint64_t count,
     if (i != 0) {
       putchar(',');
     }
-    printf("%llu",
-           (unsigned long long)(base_invocation_id + (offset + i) * step));
+    printf("%llu", (unsigned long long)sq_run_invocation_id(
+                       result->invocation_id, result->warmups, result->reps,
+                       first_execution_index + i, result->invocation_id_step));
   }
   putchar(']');
 }
 
 void sq_bench_print_json(const sq_bench_result *result) {
-  const uint64_t step = result->invocation_id_step;
   size_t i;
 
   printf("{\"configuration\":{\"backend\":\"%s\",\"bits\":%u,"
@@ -79,10 +79,9 @@ void sq_bench_print_json(const sq_bench_result *result) {
          (unsigned long long)result->tensor_id,
          (unsigned long long)result->invocation_id,
          (unsigned long long)result->warmups, (unsigned long long)result->reps);
-  print_invocation_ids(result->invocation_id, result->reps, 0, step);
+  print_invocation_ids(result, result->reps, result->warmups);
   printf(",\"warmup_invocation_ids\":");
-  print_invocation_ids(result->invocation_id, result->warmups, result->reps,
-                       step);
+  print_invocation_ids(result, result->warmups, 0);
   printf(",\"boundary\":\"%s\",\"transfer_policy\":\"%s\","
          "\"block_size\":%d,\"grid_size\":%d,",
          result->boundary, result->transfer_policy, result->block_size,

@@ -39,6 +39,27 @@ typedef enum {
   SQ_CUDA_TRANSFER_PINNED = SQ_TRANSFER_PINNED
 } sq_cuda_transfer_policy;
 
+/* Inputs and run options shared by the host-level CUDA operations. */
+typedef struct {
+  uint8_t bit_width;
+  const float *values;
+  size_t count;
+  uint64_t seed;
+  uint64_t tensor_id;
+  uint64_t invocation_id;
+  int prescribed_scale_seen;
+  float prescribed_scale;
+  const uint32_t *prescribed_words;
+  int block_size;
+  int grid_size;
+  int k1_variant;
+  sq_cuda_bench_boundary boundary;
+  sq_cuda_transfer_policy transfer_policy;
+  uint64_t warmups;
+  uint64_t reps;
+  uint64_t invocation_id_step;
+} sq_cuda_config;
+
 /* Device-resident input for the CPU GPU-origin path, which downloads the input
    to a host landing buffer before each CPU compression. */
 typedef struct sq_cuda_staging sq_cuda_staging;
@@ -46,12 +67,6 @@ typedef struct sq_cuda_staging sq_cuda_staging;
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* Selects the K1 variant for every later launch in this process; the CLI
-   calls it once before any CUDA work. Returns 0 or cudaErrorInvalidValue. The
-   optimized variant needs a 16-byte-aligned input (cudaMalloc pointers are) and
-   returns cudaErrorMisalignedAddress otherwise. */
-int sq_cuda_select_k1(int variant);
 
 /* Stage launchers accept device pointers and an opaque CUDA stream handle. */
 int sq_cuda_launch_k2(uint8_t bit_width, const float *device_values,
@@ -66,25 +81,13 @@ int sq_cuda_launch_k3(uint8_t bit_width, const uint8_t *device_codes,
                       int grid_size, void *stream);
 
 /* Host-level C entry points for compression pipelines. */
-sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
-                           uint64_t seed, uint64_t tensor_id,
-                           uint64_t invocation_id, int prescribed_scale_seen,
-                           float prescribed_scale,
-                           const uint32_t *prescribed_words, int block_size,
-                           int grid_size, uint8_t *payload, float *scale,
-                           int collect_timings, sq_cuda_timings *timings);
+sq_status sq_cuda_compress(const sq_cuda_config *config, uint8_t *payload,
+                           float *scale, sq_cuda_timings *timings);
 
 /* Runs the base record preflight, warmups, and measured repetitions with one
    reusable CUDA allocation/event context. The payload and scale outputs are
    from the untimed base-configuration run. */
-sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
-                        uint64_t seed, uint64_t tensor_id,
-                        uint64_t base_invocation_id, int prescribed_scale_seen,
-                        float prescribed_scale,
-                        const uint32_t *prescribed_words, int block_size,
-                        int grid_size, sq_cuda_bench_boundary boundary,
-                        sq_cuda_transfer_policy transfer_policy,
-                        uint64_t warmups, uint64_t reps, uint8_t *base_payload,
+sq_status sq_cuda_bench(const sq_cuda_config *config, uint8_t *base_payload,
                         float *base_scale, sq_bench_sample *samples,
                         double *capture_ms);
 
