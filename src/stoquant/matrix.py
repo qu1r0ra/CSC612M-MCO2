@@ -19,8 +19,7 @@ from stoquant.design import (
     trial_orders,
 )
 from stoquant.host import (
-    MAX_UPTIME_SECONDS,
-    WINDOW_ALLOWLIST,
+    MIN_AVAILABLE_PHYSICAL_BYTES,
     benchmark_process_affinity,
     check_readiness,
     probe_readiness_facts,
@@ -138,8 +137,7 @@ def run_benchmark_matrix(
                 "overridden": bool(failures) and ignore_readiness,
                 "enforced": not pilot,
                 "facts": facts,
-                "max_uptime_seconds": MAX_UPTIME_SECONDS,
-                "window_allowlist": list(WINDOW_ALLOWLIST),
+                "min_available_physical_bytes": MIN_AVAILABLE_PHYSICAL_BYTES,
             },
         }
 

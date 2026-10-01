@@ -771,7 +771,7 @@ def write_manifest(
     conditions["evidence"] = bool(conditions["evidence"] and not failed_case_ids)
     conditions["non_evidence_reasons"] = reasons
     manifest_data = {
-        "manifest_version": "3.2",
+        "manifest_version": "3.3",
         "date": date_str,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,

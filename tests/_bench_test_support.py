@@ -10,11 +10,11 @@ CUDA_TEST = pytest.mark.cuda
 
 READY_FACTS = {
     "uptime_seconds": 600.0,
-    "app_windows": [
-        {"process": "WindowsTerminal", "title": "Terminal"},
-        {"process": "TextInputHost", "title": "Windows Input Experience"},
-    ],
-    "launcher_processes": ["python", "uv", "just", "pwsh", "WindowsTerminal", "explorer"],
+    "physical_memory": {
+        "total_bytes": 16 * 1024**3,
+        "available_bytes": 8 * 1024**3,
+        "used_percent": 50.0,
+    },
     "stoquant_pids": [],
     "git_dirty_files": [],
     "gpu_clock_event_reasons": "0x0000000000000001",
