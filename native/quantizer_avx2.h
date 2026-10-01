@@ -16,6 +16,7 @@
 
 /* Team size a parallel region actually gets for the requested thread count. */
 int sq_avx2_team_size(int threads);
+int sq_avx2_is_supported(void);
 
 sq_status sq_avx2_compute_scale_with_workspace(const float *values,
                                                size_t count, float *scale,

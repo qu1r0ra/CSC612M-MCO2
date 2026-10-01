@@ -12,15 +12,19 @@ from stoquant.inputs import (
 from stoquant.matrix import run_benchmark_matrix
 
 
-def test_dense_family_inputs_match_revision_3_generator(tmp_path):
-    legacy = generate_inputs([1024, 4096], tmp_path / "legacy")
-    family = generate_family_inputs("dense", [1024, 4096], tmp_path / "family")
-    assert list(family) == ["n1024", "n4096"]
-    for count in (1024, 4096):
-        meta = family[f"n{count}"]
-        assert meta.provenance.get("input_family") == "dense"
-        assert meta.provenance.get("sha256") == legacy[count].provenance.get("sha256")
-        assert meta.path.read_bytes() == legacy[count].path.read_bytes()
+def test_dense_count_input_is_independent_of_requested_counts(tmp_path):
+    ordered = generate_inputs([1024, 4096], tmp_path / "ordered")
+    reordered = generate_inputs([4096, 1024], tmp_path / "reordered")
+    isolated = generate_inputs([1024], tmp_path / "isolated")
+    family = generate_family_inputs("dense", [4096, 1024], tmp_path / "family")
+
+    assert list(family) == ["n4096", "n1024"]
+    for count, item in ordered.items():
+        assert item.path.read_bytes() == reordered[count].path.read_bytes()
+        assert item.path.read_bytes() == family[f"n{count}"].path.read_bytes()
+        assert item.provenance.get("seed") == [count, 2026]
+        assert item.provenance.get("generator") == "numpy.random.default_rng([count, seed])"
+    assert ordered[1024].path.read_bytes() == isolated[1024].path.read_bytes()
 
 
 def test_sparse_family_masks_the_dense_input(tmp_path):

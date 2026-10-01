@@ -206,7 +206,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert set(manifest["inputs"]) == {"1024", "2048"}
     inp = manifest["inputs"]["1024"]
     assert inp["count"] == 1024
-    assert inp["generator"] == "numpy.random.default_rng"
+    assert inp["generator"] == "numpy.random.default_rng([count, seed])"
     assert "seed" in inp
     assert len(inp["sha256"]) == 64
     assert "_path" not in inp

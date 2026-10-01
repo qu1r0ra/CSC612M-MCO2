@@ -11,7 +11,34 @@
 #define SQ_HD static __inline
 #endif
 
-#define SQ_PHILOX_ROUNDS 10
+#define SQ_PHILOX_ROUNDS PHILOX4x32_DEFAULT_ROUNDS
+#define SQ_PHILOX_M0 PHILOX_M4x32_0
+#define SQ_PHILOX_M1 PHILOX_M4x32_1
+#define SQ_PHILOX_W0 PHILOX_W32_0
+#define SQ_PHILOX_W1 PHILOX_W32_1
+
+enum {
+  SQ_PHILOX_KEY_SEED_LO = 0,
+  SQ_PHILOX_KEY_SEED_HI = 1,
+  SQ_PHILOX_CTR_GROUP_LO = 0,
+  SQ_PHILOX_CTR_GROUP_HI = 1,
+  SQ_PHILOX_CTR_TENSOR = 2,
+  SQ_PHILOX_CTR_INVOCATION = 3,
+  SQ_PHILOX_RESULT_0 = 0,
+  SQ_PHILOX_RESULT_1 = 1,
+  SQ_PHILOX_RESULT_2 = 2,
+  SQ_PHILOX_RESULT_3 = 3,
+  SQ_PHILOX_WORDS_PER_GROUP = 4
+};
+
+#define SQ_PHILOX_GROUP_LO(group) ((uint32_t)(group))
+#define SQ_PHILOX_GROUP_HI(group) ((uint32_t)((group) >> 32))
+#define SQ_PHILOX_TENSOR_ID(stream) ((stream)->tensor_id)
+#define SQ_PHILOX_INVOCATION_ID(stream) ((stream)->invocation_id)
+#define SQ_PHILOX_GROUP_WORD(group, lane)                                      \
+  ((group) * SQ_PHILOX_WORDS_PER_GROUP + (lane))
+#define SQ_PHILOX_WORD_GROUP(word) ((word) / SQ_PHILOX_WORDS_PER_GROUP)
+#define SQ_PHILOX_WORD_LANE(word) ((word) % SQ_PHILOX_WORDS_PER_GROUP)
 
 enum { SQ_RNG_OK = 0, SQ_RNG_ERR_ID_OVERFLOW = 1 };
 
@@ -41,18 +68,18 @@ SQ_HD int sq_rng_stream_init(sq_rng_stream *s, uint64_t seed,
 /* key = {seed lo, seed hi} */
 SQ_HD philox4x32_key_t sq_philox_key(const sq_rng_stream *s) {
   philox4x32_key_t k;
-  k.v[0] = (uint32_t)s->seed;
-  k.v[1] = (uint32_t)(s->seed >> 32);
+  k.v[SQ_PHILOX_KEY_SEED_LO] = (uint32_t)s->seed;
+  k.v[SQ_PHILOX_KEY_SEED_HI] = (uint32_t)(s->seed >> 32);
   return k;
 }
 
 /* counter = {group lo, group hi, tensor, invocation}; group = floor(i/4) */
 SQ_HD philox4x32_ctr_t sq_philox_ctr(const sq_rng_stream *s, uint64_t group) {
   philox4x32_ctr_t c;
-  c.v[0] = (uint32_t)group;
-  c.v[1] = (uint32_t)(group >> 32);
-  c.v[2] = s->tensor_id;
-  c.v[3] = s->invocation_id;
+  c.v[SQ_PHILOX_CTR_GROUP_LO] = SQ_PHILOX_GROUP_LO(group);
+  c.v[SQ_PHILOX_CTR_GROUP_HI] = SQ_PHILOX_GROUP_HI(group);
+  c.v[SQ_PHILOX_CTR_TENSOR] = SQ_PHILOX_TENSOR_ID(s);
+  c.v[SQ_PHILOX_CTR_INVOCATION] = SQ_PHILOX_INVOCATION_ID(s);
   return c;
 }
 

@@ -259,7 +259,8 @@ __global__ static void round_kernel(uint8_t bit_width, const float *values,
   const int s =
       (bit_width == SQ_Q4_BITS) ? SQ_Q4_SIGNED_LIMIT : SQ_Q8_SIGNED_LIMIT;
   const philox4x32_key_t key = sq_philox_key(&stream_state);
-  const uint64_t group_count = count / 4 + (count % 4 != 0);
+  const uint64_t group_count = count / SQ_PHILOX_WORDS_PER_GROUP +
+                               (count % SQ_PHILOX_WORDS_PER_GROUP != 0);
   const uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
   const float scale_value = *scale;
 
@@ -270,8 +271,8 @@ __global__ static void round_kernel(uint8_t bit_width, const float *values,
       random_words = philox4x32_R(SQ_PHILOX_ROUNDS,
                                   sq_philox_ctr(&stream_state, group), key);
     }
-    for (unsigned int lane = 0; lane < 4; lane++) {
-      const uint64_t index = group * 4 + lane;
+    for (unsigned int lane = 0; lane < SQ_PHILOX_WORDS_PER_GROUP; lane++) {
+      const uint64_t index = SQ_PHILOX_GROUP_WORD(group, lane);
       if (index >= count) {
         break;
       }
@@ -299,8 +300,9 @@ __global__ static void round_kernel(uint8_t bit_width, const float *values,
       }
       const float lower_float = floorf(scaled);
       const float probability = scaled - lower_float;
-      const uint32_t word =
-          prescribed_words ? words[index] : random_words.v[lane];
+      const uint32_t word = prescribed_words
+                                ? words[index]
+                                : random_words.v[SQ_PHILOX_WORD_LANE(index)];
       const int magnitude = (int)lower_float + sq_bernoulli(word, probability);
       const int signed_code =
           signbit(value) && magnitude != 0 ? -magnitude : magnitude;

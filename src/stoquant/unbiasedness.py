@@ -67,11 +67,7 @@ GATE_RULE = (
 
 
 def suite_inputs(seed: int = DEFAULT_INPUT_SEED) -> list[dict[str, Any]]:
-    """The four suite inputs with their provenance and SHA-256.
-
-    The dense vector is the first draw of the seed's generator, so it matches the
-    `n16384` input of a matrix run only when `--counts` starts at 16384.
-    """
+    """The four suite inputs with their provenance and SHA-256."""
     course, _ = course_vector()
     dense = dense_vectors([SUITE_COUNT], seed)[0]
     sparse, realised = sparsify(dense)
@@ -93,10 +89,9 @@ def suite_inputs(seed: int = DEFAULT_INPUT_SEED) -> list[dict[str, Any]]:
             "values": dense,
             "provenance": {
                 "input_family": "dense",
-                "generator": "numpy.random.default_rng",
+                "generator": "numpy.random.default_rng([count, seed])",
                 "bit_generator": "PCG64",
-                "seed": seed,
-                "draw": f"first normal draw of {SUITE_COUNT} values, cast to FP32",
+                "seed": [SUITE_COUNT, seed],
             },
         },
         {
@@ -104,7 +99,9 @@ def suite_inputs(seed: int = DEFAULT_INPUT_SEED) -> list[dict[str, Any]]:
             "values": sparse,
             "provenance": {
                 "input_family": "sparse",
-                "seed": seed,
+                "generator": "numpy.random.default_rng([count, seed])",
+                "bit_generator": "PCG64",
+                "seed": [SUITE_COUNT, seed],
                 "mask_seed": SPARSE_MASK_SEED,
                 "zero_fraction_target": SPARSE_ZERO_FRACTION,
                 "zero_fraction_realised": realised,

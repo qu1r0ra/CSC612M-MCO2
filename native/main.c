@@ -27,9 +27,6 @@
 #include <unistd.h>
 #endif
 #include "bench_clock.h"
-#ifdef _MSC_VER
-#include <intrin.h>
-#endif
 
 #ifdef SQ_ENABLE_CUDA
 #define SQ_HAS_CUDA 1
@@ -79,33 +76,6 @@ static void usage(FILE *stream) {
       "and reference is the default.\n");
 }
 
-/* Checked here, outside the /arch:AVX2 translation unit: CPU support plus
- * OS-saved YMM state. */
-static int cpu_has_avx2(void) {
-#if defined(_MSC_VER)
-  int info[4];
-
-  __cpuid(info, 0);
-  if (info[0] < 7) {
-    return 0;
-  }
-  __cpuid(info, 1);
-  if ((info[2] & (1 << 27)) == 0 || (info[2] & (1 << 28)) == 0) {
-    return 0;
-  }
-  if ((_xgetbv(0) & 6) != 6) {
-    return 0;
-  }
-  __cpuidex(info, 7, 0);
-  return (info[1] & (1 << 5)) != 0;
-#elif defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
-  __builtin_cpu_init();
-  return __builtin_cpu_supports("avx2");
-#else
-  return 0;
-#endif
-}
-
 static int default_thread_count(void) {
 #ifdef _WIN32
   DWORD_PTR process_mask, system_mask;
@@ -134,7 +104,7 @@ static sq_status resolve_cpu_threads(sq_backend backend, int threads_seen,
   if (backend != SQ_BACKEND_CPU_AVX2) {
     return threads_seen ? SQ_ERR_ARGUMENT : SQ_OK;
   }
-  if (!cpu_has_avx2()) {
+  if (!sq_avx2_is_supported()) {
     return SQ_ERR_AVX2_UNAVAILABLE;
   }
   *threads = threads_seen ? (int)requested : default_thread_count();

@@ -103,9 +103,11 @@ RESNET18_CIFAR_TENSORS = _resnet18_cifar_tensors()
 
 
 def dense_vectors(counts: Sequence[int], seed: int = DEFAULT_INPUT_SEED) -> list[np.ndarray]:
-    """Standard-normal FP32 vectors, drawn in order from one generator."""
-    rng = np.random.default_rng(seed)
-    return [rng.normal(size=count).astype(np.float32) for count in counts]
+    """Standard-normal FP32 vectors, each seeded by its count and input seed."""
+    return [
+        np.random.default_rng([count, seed]).normal(size=count).astype(np.float32)
+        for count in counts
+    ]
 
 
 def sparsify(
@@ -193,10 +195,10 @@ def generate_inputs(
     seed: int = DEFAULT_INPUT_SEED,
 ) -> dict[int, GeneratedInput]:
     directory.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng(seed)
     generated: dict[int, GeneratedInput] = {}
 
     for count in counts:
+        rng = np.random.default_rng([count, seed])
         values = rng.normal(size=count).astype(np.float32)
         bytes_data = values.astype("<f4").tobytes()
         sha256 = hashlib.sha256(bytes_data).hexdigest()
@@ -206,9 +208,9 @@ def generate_inputs(
         input_provenance: InputProvenance = {
             "count": count,
             "filename": file_path.name,
-            "generator": "numpy.random.default_rng",
+            "generator": "numpy.random.default_rng([count, seed])",
             "bit_generator": type(rng.bit_generator).__name__,
-            "seed": seed,
+            "seed": [count, seed],
             "sha256": sha256,
         }
         generated[count] = GeneratedInput(file_path, input_provenance)
@@ -252,9 +254,9 @@ def generate_family_inputs(
                 "input_key": key,
                 "count": count,
                 "filename": file_path.name,
-                "generator": "numpy.random.default_rng",
+                "generator": "numpy.random.default_rng([count, seed])",
                 "bit_generator": "PCG64",
-                "seed": seed,
+                "seed": [count, seed],
                 "dense_source": "the dense input of the same seed and count",
                 "mask_seed": SPARSE_MASK_SEED,
                 "zero_fraction_target": SPARSE_ZERO_FRACTION,

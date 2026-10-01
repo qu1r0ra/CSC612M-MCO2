@@ -55,7 +55,7 @@ INVOCATION = {
     "k1-ab": [sys.executable, "-m", "stoquant", "k1-ab"],
     "figures": [sys.executable, "-m", "stoquant", "figures"],
     # Environment variables removed before every run, so each run uses defaults.
-    "scrubbed_env_prefixes": ("MCO2_", "STOQUANT_"),
+    "scrubbed_env_prefixes": ("STOQUANT_",),
 }
 # ---------------------------------------------------------------------------
 
@@ -141,8 +141,6 @@ CSV_COMPARED_COLUMNS = {
     },
     "processes.csv": {"process", "position", "count", "bits", "warmups", "reps"},
 }  # fmt: skip
-# Rule text names the binary, which stage 1 renames; the name is normalized.
-BINARY_NAME = re.compile(r"\b(mco2|stoquant)\b")
 # Drawn from seed-determined values only, so hashed like any other file.
 SEEDED_FIGURES = {"f_unbiasedness.png"}
 VEC_VERDICT = re.compile(
@@ -185,8 +183,6 @@ def flatten(value: Any, path: str, out: dict[str, Any]) -> None:
         reason = match(path, REDACT_RULES)
         if reason:
             value = f"<redacted: {reason}>"
-        elif isinstance(value, str):
-            value = BINARY_NAME.sub("<binary>", value)
         out[path] = value
 
 
@@ -202,8 +198,7 @@ def fingerprint_csv(path: Path) -> dict[str, Any]:
     for r, row in enumerate(rows[1:]):
         for column, cell in zip(rows[0], row, strict=True):
             keep = compared is None or column in compared
-            value = BINARY_NAME.sub("<binary>", cell)
-            out[f"row/{r}/{column}"] = value if keep else "<redacted: timing-derived>"
+            out[f"row/{r}/{column}"] = cell if keep else "<redacted: timing-derived>"
     return out
 
 
@@ -396,7 +391,7 @@ def outcome(
 ) -> dict[str, Any]:
     if result.returncode != 0:
         last = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else ""
-        return {"error": BINARY_NAME.sub("<binary>", scrub_paths(last, work, REPO))}
+        return {"error": scrub_paths(last, work, REPO)}
     files = hash_tree(target)
     return {k: v for k, v in files.items() if only is None or Path(k).name == only}
 

@@ -3,6 +3,9 @@
 #include <math.h>
 #include <omp.h>
 #include <string.h>
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 #include "quantizer.h"
 
@@ -67,6 +70,31 @@ int sq_avx2_team_size(int threads) {
     team = omp_get_num_threads();
   }
   return team;
+}
+
+int sq_avx2_is_supported(void) {
+#if defined(_MSC_VER)
+  int info[4];
+
+  __cpuid(info, 0);
+  if (info[0] < 7) {
+    return 0;
+  }
+  __cpuid(info, 1);
+  if ((info[2] & (1 << 27)) == 0 || (info[2] & (1 << 28)) == 0) {
+    return 0;
+  }
+  if ((_xgetbv(0) & 6) != 6) {
+    return 0;
+  }
+  __cpuidex(info, 7, 0);
+  return (info[1] & (1 << 5)) != 0;
+#elif defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+  __builtin_cpu_init();
+  return __builtin_cpu_supports("avx2");
+#else
+  return 0;
+#endif
 }
 
 /* Largest |x| bit pattern: >= NONFINITE_BITS means inf or NaN, 0 means all
@@ -233,27 +261,29 @@ sq_status sq_avx2_compute_scale_with_workspace(const float *values,
 }
 
 /* Philox4x32-10 for PHILOX_CHUNK consecutive groups, one lane per group. */
-static void philox_chunk(uint64_t first_group, uint32_t k0, uint32_t k1,
-                         uint32_t tensor, uint32_t invocation,
+static void philox_chunk(const sq_rng_stream *s, uint64_t first_group,
                          uint32_t *restrict out) {
   uint32_t c0[PHILOX_CHUNK], c1[PHILOX_CHUNK], c2[PHILOX_CHUNK],
       c3[PHILOX_CHUNK];
+  philox4x32_key_t key = sq_philox_key(s);
+  const uint32_t k0 = key.v[SQ_PHILOX_KEY_SEED_LO];
+  const uint32_t k1 = key.v[SQ_PHILOX_KEY_SEED_HI];
   int j, r;
 
   for (j = 0; j < PHILOX_CHUNK; j++) { /* avx2-hot */
     uint64_t group = first_group + (uint64_t)j;
-    c0[j] = (uint32_t)group;
-    c1[j] = (uint32_t)(group >> 32);
-    c2[j] = tensor;
-    c3[j] = invocation;
+    c0[j] = SQ_PHILOX_GROUP_LO(group);
+    c1[j] = SQ_PHILOX_GROUP_HI(group);
+    c2[j] = SQ_PHILOX_TENSOR_ID(s);
+    c3[j] = SQ_PHILOX_INVOCATION_ID(s);
   }
   for (r = 0; r < SQ_PHILOX_ROUNDS; r++) {
-    uint32_t ka = k0 + (uint32_t)r * 0x9E3779B9u;
-    uint32_t kb = k1 + (uint32_t)r * 0xBB67AE85u;
+    uint32_t ka = k0 + (uint32_t)r * SQ_PHILOX_W0;
+    uint32_t kb = k1 + (uint32_t)r * SQ_PHILOX_W1;
 
     for (j = 0; j < PHILOX_CHUNK; j++) { /* avx2-hot */
-      uint64_t p0 = (uint64_t)0xD2511F53u * c0[j];
-      uint64_t p1 = (uint64_t)0xCD9E8D57u * c2[j];
+      uint64_t p0 = (uint64_t)SQ_PHILOX_M0 * c0[j];
+      uint64_t p1 = (uint64_t)SQ_PHILOX_M1 * c2[j];
       uint32_t n0 = (uint32_t)(p1 >> 32) ^ c1[j] ^ ka;
       uint32_t n2 = (uint32_t)(p0 >> 32) ^ c3[j] ^ kb;
 
@@ -277,15 +307,14 @@ static void philox_chunk(uint64_t first_group, uint32_t k0, uint32_t k1,
 
 void sq_avx2_rng_words(const sq_rng_stream *s, uint64_t n, uint32_t *out,
                        int threads) {
-  const uint64_t chunk_words = (uint64_t)4 * PHILOX_CHUNK;
+  const uint64_t chunk_words =
+      (uint64_t)SQ_PHILOX_WORDS_PER_GROUP * PHILOX_CHUNK;
   const size_t chunks = (size_t)((n + chunk_words - 1) / chunk_words);
-  const uint32_t k0 = (uint32_t)s->seed, k1 = (uint32_t)(s->seed >> 32);
-  const uint32_t tensor = s->tensor_id, invocation = s->invocation_id;
 
   omp_set_dynamic(0);
 #pragma omp parallel num_threads(threads)
   {
-    uint32_t tail[4 * PHILOX_CHUNK];
+    uint32_t tail[SQ_PHILOX_WORDS_PER_GROUP * PHILOX_CHUNK];
     size_t begin, end, c;
 
     split(chunks, omp_get_thread_num(), omp_get_num_threads(), &begin, &end);
@@ -293,11 +322,9 @@ void sq_avx2_rng_words(const sq_rng_stream *s, uint64_t n, uint32_t *out,
       uint64_t first_word = (uint64_t)c * chunk_words;
 
       if (first_word + chunk_words <= n) {
-        philox_chunk((uint64_t)c * PHILOX_CHUNK, k0, k1, tensor, invocation,
-                     out + first_word);
+        philox_chunk(s, (uint64_t)c * PHILOX_CHUNK, out + first_word);
       } else {
-        philox_chunk((uint64_t)c * PHILOX_CHUNK, k0, k1, tensor, invocation,
-                     tail);
+        philox_chunk(s, (uint64_t)c * PHILOX_CHUNK, tail);
         memcpy(out + first_word, tail, (size_t)(n - first_word) * sizeof *tail);
       }
     }
