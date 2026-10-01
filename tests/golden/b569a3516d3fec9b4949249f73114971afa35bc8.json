@@ -1,5 +1,5 @@
 {
- "commit": "bba85735bf081ffbfefd2a868247b6b5495ef963",
+ "commit": "b569a3516d3fec9b4949249f73114971afa35bc8",
  "fingerprint": {
   "frozen": {
    "content": {},
@@ -16784,7 +16784,7 @@
      "manifest.json": {
       "all_cases_passed": true,
       "build_flags": "<collapsed: path-valued provenance>",
-      "build_stamp/binary_sha256": "04ab90f5241e4b03b7b6103d29af5b672fc8cb84d3e567499c359660d8607bd7",
+      "build_stamp/binary_sha256": "<redacted: build provenance>",
       "build_stamp/commands/0": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/main.c /Fo:build/cuda/main.obj",
       "build_stamp/commands/1": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cli.c /Fo:build/cuda/cli.obj",
       "build_stamp/commands/10": "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include build/cuda/main.obj build/cuda/cli.obj build/cuda/bench_report.obj build/cuda/sq_status.obj build/cuda/codec.obj build/cuda/quantizer.obj build/cuda/rng_cpu.obj build/cuda/cpu_compress.obj build/cuda/quantizer_avx2.obj build/cuda/quantizer_cuda.obj -o build/stoquant.exe",
@@ -16808,7 +16808,7 @@
       "build_stamp/compiler_flags/8": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native/quantizer_avx2.c /Fo:build/cuda/quantizer_avx2.obj",
       "build_stamp/compiler_flags/9": "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 -c native/quantizer_cuda.cu -o build/cuda/quantizer_cuda.obj",
       "build_stamp/recipe": "build-cuda",
-      "build_stamp/revision": "bba85735bf081ffbfefd2a868247b6b5495ef963",
+      "build_stamp/revision": "<redacted: git provenance>",
       "build_stamp/tree_dirty": false,
       "build_stamp/tree_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "build_stamp/version": 1,
@@ -35394,7 +35394,7 @@
      "manifest.json": {
       "all_cases_passed": true,
       "build_flags": "<collapsed: path-valued provenance>",
-      "build_stamp/binary_sha256": "04ab90f5241e4b03b7b6103d29af5b672fc8cb84d3e567499c359660d8607bd7",
+      "build_stamp/binary_sha256": "<redacted: build provenance>",
       "build_stamp/commands/0": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/main.c /Fo:build/cuda/main.obj",
       "build_stamp/commands/1": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cli.c /Fo:build/cuda/cli.obj",
       "build_stamp/commands/10": "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include build/cuda/main.obj build/cuda/cli.obj build/cuda/bench_report.obj build/cuda/sq_status.obj build/cuda/codec.obj build/cuda/quantizer.obj build/cuda/rng_cpu.obj build/cuda/cpu_compress.obj build/cuda/quantizer_avx2.obj build/cuda/quantizer_cuda.obj -o build/stoquant.exe",
@@ -35418,7 +35418,7 @@
       "build_stamp/compiler_flags/8": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native/quantizer_avx2.c /Fo:build/cuda/quantizer_avx2.obj",
       "build_stamp/compiler_flags/9": "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 -c native/quantizer_cuda.cu -o build/cuda/quantizer_cuda.obj",
       "build_stamp/recipe": "build-cuda",
-      "build_stamp/revision": "bba85735bf081ffbfefd2a868247b6b5495ef963",
+      "build_stamp/revision": "<redacted: git provenance>",
       "build_stamp/tree_dirty": false,
       "build_stamp/tree_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "build_stamp/version": 1,
@@ -45475,7 +45475,7 @@
      "manifest.json": {
       "all_cases_passed": true,
       "build_flags": "<collapsed: path-valued provenance>",
-      "build_stamp/binary_sha256": "04ab90f5241e4b03b7b6103d29af5b672fc8cb84d3e567499c359660d8607bd7",
+      "build_stamp/binary_sha256": "<redacted: build provenance>",
       "build_stamp/commands/0": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/main.c /Fo:build/cuda/main.obj",
       "build_stamp/commands/1": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cli.c /Fo:build/cuda/cli.obj",
       "build_stamp/commands/10": "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include build/cuda/main.obj build/cuda/cli.obj build/cuda/bench_report.obj build/cuda/sq_status.obj build/cuda/codec.obj build/cuda/quantizer.obj build/cuda/rng_cpu.obj build/cuda/cpu_compress.obj build/cuda/quantizer_avx2.obj build/cuda/quantizer_cuda.obj -o build/stoquant.exe",
@@ -45499,7 +45499,7 @@
       "build_stamp/compiler_flags/8": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native/quantizer_avx2.c /Fo:build/cuda/quantizer_avx2.obj",
       "build_stamp/compiler_flags/9": "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 -c native/quantizer_cuda.cu -o build/cuda/quantizer_cuda.obj",
       "build_stamp/recipe": "build-cuda",
-      "build_stamp/revision": "bba85735bf081ffbfefd2a868247b6b5495ef963",
+      "build_stamp/revision": "<redacted: git provenance>",
       "build_stamp/tree_dirty": false,
       "build_stamp/tree_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "build_stamp/version": 1,
@@ -47943,7 +47943,7 @@
      "derived/f_unbiasedness.png": "0495f613da81c1e3caee87c5dcad2afcb55410212cc958a64372321fee96ee8b",
      "unbiasedness.json": {
       "all_passed": false,
-      "build_stamp/binary_sha256": "04ab90f5241e4b03b7b6103d29af5b672fc8cb84d3e567499c359660d8607bd7",
+      "build_stamp/binary_sha256": "<redacted: build provenance>",
       "build_stamp/commands/0": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/main.c /Fo:build/cuda/main.obj",
       "build_stamp/commands/1": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cli.c /Fo:build/cuda/cli.obj",
       "build_stamp/commands/10": "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include build/cuda/main.obj build/cuda/cli.obj build/cuda/bench_report.obj build/cuda/sq_status.obj build/cuda/codec.obj build/cuda/quantizer.obj build/cuda/rng_cpu.obj build/cuda/cpu_compress.obj build/cuda/quantizer_avx2.obj build/cuda/quantizer_cuda.obj -o build/stoquant.exe",
@@ -47967,7 +47967,7 @@
       "build_stamp/compiler_flags/8": "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native/quantizer_avx2.c /Fo:build/cuda/quantizer_avx2.obj",
       "build_stamp/compiler_flags/9": "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 -c native/quantizer_cuda.cu -o build/cuda/quantizer_cuda.obj",
       "build_stamp/recipe": "build-cuda",
-      "build_stamp/revision": "bba85735bf081ffbfefd2a868247b6b5495ef963",
+      "build_stamp/revision": "<redacted: git provenance>",
       "build_stamp/tree_dirty": false,
       "build_stamp/tree_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "build_stamp/version": 1,
