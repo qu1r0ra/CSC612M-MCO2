@@ -46,3 +46,11 @@ The manifest records the verified stamp, so each timing ties back to one exact b
 - **Considered: record only the binary's hash.** Rejected: a hash identifies a binary but not the source or flags it came from.
 - **Considered: rebuild inside every driver run.** Rejected: it puts the compiler into the measurement session and couples the drivers to the toolchain. A verified stamp gives the same guarantee without either cost.
 - **Considered: compile the revision into the binary.** Rejected: a per-commit define changes the compiler's inputs at every revision. The object files, and the SASS identity check that timed refactors rely on, would then differ even when the code has not changed.
+
+## Addendum: per-count input seeding (2026-09-29)
+
+Each dense input is drawn from its own generator seeded with the count and the input seed together, `numpy.random.default_rng([count, seed])`. This follows NumPy's documented pattern for independent reproducible streams. The sparse family is derived from the dense input of the same seed and count, so it follows the same rule, and model tensors keep their per-tensor seeds. Provenance records the derivation. This lands in batch G of issue #53, together with the new equivalence baseline.
+
+- **Why.** One generator drew the counts one after another, so the input for a given size depended on which other sizes ran before it. A matrix run's `n16384` input equalled the unbiasedness experiment's dense vector only when 16384 was that run's first count. With per-count seeding, one seed and one count always give the same bytes, so the experiments share inputs by construction.
+- **Considered: keep the sequential draw and document the caveat.** Rejected: the caveat is a trap for every future run and pilot that uses a different set of counts.
+- **Considered: spawn one child sequence per position.** Rejected: indexing by position in the count list keeps the dependence on which counts run.

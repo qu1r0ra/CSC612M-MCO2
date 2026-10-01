@@ -28,9 +28,9 @@ __global__ void rng_words_kernel(sq_rng_stream s, uint64_t n, uint32_t *out) {
 
   for (i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x; i < n;
        i += stride) {
-    philox4x32_ctr_t r =
-        philox4x32_R(SQ_PHILOX_ROUNDS, sq_philox_ctr(&s, i / 4), key);
-    out[i] = r.v[i % 4];
+    philox4x32_ctr_t r = philox4x32_R(
+        SQ_PHILOX_ROUNDS, sq_philox_ctr(&s, SQ_PHILOX_WORD_GROUP(i)), key);
+    out[i] = r.v[SQ_PHILOX_WORD_LANE(i)];
   }
 }
 

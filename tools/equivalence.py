@@ -15,10 +15,14 @@ verdicts, K1 bandwidth and the keep decision), timestamps, git provenance, GPU
 and host state, and run conditions that depend on the shell. Collapsed to one
 leaf (key names included): path-valued provenance, that is build commands and
 flags, binary hashes keyed by binary name, and readiness facts.
+Build-stamp revisions and executable hashes are redacted because the golden
+commit and identical rebuilds change them without changing program behavior.
 
-Later stages may change only the INVOCATION table below. Everything else in
-this file, and the configurations it runs, stays fixed so that a baseline
-captured before a stage is comparable with a run after it.
+After a baseline is established, routine stages may change only the INVOCATION
+table below. A comparison or normalization policy change requires a reviewed
+baseline transition: classify the old-to-new differences, document the new
+boundary, and capture a new golden. The configurations run here stay fixed
+between those transitions so each pinned baseline remains comparable.
 
     just equivalence capture
     just equivalence compare [--baseline PATH|COMMIT]
@@ -55,7 +59,7 @@ INVOCATION = {
     "k1-ab": [sys.executable, "-m", "stoquant", "k1-ab"],
     "figures": [sys.executable, "-m", "stoquant", "figures"],
     # Environment variables removed before every run, so each run uses defaults.
-    "scrubbed_env_prefixes": ("MCO2_", "STOQUANT_"),
+    "scrubbed_env_prefixes": ("STOQUANT_",),
 }
 # ---------------------------------------------------------------------------
 
@@ -118,6 +122,8 @@ COLLAPSE = [
 REDACT = [
     (r"(.*/)?(created_at_utc|created_utc|captured_at_utc)|date", "timestamp"),
     (r"(.*/)?(code_revision|code_revision_short|git_dirty)", "git provenance"),
+    (r"(.*/)?build_stamp/revision", "git provenance"),
+    (r"(.*/)?build_stamp/binary_sha256", "build provenance"),
     (r"(.*/)?numpy_version", "environment"),
     (r"(.*/)?\w*_ms(/.*)?", "timing"),
     (r"statistics/(?!baseline$|descriptive$).*", "timing-derived"),
@@ -141,8 +147,6 @@ CSV_COMPARED_COLUMNS = {
     },
     "processes.csv": {"process", "position", "count", "bits", "warmups", "reps"},
 }  # fmt: skip
-# Rule text names the binary, which stage 1 renames; the name is normalized.
-BINARY_NAME = re.compile(r"\b(mco2|stoquant)\b")
 # Drawn from seed-determined values only, so hashed like any other file.
 SEEDED_FIGURES = {"f_unbiasedness.png"}
 VEC_VERDICT = re.compile(
@@ -185,8 +189,6 @@ def flatten(value: Any, path: str, out: dict[str, Any]) -> None:
         reason = match(path, REDACT_RULES)
         if reason:
             value = f"<redacted: {reason}>"
-        elif isinstance(value, str):
-            value = BINARY_NAME.sub("<binary>", value)
         out[path] = value
 
 
@@ -202,8 +204,7 @@ def fingerprint_csv(path: Path) -> dict[str, Any]:
     for r, row in enumerate(rows[1:]):
         for column, cell in zip(rows[0], row, strict=True):
             keep = compared is None or column in compared
-            value = BINARY_NAME.sub("<binary>", cell)
-            out[f"row/{r}/{column}"] = value if keep else "<redacted: timing-derived>"
+            out[f"row/{r}/{column}"] = cell if keep else "<redacted: timing-derived>"
     return out
 
 
@@ -354,7 +355,11 @@ def records(work: Path) -> dict[str, Any]:
 def frozen_snapshots(work: Path) -> dict[str, Any]:
     """Content hashes of every frozen snapshot and of what each renderer makes from it."""
     results = REPO / "results"
-    snapshots = sorted(p for p in results.iterdir() if p.is_dir() and p.name != "pilots")
+    snapshots = (
+        sorted(p for p in results.iterdir() if p.is_dir() and p.name != "pilots")
+        if results.is_dir()
+        else []
+    )
     out: dict[str, Any] = {"content": {p.name: hash_tree(p) for p in snapshots}}
     renders: dict[str, Any] = {}
     renders_root = work / "renders"
@@ -396,7 +401,7 @@ def outcome(
 ) -> dict[str, Any]:
     if result.returncode != 0:
         last = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else ""
-        return {"error": BINARY_NAME.sub("<binary>", scrub_paths(last, work, REPO))}
+        return {"error": scrub_paths(last, work, REPO)}
     files = hash_tree(target)
     return {k: v for k, v in files.items() if only is None or Path(k).name == only}
 
@@ -430,6 +435,9 @@ def flatten_fingerprint(value: Any, path: str = "") -> dict[str, Any]:
         for key, child in value.items():
             out.update(flatten_fingerprint(child, f"{path}/{key}" if path else str(key)))
         return out
+    reason = match(path, REDACT_RULES)
+    if reason:
+        value = f"<redacted: {reason}>"
     return {path: value}
 
 
