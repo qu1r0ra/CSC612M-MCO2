@@ -10,8 +10,8 @@ from typing import cast
 import pytest
 
 from stoquant.design import build_paths
-from stoquant.matrix import SweepSettings, warm_up_case
 from stoquant.runner import FakeBenchProcess, RealBenchProcess, run_bench_process
+from stoquant.sweep import SweepOrder, SweepSettings, run_trials, warm_up_case
 
 
 def test_real_process_times_out_with_a_clear_error():
@@ -112,9 +112,63 @@ def test_bad_calibration_probe_fails_only_its_case():
         paths=build_paths(["cpu", "cpu-avx2"]),
         bench_process=fake,
     )
-    cases = [{"correctness": {"status": "passed"}} for _ in range(2)]
+    gate = {
+        "status": "passed",
+        "byte_identical_to_compress": True,
+        "record_sha256": {"cpu": "abc123"},
+        "seed": 42,
+    }
+    cases = [{"correctness": dict(gate)} for _ in range(2)]
     warm_up_case(cases, Path("stoquant.exe"), Path("input.f32"), 8, cast(SweepSettings, settings))
     assert cases[0]["correctness"]["status"] == "failed"
+    assert cases[0]["correctness"]["gate_status"] == "passed"
+    assert cases[0]["correctness"]["byte_identical_to_compress"] is True
+    assert cases[0]["correctness"]["record_sha256"] == {"cpu": "abc123"}
+    assert cases[0]["correctness"]["seed"] == 42
     assert "empty or non-finite" in cases[0]["correctness"]["error_message"]
     assert cases[1]["correctness"]["status"] == "passed"
     assert cases[1]["warmup"] == 500
+
+
+def test_trial_failure_preserves_the_complete_correctness_gate():
+    gate = {
+        "status": "passed",
+        "byte_identical_to_compress": True,
+        "records": [{"backend": "cpu", "sha256": "abc123"}],
+        "oracle": {"version": 2},
+        "error_message": "correctness metadata detail",
+    }
+    case = {
+        "case_id": "case_cpu_comparator_bits4_n1024",
+        "correctness": dict(gate),
+        "warmup": 1,
+        "trial_runs": [],
+    }
+    settings = SimpleNamespace(
+        k1="reference",
+        compression_seed=42,
+        reps=1,
+        paths=build_paths(["cpu"]),
+        bench_process=FakeBenchProcess(
+            [subprocess.CompletedProcess([], 1, "", "native trial failed")]
+        ),
+    )
+    order = SweepOrder([[0]], [["cpu-comparator"]], [], None, None)
+
+    run_trials(
+        [case],
+        Path("stoquant.exe"),
+        Path("input.f32"),
+        4,
+        order,
+        cast(SweepSettings, settings),
+    )
+
+    assert case["correctness"]["status"] == "failed"
+    assert case["correctness"]["gate_status"] == "passed"
+    assert case["correctness"]["byte_identical_to_compress"] is True
+    assert case["correctness"]["records"] == gate["records"]
+    assert case["correctness"]["oracle"] == gate["oracle"]
+    assert case["correctness"]["gate_error_message"] == gate["error_message"]
+    assert case["correctness"]["failure_phase"] == "trial"
+    assert case["correctness"]["error_message"] == "stoquant bench failed: native trial failed"

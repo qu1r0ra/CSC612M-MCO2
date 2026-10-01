@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import platform
-import shutil
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -77,6 +76,7 @@ def find_binary(
         tree_dirty=git["git_dirty"],
         fingerprint=git["tree_fingerprint"],
         require_cuda=require_cuda,
+        expected_recipe=("build-cpu", "build-cuda") if not require_cuda else "build-cuda",
     )
     return VerifiedBinary(path, stamp)
 
@@ -126,26 +126,14 @@ def collect_git_provenance(root: Path) -> dict[str, Any]:
     }
 
 
-def collect_build_commands(root: Path) -> BuildCommands:
-    """Read the exact compile commands from the build recipe via `just --dry-run`."""
-    just = shutil.which("just")
-    commands: list[str] = []
-    if just is not None:
-        proc = subprocess.run(
-            [just, "--dry-run", BUILD_RECIPE],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode == 0:
-            # just echoes dry-run commands on stderr.
-            text = proc.stderr if proc.stderr.strip() else proc.stdout
-            commands = [line.strip() for line in text.splitlines() if line.strip()]
-
+def collect_build_commands(stamp: dict[str, Any]) -> BuildCommands:
+    """Read compiler commands from the verified binary's build stamp."""
+    commands = stamp.get("commands")
+    if not isinstance(commands, list) or not all(isinstance(command, str) for command in commands):
+        raise RuntimeError("verified build stamp has invalid compiler commands")
     parsed = parse_build_commands(commands)
     return BuildCommands(
-        source=f"just --dry-run {BUILD_RECIPE}",
+        source=f"verified build stamp ({stamp.get('recipe', 'unknown')})",
         commands=parsed.commands,
         comparator_c=parsed.comparator_c,
         avx2_c=parsed.avx2_c,

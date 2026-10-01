@@ -19,44 +19,63 @@ import sys
 import tempfile
 from pathlib import Path
 
+from stoquant.native_build import source_lists
+
 REPO = Path(__file__).resolve().parents[1]
 
 
-def just_var(name: str) -> list[str]:
+def c_units(root: Path = REPO) -> list[tuple[str, list[str]]]:
+    """(source, MSVC flags) for every C translation unit the justfile compiles."""
+    sources = source_lists(root)
+    includes = _just_var(root, "cl_includes")
+    host = _just_var(root, "cl_host_flags") + includes
+    cuda_host = [*host, "/DSQ_ENABLE_CUDA"]
+    test = _just_var(root, "cl_test_flags") + includes
+    avx = _just_var(root, "avx2_cl_flags")
+    units: list[tuple[str, list[str]]] = []
+
+    def add(source: str, flags: list[str]) -> None:
+        row = (source, flags)
+        if source.endswith(".c") and row not in units:
+            units.append(row)
+
+    for source in sources["native_host_sources"]:
+        add(source, host)
+        add(source, cuda_host)
+    for source in sources["native_avx2_sources"]:
+        add(source, avx)
+    for name in SOURCE_GROUPS_FOR_LINT:
+        for source in sources[name]:
+            add(source, avx if source in sources["native_avx2_sources"] else test)
+    return units
+
+
+SOURCE_GROUPS_FOR_LINT = (
+    "native_rng_sources",
+    "test_codec_sources",
+    "test_quantizer_sources",
+    "test_avx2_sources",
+    "test_avx2_driver_sources",
+    "test_rng_cpu_sources",
+    "test_asan_probe_sources",
+)
+
+
+def _just_var(root: Path, name: str) -> list[str]:
     out = subprocess.run(
-        ["just", "--evaluate", name], cwd=REPO, check=True, capture_output=True, text=True
+        ["just", "--evaluate", name], cwd=root, check=True, capture_output=True, text=True
     )
     return out.stdout.split()
 
 
-def c_units() -> list[tuple[str, list[str]]]:
-    """(source, MSVC flags) for every C translation unit the justfile compiles."""
-    includes = just_var("cl_includes")
-    host = just_var("cl_host_flags") + includes
-    test = just_var("cl_test_flags") + includes
-    units = [
-        ("native/main.c", host),
-        ("native/main.c", [*host, "/DSQ_ENABLE_CUDA"]),
-        ("native/cli.c", host),
-        ("native/bench_report.c", host),
-        ("native/sq_status.c", host),
-        ("native/codec.c", host),
-        ("native/quantizer.c", host),
-        ("native/rng_cpu.c", host),
-        ("native/quantizer_avx2.c", just_var("avx2_cl_flags")),
-    ]
-    units += [(f"tests/{p.name}", test) for p in sorted((REPO / "tests").glob("*.c"))]
-    return units
-
-
-def cuda_units(cuda_path: str) -> list[tuple[str, list[str]]]:
+def cuda_units(cuda_path: str, root: Path = REPO) -> list[tuple[str, list[str]]]:
     """(source, clang flags) for the CUDA translation units.
 
     Clang parses the whole file in device mode, host functions included.
     Random123 detects nvcc through __CUDACC__, which clang does not define, so
     its device qualifier and 64-bit multiply are set to what nvcc would select.
     """
-    arch = just_var("cuda_arch")[0]
+    arch = _just_var(root, "cuda_arch")[0]
     if arch == "native":
         device = subprocess.run(
             ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
@@ -83,9 +102,16 @@ def cuda_units(cuda_path: str) -> list[tuple[str, list[str]]]:
         "-DR123_USE_MULHILO64_C99=0",
         "-DR123_USE_MULHILO64_MULHI_INTRIN=0",
         "-DR123_USE_GNU_UINT128=0",
-        *just_var("cc_includes"),
+        *_just_var(root, "cc_includes"),
     ]
-    return [(f"native/{p.name}", flags) for p in sorted((REPO / "native").glob("*.cu"))]
+    sources = source_lists(root)
+    cuda_sources = [
+        source
+        for name in ("native_cuda_sources", "native_probe_sources", "native_rng_sources")
+        for source in sources[name]
+        if source.endswith(".cu")
+    ]
+    return [(source, flags) for source in dict.fromkeys(cuda_sources)]
 
 
 def run(cmd: list[str]) -> bool:

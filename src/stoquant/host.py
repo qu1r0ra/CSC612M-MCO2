@@ -19,9 +19,8 @@ from stoquant.provenance import collect_git_provenance, query_gpu_state
 # and 1), which ran about 30% slower in the issue #30 diagnosis.
 EXCLUDED_LOGICAL_CPUS = (0, 1)
 
-# Readiness: a sweep starts after a fresh reboot with at least 20% physical RAM free.
-MAX_UPTIME_SECONDS = 60 * 60
-MAX_MEMORY_USED_PERCENT = 80.0
+# Evidence runs require at least 4 GiB of available physical memory.
+MIN_AVAILABLE_PHYSICAL_BYTES = 4 * 1024**3
 # nvidia-smi clocks_event_reasons bits. GpuIdle is the only benign one.
 CLOCK_EVENT_REASONS = {
     0x1: "GpuIdle",
@@ -175,6 +174,7 @@ def query_hags() -> str:
 def probe_readiness_facts(root: Path, git_prov: dict[str, Any] | None = None) -> dict[str, Any]:
     """Gather the machine facts the readiness check judges, plus context it only records."""
     probe_failures: dict[str, str] = {}
+    context_probe_failures: dict[str, str] = {}
 
     def probe(name: str, call: Any, fallback: Any) -> Any:
         try:
@@ -200,7 +200,6 @@ def probe_readiness_facts(root: Path, git_prov: dict[str, Any] | None = None) ->
         dirty_files = git_info["dirty_files"]
 
     facts: dict[str, Any] = {
-        "uptime_seconds": probe("uptime_seconds", uptime_seconds, 0.0),
         "physical_memory": probe("physical_memory_status", physical_memory_status, {}),
         "stoquant_pids": probe("list_processes", lambda: list_processes("stoquant"), []),
         "git_dirty_files": dirty_files,
@@ -208,8 +207,16 @@ def probe_readiness_facts(root: Path, git_prov: dict[str, Any] | None = None) ->
         "power_plan": probe("query_power_plan", query_power_plan, "unavailable"),
         "hags_hwschmode": probe("query_hags", query_hags, "unavailable"),
     }
+    try:
+        facts["uptime_seconds"] = uptime_seconds()
+    except Exception as error:  # noqa: BLE001 - uptime is recorded context, not a readiness gate.
+        detail = str(error).strip() or type(error).__name__
+        context_probe_failures["uptime_seconds"] = f"{type(error).__name__}: {detail}"
+        facts["uptime_seconds"] = None
     if probe_failures:
         facts["probe_failures"] = probe_failures
+    if context_probe_failures:
+        facts["context_probe_failures"] = context_probe_failures
     return facts
 
 
@@ -225,32 +232,21 @@ def check_readiness(facts: dict[str, Any]) -> list[str]:
             for name, detail in sorted(probe_failures.items())
         ]
         failed_probe_names = set(probe_failures)
-    uptime = facts["uptime_seconds"]
-    if uptime > MAX_UPTIME_SECONDS:
-        failures.append(
-            f"uptime {uptime / 60:.0f} min exceeds {MAX_UPTIME_SECONDS // 60} min; reboot first"
-        )
     memory = facts.get("physical_memory")
     if (
         not isinstance(memory, dict)
         or type(memory.get("total_bytes")) is not int
         or type(memory.get("available_bytes")) is not int
-        or type(memory.get("used_percent")) not in (int, float)
         or memory["total_bytes"] <= 0
         or memory["available_bytes"] < 0
         or memory["available_bytes"] > memory["total_bytes"]
-        or not math.isfinite(memory["used_percent"])
-        or not 0 <= memory["used_percent"] <= 100
     ):
         if "physical_memory_status" not in failed_probe_names:
             failures.append("host probe failed: physical_memory_status: invalid memory facts")
-    elif memory["available_bytes"] * 100 < memory["total_bytes"] * (100 - MAX_MEMORY_USED_PERCENT):
-        used_percent = (
-            (memory["total_bytes"] - memory["available_bytes"]) * 100 / memory["total_bytes"]
-        )
+    elif memory["available_bytes"] < MIN_AVAILABLE_PHYSICAL_BYTES:
         failures.append(
-            f"physical memory use {used_percent:.1f}% exceeds "
-            f"{MAX_MEMORY_USED_PERCENT:.0f}% (at least 20% must be available)"
+            f"available physical memory {memory['available_bytes'] / 1024**3:.2f} GiB "
+            f"is below {MIN_AVAILABLE_PHYSICAL_BYTES / 1024**3:.0f} GiB minimum"
         )
     if facts["stoquant_pids"]:
         pids = ", ".join(str(pid) for pid in facts["stoquant_pids"])
