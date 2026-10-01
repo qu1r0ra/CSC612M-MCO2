@@ -58,6 +58,7 @@ native_avx2_sources := "native/quantizer_avx2.c"
 native_cuda_sources := "native/quantizer_cuda.cu"
 native_rng_sources := "native/rng_cpu.c native/rng_cuda.cu tests/test_rng.c"
 native_probe_sources := "native/stream_probe.cu"
+test_cuda_api_sources := "tests/test_cuda_api.cu"
 test_codec_sources := "tests/test_codec.c native/codec.c"
 test_quantizer_sources := "tests/test_quantizer.c native/quantizer.c native/codec.c native/rng_cpu.c"
 test_avx2_sources := "tests/test_quantizer_avx2.c native/cpu_compress.c native/quantizer_avx2.c native/quantizer.c native/codec.c native/rng_cpu.c"
@@ -129,6 +130,14 @@ build-cuda:
 [windows]
 build-cuda-fault: build-cuda
     uv run python -m stoquant.native_build build-cuda-fault
+
+[windows]
+build-cuda-api-test: build-cuda
+    uv run python -m stoquant.native_build build-cuda-api-test
+
+[unix]
+build-cuda-api-test: build-cuda
+    uv run python -m stoquant.native_build build-cuda-api-test
 
 [unix]
 build-cuda-fault: build-cuda
@@ -206,11 +215,13 @@ test-cpu-gcc-ubsan:
 
 # Run the CUDA quantizer acceptance suite on the local GPU
 [windows]
-test-cuda: build-cuda build-cuda-fault
+test-cuda: build-cuda build-cuda-fault build-cuda-api-test
+    ./build/test_cuda_api.exe
     $env:STOQUANT_TEST_CUDA = '1'; uv run --group dev pytest --require-cuda tests\test_cuda.py tests\test_matrix_driver.py tests\test_sweep_avx2.py
 
 [unix]
-test-cuda: build-cuda build-cuda-fault
+test-cuda: build-cuda build-cuda-fault build-cuda-api-test
+    ./build/test_cuda_api
     STOQUANT_TEST_CUDA=1 uv run --group dev pytest --require-cuda tests/test_cuda.py tests/test_matrix_driver.py tests/test_sweep_avx2.py
 
 # Render F1-F4, T1 and the crossover report into a snapshot folder

@@ -98,6 +98,45 @@ int main(void) {
                            &vals, &count) == SQ_ERR_ZERO_SCALE_CODE,
           "decoder rejects zero-scale 4-bit record with code other than s");
 
+    /* Negative zero scale is valid, but decoded center codes are positive zero.
+     */
+    {
+      uint8_t rec_q8_negative_zero[SQ_HEADER_SIZE + 1];
+      uint8_t rec_q4_negative_zero[SQ_HEADER_SIZE + 1];
+      const uint32_t negative_zero = UINT32_C(0x80000000);
+      uint32_t decoded_bits = UINT32_MAX;
+      sq_header_encode(8, 1, 0.0f, rec_q8_negative_zero);
+      memcpy(rec_q8_negative_zero + 16, &negative_zero, sizeof negative_zero);
+      rec_q8_negative_zero[SQ_HEADER_SIZE] = 127;
+      check(sq_decode_record(rec_q8_negative_zero, sizeof rec_q8_negative_zero,
+                             &vals, &count) == SQ_OK &&
+                count == 1 && vals[0] == 0.0f,
+            "decoder accepts negative-zero scale with the 8-bit center code");
+      if (vals != NULL) {
+        memcpy(&decoded_bits, vals, sizeof decoded_bits);
+        check(decoded_bits == 0,
+              "8-bit negative-zero scale decodes to +0 bits");
+      }
+      free(vals);
+      vals = NULL;
+
+      decoded_bits = UINT32_MAX;
+      sq_header_encode(4, 1, 0.0f, rec_q4_negative_zero);
+      memcpy(rec_q4_negative_zero + 16, &negative_zero, sizeof negative_zero);
+      rec_q4_negative_zero[SQ_HEADER_SIZE] = 0x07;
+      check(sq_decode_record(rec_q4_negative_zero, sizeof rec_q4_negative_zero,
+                             &vals, &count) == SQ_OK &&
+                count == 1 && vals[0] == 0.0f,
+            "decoder accepts negative-zero scale with the 4-bit center code");
+      if (vals != NULL) {
+        memcpy(&decoded_bits, vals, sizeof decoded_bits);
+        check(decoded_bits == 0,
+              "4-bit negative-zero scale decodes to +0 bits");
+      }
+      free(vals);
+      vals = NULL;
+    }
+
     /* 8. Valid 4-bit round trip decode */
     uint8_t rec_q4_valid[SQ_HEADER_SIZE + 2];
     sq_header_encode(4, 3, 2.0f, rec_q4_valid);

@@ -3,6 +3,24 @@
 
 #include <stdint.h>
 
+static inline int sq_invocation_range_valid(uint64_t tensor_id,
+                                            uint64_t base_invocation_id,
+                                            uint64_t warmups, uint64_t reps,
+                                            uint64_t step) {
+  uint64_t total_runs;
+
+  if (tensor_id > UINT32_MAX || base_invocation_id > UINT32_MAX ||
+      warmups > UINT64_MAX - reps) {
+    return 0;
+  }
+  total_runs = warmups + reps;
+  if (total_runs == 0) {
+    return 0;
+  }
+  return step == 0 ||
+         total_runs - 1 <= ((uint64_t)UINT32_MAX - base_invocation_id) / step;
+}
+
 static inline uint64_t sq_run_invocation_id(uint64_t base_invocation_id,
                                             uint64_t warmups, uint64_t reps,
                                             uint64_t execution_index,

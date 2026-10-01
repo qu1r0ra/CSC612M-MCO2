@@ -82,6 +82,9 @@ sq_status sq_decode_record(const uint8_t *record, size_t record_size,
   if (!isfinite(scale) || scale < 0.0f || (n == 0 && scale != 0.0f)) {
     return SQ_ERR_SCALE;
   }
+  if (scale == 0.0f) {
+    scale = 0.0f;
+  }
 
   if (n != 0) {
     decoded = (float *)malloc(n * sizeof *decoded);

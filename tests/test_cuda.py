@@ -356,6 +356,82 @@ def test_cuda_bench_resident_graph_empty_input(tmp_path, bits):
 
 
 @pytest.mark.parametrize("bits", [4, 8])
+def test_cuda_bench_fixed_replay_accepts_max_invocation_id(tmp_path, bits):
+    values = np.linspace(-1.0, 1.0, 17, dtype=np.float32)
+    input_path = tmp_path / "input.f32"
+    record_path = tmp_path / "record.msq"
+    _write_values(input_path, values)
+
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(record_path),
+        "--seed",
+        "1",
+        "--backend",
+        "cuda",
+        "--boundary",
+        "resident-graph",
+        "--bits",
+        str(bits),
+        "--invocation-id",
+        str(2**32 - 1),
+        "--warmup",
+        "2",
+        "--reps",
+        "2",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["configuration"]["warmup_invocation_ids"] == [2**32 - 1] * 2
+    assert payload["configuration"]["repetition_invocation_ids"] == [2**32 - 1] * 2
+    assert record_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("boundary", "invocation_id", "warmups", "reps"),
+    [
+        ("resident", 2**32 - 1, 1, 1),
+        ("resident-graph", 0, 2**64 - 1, 1),
+    ],
+)
+def test_cuda_bench_rejects_invocation_range_overflow(
+    tmp_path, boundary, invocation_id, warmups, reps
+):
+    input_path = tmp_path / "input.f32"
+    record_path = tmp_path / "record.msq"
+    _write_values(input_path, np.ones(1, dtype=np.float32))
+
+    result = _run(
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(record_path),
+        "--seed",
+        "1",
+        "--backend",
+        "cuda",
+        "--boundary",
+        boundary,
+        "--invocation-id",
+        str(invocation_id),
+        "--warmup",
+        str(warmups),
+        "--reps",
+        str(reps),
+    )
+
+    assert result.returncode != 0
+    assert "identifier" in result.stderr.lower()
+    assert result.stdout == ""
+    assert not record_path.exists()
+
+
+@pytest.mark.parametrize("bits", [4, 8])
 def test_cuda_bench_prescribed_scale_skips_scale_overflow_failure(tmp_path, bits):
     values = np.asarray([3.0e38, 3.0e38], dtype=np.float32)
     input_path = tmp_path / "large-input.f32"
@@ -1084,3 +1160,112 @@ def test_every_cuda_failure_exits_nonzero_and_writes_no_record(tmp_path, bits, e
     else:
         pytest.fail("fault counter never ran past the last CUDA call")
     assert injected >= 8
+
+
+@pytest.mark.parametrize(
+    ("backend", "boundary", "policy"),
+    [
+        ("cuda", "resident", None),
+        ("cuda", "resident-graph", None),
+        ("cuda", "host-origin", "pageable"),
+        ("cuda", "host-origin", "pinned"),
+        ("cuda", "gpu-origin", "pageable"),
+        ("cuda", "gpu-origin", "pinned"),
+        ("cpu", "gpu-origin", "pageable"),
+        ("cpu", "gpu-origin", "pinned"),
+    ],
+)
+def test_cuda_bench_failures_never_succeed_or_leave_a_record(tmp_path, backend, boundary, policy):
+    assert FAULT_BINARY.exists(), "run `just build-cuda-fault` first"
+    input_path = tmp_path / "input.f32"
+    record_path = tmp_path / "record.msq"
+    _write_values(input_path, np.random.default_rng(84).normal(size=33).astype(np.float32))
+    command = [
+        str(FAULT_BINARY),
+        "bench",
+        "--input",
+        str(input_path),
+        "--record-output",
+        str(record_path),
+        "--seed",
+        "1",
+        "--backend",
+        backend,
+        "--boundary",
+        boundary,
+        "--bits",
+        "8",
+        "--warmup",
+        "0",
+        "--reps",
+        "1",
+    ]
+    if policy is not None:
+        command.extend(("--transfer-policy", policy))
+
+    injected = 0
+    for call in range(1, 200):
+        record_path.unlink(missing_ok=True)
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "STOQUANT_FAULT_CUDA_CALL": str(call)},
+        )
+        if "injected CUDA fault" not in result.stderr:
+            assert result.returncode == 0, result.stderr
+            assert json.loads(result.stdout)
+            assert record_path.exists()
+            break
+        injected += 1
+        assert result.returncode != 0, f"CUDA call {call} failed but exit was 0"
+        assert result.stdout == "", f"CUDA call {call} printed a successful result"
+        assert not record_path.exists(), f"record written after CUDA call {call} failed"
+    else:
+        pytest.fail("fault counter never ran past the last CUDA call")
+    assert injected >= 5
+
+
+def test_pinned_buffer_inspection_rejects_matching_pageable_allocator_mutation(tmp_path):
+    assert FAULT_BINARY.exists(), "run `just build-cuda-fault` first"
+    input_path = tmp_path / "input.f32"
+    record_path = tmp_path / "record.msq"
+    _write_values(input_path, np.ones(17, dtype=np.float32))
+    result = subprocess.run(
+        [
+            str(FAULT_BINARY),
+            "bench",
+            "--input",
+            str(input_path),
+            "--record-output",
+            str(record_path),
+            "--seed",
+            "1",
+            "--backend",
+            "cuda",
+            "--boundary",
+            "host-origin",
+            "--transfer-policy",
+            "pinned",
+            "--warmup",
+            "0",
+            "--reps",
+            "1",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "STOQUANT_FAULT_CUDA_CALL": "0",
+            "STOQUANT_TEST_PAGEABLE_PINNED": "1",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "does not match the requested transfer policy" in result.stderr
+    assert result.stdout == ""
+    assert not record_path.exists()
