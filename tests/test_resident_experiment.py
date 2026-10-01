@@ -1,17 +1,18 @@
-import json
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from _bench_response_support import bench_payload_for_argv, process_result
 
 from stoquant import k1_ab, k1_bandwidth, resident_experiment
 from stoquant.provenance import BuildCommands, VerifiedBinary
 
 
 class FakeResidentProcess:
-    def __init__(self):
+    def __init__(self, malformed_reps=None):
         self.commands = []
+        self.malformed_reps = malformed_reps
 
     def run(self, argv, *, creationflags=0):
         command = list(argv)
@@ -22,22 +23,25 @@ class FakeResidentProcess:
             return subprocess.CompletedProcess(command, 0, "", "")
         if command[1] == "bench":
             variant = command[command.index("--k1") + 1]
-            reps = int(command[command.index("--reps") + 1])
+            payload = bench_payload_for_argv(command)
             level = 2.0 if variant == "reference" else 1.0
-            payload = {
-                "configuration": {"k1": variant},
-                "samples_ms": [level] * reps,
-                "k1_ms": [level / 2] * reps,
-                "k2_ms": [level / 4] * reps,
-                "k3_ms": [level / 4] * reps,
-            }
-            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+            payload["samples_ms"] = [level] * len(payload["samples_ms"])
+            for key in ("k1_ms", "k2_ms", "k3_ms"):
+                if key in payload:
+                    payload[key] = [level / 2] * len(payload[key])
+            reps = int(command[command.index("--reps") + 1])
+            if reps == self.malformed_reps:
+                payload["samples_ms"].pop()
+            return process_result(payload)
         raise AssertionError(f"unexpected fake process command: {command!r}")
 
 
-@pytest.mark.parametrize("experiment", ["baseline", "ab"])
+@pytest.mark.parametrize(
+    ("experiment", "malformed_reps"),
+    [("baseline", None), ("ab", None), ("baseline", 10), ("baseline", 3)],
+)
 def test_k1_experiments_use_shared_runner_and_fake_process_adapter(
-    experiment, tmp_path, monkeypatch
+    experiment, malformed_reps, tmp_path, monkeypatch
 ):
     root = tmp_path / "repo"
     binary = root / "build" / "stoquant.exe"
@@ -141,7 +145,18 @@ def test_k1_experiments_use_shared_runner_and_fake_process_adapter(
         output_dir=output,
         record_readiness=experiment == "ab",
     )
-    adapter = FakeResidentProcess()
+    adapter = FakeResidentProcess(malformed_reps)
+
+    if malformed_reps is not None:
+        expected_count = malformed_reps - 1
+        with pytest.raises(
+            RuntimeError,
+            match=f"samples_ms has {expected_count} samples; expected {malformed_reps}",
+        ):
+            run_experiment(config, adapter=adapter)
+        assert not output.exists()
+        assert (output.with_name(output.name + ".partial")).is_dir()
+        return
 
     result = run_experiment(config, adapter=adapter)
 

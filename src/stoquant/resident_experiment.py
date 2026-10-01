@@ -34,6 +34,7 @@ from stoquant.runner import (
     DEFAULT_COMPRESSION_SEED,
     REAL_BENCH_PROCESS,
     BenchProcess,
+    ValidatedBenchResponse,
     compress_args,
     in_process_warmups,
     run_bench_process,
@@ -143,15 +144,17 @@ def run_probe(probe: Path) -> dict[str, Any]:
 def run_resident_arm(
     binary: Path,
     input_path: Path,
+    count: int,
     bits: int,
     variant: str,
     warmups: int,
     reps: int,
     process: BenchProcess,
-) -> dict[str, Any]:
+) -> ValidatedBenchResponse:
     payload, error = run_bench_process(
         binary,
         input_path,
+        count=count,
         bits=bits,
         backend="cuda",
         extra_args=["--boundary", CUDA_RESIDENT.boundary],
@@ -163,8 +166,6 @@ def run_resident_arm(
     )
     if payload is None:
         raise RuntimeError(error)
-    if payload.get("configuration", {}).get("k1") != variant:
-        raise RuntimeError(f"bench did not record k1={variant}")
     return payload
 
 
@@ -295,6 +296,7 @@ def _run_resident_experiment(
             input_paths[max(config.counts)],
             config.gpu_warmup_seconds,
             process=adapter,
+            count=max(config.counts),
         )
         gpu_probe_start = query_gpu_state()
         probe = run_probe(probe_binary)
@@ -310,13 +312,14 @@ def _run_resident_experiment(
                 payload = run_resident_arm(
                     binary,
                     input_paths[count],
+                    count,
                     bits,
                     variant,
                     MIN_WARMUPS,
                     CALIBRATION_REPS,
                     adapter,
                 )
-                rep_ms = statistics.median(payload["samples_ms"])
+                rep_ms = statistics.median(payload.samples_ms)
                 warmups[count, bits, variant] = in_process_warmups(
                     MIN_WARMUPS, config.in_process_warmup_seconds, rep_ms
                 )
@@ -332,6 +335,7 @@ def _run_resident_experiment(
                     payload = run_resident_arm(
                         binary,
                         input_paths[count],
+                        count,
                         bits,
                         variant,
                         count_warmups,
@@ -348,10 +352,10 @@ def _run_resident_experiment(
                             "bits": bits,
                             "warmups": count_warmups,
                             "reps": config.reps,
-                            "samples_ms": payload["samples_ms"],
-                            "k1_ms": payload["k1_ms"],
-                            "k2_ms": payload["k2_ms"],
-                            "k3_ms": payload["k3_ms"],
+                            "samples_ms": payload.samples_ms,
+                            "k1_ms": payload.stage_samples_ms["k1_ms"],
+                            "k2_ms": payload.stage_samples_ms["k2_ms"],
+                            "k3_ms": payload.stage_samples_ms["k3_ms"],
                         }
                     )
             print(f"process round {process_round + 1}/{config.processes}", flush=True)

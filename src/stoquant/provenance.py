@@ -53,6 +53,11 @@ class VerifiedBinary(NamedTuple):
     stamp: dict[str, Any]
 
 
+class VerifiedDeviceProbe(NamedTuple):
+    attributes: dict[str, Any]
+    stamp: dict[str, Any]
+
+
 def find_binary(
     root: Path,
     *,
@@ -81,14 +86,28 @@ def find_binary(
     return VerifiedBinary(path, stamp)
 
 
-def query_device_attributes(root: Path) -> dict[str, Any] | None:
-    """Read device constants without running the streaming probe."""
+def query_device_attributes(root: Path, *, git_prov: dict[str, Any]) -> VerifiedDeviceProbe:
+    """Verify the publication probe before reading its device constants."""
 
     name = "stream_probe.exe" if os.name == "nt" else "stream_probe"
     path = root / "build" / name
     if not path.is_file():
-        return None
-    return json.loads(run_command([str(path), "--device-only"], root))
+        raise FileNotFoundError(
+            f"publication stream probe not found at {path}. Build it first with just build-stream-probe."
+        )
+    stamp = verify_stamp(
+        root,
+        path,
+        revision=git_prov["code_revision"],
+        tree_dirty=git_prov["git_dirty"],
+        fingerprint=git_prov["tree_fingerprint"],
+        require_cuda=False,
+        expected_recipe="build-stream-probe",
+    )
+    attributes = json.loads(run_command([str(path), "--device-only"], root))
+    if not isinstance(attributes, dict):
+        raise TypeError("publication stream probe must return a JSON object")
+    return VerifiedDeviceProbe(attributes, stamp)
 
 
 def run_command(args: Sequence[str], cwd: Path) -> str:

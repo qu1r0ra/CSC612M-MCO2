@@ -189,6 +189,7 @@ def csv_flag(value: bool | None) -> str:
 class RunSetup(NamedTuple):
     binary: Path
     build_stamp: dict[str, Any]
+    probe_build_stamp: dict[str, Any] | None
     toolchain_prov: dict[str, Any]
     build_prov: dict[str, Any]
     host_tokens: list[str]
@@ -330,9 +331,13 @@ def set_up_run(
     build_prov = build_commands.as_record()
     host_tokens = build_commands.host_tokens or []
     avx2_tokens = build_commands.avx2_tokens or []
-    device_attributes = (
-        query_device_attributes(root) if settings.requires_publication_device_attributes else None
+    device_probe = (
+        query_device_attributes(root, git_prov=git_prov)
+        if settings.requires_publication_device_attributes
+        else None
     )
+    device_attributes = device_probe.attributes if device_probe is not None else None
+    probe_build_stamp = device_probe.stamp if device_probe is not None else None
     gpu_state_start = query_gpu_state() if settings.cuda else None
 
     temp_dir = target_dir / "_temp"
@@ -340,6 +345,7 @@ def set_up_run(
     return RunSetup(
         verified.path,
         verified.stamp,
+        probe_build_stamp,
         toolchain_prov,
         build_prov,
         host_tokens,
@@ -410,6 +416,7 @@ def order_and_warm_up(setup: RunSetup, inputs: SweepInputs, settings: SweepSetti
             settings.gpu_warmup_seconds,
             settings.k1,
             settings.bench_process,
+            count=inputs.counts[largest_input],
         )
         gpu_state_after_warmup = query_gpu_state()
     return SweepOrder(orders, order_labels, ordered_cases, gpu_warmup, gpu_state_after_warmup)
@@ -495,6 +502,7 @@ def warm_up_case(
                 settings.case_warmup_seconds,
                 settings.k1,
                 settings.bench_process,
+                count=cases[0]["count"],
             )
         except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
             for case in cases:
@@ -513,6 +521,7 @@ def warm_up_case(
             payload, error = run_bench_process(
                 binary,
                 input_path,
+                count=case["count"],
                 bits=bits,
                 backend=path.backend,
                 extra_args=path.extra_args,
@@ -527,21 +536,7 @@ def warm_up_case(
                     case, "calibration-warmup", error or "benchmark calibration failed"
                 )
                 continue
-            samples = payload.get("samples_ms")
-            if (
-                not isinstance(samples, list)
-                or not samples
-                or not all(
-                    isinstance(sample, (int, float)) and math.isfinite(sample) for sample in samples
-                )
-            ):
-                fail_case_execution(
-                    case,
-                    "calibration-warmup",
-                    "calibration probe returned empty or non-finite samples",
-                )
-                continue
-            probe_ms = float(np.median(samples))
+            probe_ms = float(np.median(payload.samples_ms))
             case["warmup"] = in_process_warmups(
                 warmups, settings.in_process_warmup_seconds, probe_ms
             )
@@ -575,6 +570,7 @@ def run_trials(
             payload, error = run_bench_process(
                 binary,
                 input_path,
+                count=case["count"],
                 bits=bits,
                 backend=path.backend,
                 extra_args=path.extra_args,
@@ -587,17 +583,8 @@ def run_trials(
             if payload is None:
                 fail_case_execution(case, "trial", error or "benchmark trial failed")
                 continue
-            configuration = payload.get("configuration", {})
-            if path.backend == "cuda" and configuration.get("k1") != k1:
-                raise RuntimeError(
-                    f"{case['case_id']}: stoquant bench ran K1 "
-                    f"{configuration.get('k1')!r}, expected {k1!r}"
-                )
-            if configuration.get("transfer_policy") != path.policy:
-                raise RuntimeError(
-                    f"{case['case_id']}: stoquant bench ran transfer policy "
-                    f"{configuration.get('transfer_policy')!r}, expected {path.policy!r}"
-                )
+            configuration = payload.configuration
+            native_payload = payload.payload
             run: dict[str, Any] = {
                 "trial": trial_index,
                 "position": position,
@@ -606,15 +593,15 @@ def run_trials(
                 "warmup_invocation_ids": compact_invocation_ids(
                     configuration.get("warmup_invocation_ids")
                 ),
-                "samples_ms": payload.get("samples_ms", []),
+                "samples_ms": payload.samples_ms,
             }
             if "threads" in configuration:
                 run["threads"] = configuration["threads"]
-            if "capture_and_instantiate_ms" in payload:
-                run["capture_and_instantiate_ms"] = payload["capture_and_instantiate_ms"]
+            if payload.capture_and_instantiate_ms is not None:
+                run["capture_and_instantiate_ms"] = payload.capture_and_instantiate_ms
             for key in STAGE_KEYS:
-                if key in payload:
-                    run[key] = payload[key]
+                if key in native_payload:
+                    run[key] = native_payload[key]
             case["trial_runs"].append(run)
 
 
@@ -771,7 +758,7 @@ def write_manifest(
     conditions["evidence"] = bool(conditions["evidence"] and not failed_case_ids)
     conditions["non_evidence_reasons"] = reasons
     manifest_data = {
-        "manifest_version": "3.3",
+        "manifest_version": "3.4" if setup.probe_build_stamp is not None else "3.3",
         "date": date_str,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "git_provenance": git_prov,
@@ -781,6 +768,11 @@ def write_manifest(
         "toolkit_and_driver": toolchain_prov["toolkit_and_driver"],
         "build_flags": setup.build_prov,
         "build_stamp": setup.build_stamp,
+        **(
+            {"probe_build_stamp": setup.probe_build_stamp}
+            if setup.probe_build_stamp is not None
+            else {}
+        ),
         "transfer_policies": list(settings.transfer_policies),
         "gpu_state": {
             "note": (
