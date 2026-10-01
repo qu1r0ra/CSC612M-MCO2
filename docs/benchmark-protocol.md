@@ -355,6 +355,10 @@ This amendment supersedes the application-window, app-closing, reboot-age, and p
 - The scalar comparator keeps two passes over the input that a fused implementation would drop. Its scale step scans the input for finiteness while it takes the maximum, and its encoder then scans it again for finiteness (`sq_validate_input`) and for the first nonzero element (which stops at that element). Both passes are inside the timed comparator interval, so the baseline is a little slower than a fused scalar loop and speedups against it are correspondingly a little larger. Neither is timed separately.
 - The scalar Python reference is the correctness oracle; its timings may appear as an additional row but never as the headline baseline. A vectorized Python implementation may be useful for comparison.
 
+### Scalar comparator RNG implementation revision (issue #72, 2026-10-01)
+
+The scalar comparator evaluates Philox4x32-10 once for each group of up to four consecutive elements, then stores lanes 0 through 3 in element order. Element `i` still uses lane `i mod 4` from counter group `floor(i / 4)`; a final partial group writes only its remaining lanes. This removes repeated evaluation of the same four-word block without changing the random stream, compressed record, or decoded output. The scale finiteness scan and the encoder's finiteness and first-nonzero scans remain in the timed comparator path and stay disclosed above. This is an implementation revision only; it does not change timing boundaries, readiness checks, manifest schema, or claim rules.
+
 ## Timing boundaries
 
 | Boundary | CPU path | CUDA path |

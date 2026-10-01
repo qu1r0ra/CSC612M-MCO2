@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cpu_compress.h"
 #include "quantizer.h"
 #include "quantizer_avx2.h"
 #include "rng_cpu.h"
@@ -61,6 +62,86 @@ static int same_float(float a, float b) {
   memcpy(&a_bits, &a, sizeof a_bits);
   memcpy(&b_bits, &b, sizeof b_bits);
   return a_bits == b_bits;
+}
+
+static void test_cpu_compress_module(void) {
+  enum { COUNT = 17, RECORD_CAPACITY = SQ_HEADER_SIZE + COUNT };
+  static const uint8_t bit_widths[] = {SQ_Q4_BITS, SQ_Q8_BITS};
+  float values[COUNT], scale;
+  uint32_t words[COUNT];
+  uint8_t expected[RECORD_CAPACITY], actual[RECORD_CAPACITY];
+  sq_cpu_compress_workspace workspace;
+  sq_rng_stream stream;
+  size_t i, b;
+  sq_status status;
+
+  for (i = 0; i < COUNT; i++) {
+    values[i] = ((float)(i % 11) - 5.0f) / 7.0f;
+  }
+  sq_cpu_compress_workspace_init(&workspace);
+  status =
+      sq_cpu_compress_workspace_reserve(&workspace, SQ_BACKEND_CPU, 0, COUNT);
+  check(status == SQ_OK, "CPU compression workspace reserve");
+  if (status != SQ_OK) {
+    sq_cpu_compress_workspace_destroy(&workspace);
+    return;
+  }
+  status = sq_compute_scale(values, COUNT, &scale);
+  check(status == SQ_OK, "CPU compression expected scale");
+  if (status != SQ_OK ||
+      sq_rng_stream_init(&stream, 0x0123456789abcdefULL, 17, 19) != SQ_RNG_OK) {
+    sq_cpu_compress_workspace_destroy(&workspace);
+    return;
+  }
+  sq_rng_words_cpu(&stream, COUNT, words);
+
+  for (b = 0; b < sizeof bit_widths / sizeof bit_widths[0]; b++) {
+    uint8_t bits = bit_widths[b];
+    size_t payload_size = sq_payload_size(bits, COUNT);
+
+    status = sq_header_encode(bits, COUNT, scale, expected);
+    if (status == SQ_OK) {
+      status = sq_encode_payload(bits, values, COUNT, scale, words,
+                                 expected + SQ_HEADER_SIZE);
+    }
+    check(status == SQ_OK, "CPU compression expected record");
+    if (status != SQ_OK) {
+      continue;
+    }
+    status = sq_cpu_compress(SQ_BACKEND_CPU, bits, values, COUNT,
+                             0x0123456789abcdefULL, 17, 19, 0, 0.0f, NULL, 0,
+                             &workspace, actual);
+    check(status == SQ_OK &&
+              memcmp(actual, expected, SQ_HEADER_SIZE + payload_size) == 0,
+          "scalar CPU compression record matches stages");
+    status = sq_cpu_compress_workspace_reserve(&workspace, SQ_BACKEND_CPU_AVX2,
+                                               2, COUNT);
+    check(status == SQ_OK, "AVX2 CPU compression workspace reserve");
+    if (status == SQ_OK) {
+      status = sq_cpu_compress(SQ_BACKEND_CPU_AVX2, bits, values, COUNT,
+                               0x0123456789abcdefULL, 17, 19, 0, 0.0f, NULL, 2,
+                               &workspace, actual);
+      check(status == SQ_OK &&
+                memcmp(actual, expected, SQ_HEADER_SIZE + payload_size) == 0,
+            "AVX2 CPU compression record matches scalar");
+    }
+    status =
+        sq_cpu_compress_workspace_reserve(&workspace, SQ_BACKEND_CPU, 0, COUNT);
+    check(status == SQ_OK, "scalar CPU compression workspace re-reserve");
+    if (status != SQ_OK) {
+      continue;
+    }
+    status = sq_cpu_compress(SQ_BACKEND_CPU, bits, values, COUNT,
+                             0x0123456789abcdefULL, 17, 19, 1, scale, words, 0,
+                             &workspace, actual);
+    check(status == SQ_OK &&
+              memcmp(actual, expected, SQ_HEADER_SIZE + payload_size) == 0,
+          "prescribed scale and words use shared CPU compression");
+  }
+  check(sq_cpu_compress_workspace_reserve(&workspace, SQ_BACKEND_CUDA, 0,
+                                          COUNT) == SQ_ERR_ARGUMENT,
+        "CPU compression setup rejects CUDA backend");
+  sq_cpu_compress_workspace_destroy(&workspace);
 }
 
 static void compare_scale(const float *values, size_t count, int threads,
@@ -157,6 +238,8 @@ int main(void) {
                                   99999,
                                   (1u << 20) + 13};
   static const int team[] = {1, 2, 3, 7, 16};
+
+  test_cpu_compress_module();
   const float probes[] = {NAN, INFINITY, -INFINITY};
   const size_t big = (1u << 20) + 13;
   float *values = (float *)test_alloc(big, sizeof *values);
