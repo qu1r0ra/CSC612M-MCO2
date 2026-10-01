@@ -15,6 +15,8 @@ verdicts, K1 bandwidth and the keep decision), timestamps, git provenance, GPU
 and host state, and run conditions that depend on the shell. Collapsed to one
 leaf (key names included): path-valued provenance, that is build commands and
 flags, binary hashes keyed by binary name, and readiness facts.
+Build-stamp revisions and executable hashes are redacted because the golden
+commit and identical rebuilds change them without changing program behavior.
 
 Later stages may change only the INVOCATION table below. Everything else in
 this file, and the configurations it runs, stays fixed so that a baseline
@@ -118,6 +120,8 @@ COLLAPSE = [
 REDACT = [
     (r"(.*/)?(created_at_utc|created_utc|captured_at_utc)|date", "timestamp"),
     (r"(.*/)?(code_revision|code_revision_short|git_dirty)", "git provenance"),
+    (r"(.*/)?build_stamp/revision", "git provenance"),
+    (r"(.*/)?build_stamp/binary_sha256", "build provenance"),
     (r"(.*/)?numpy_version", "environment"),
     (r"(.*/)?\w*_ms(/.*)?", "timing"),
     (r"statistics/(?!baseline$|descriptive$).*", "timing-derived"),
@@ -429,6 +433,9 @@ def flatten_fingerprint(value: Any, path: str = "") -> dict[str, Any]:
         for key, child in value.items():
             out.update(flatten_fingerprint(child, f"{path}/{key}" if path else str(key)))
         return out
+    reason = match(path, REDACT_RULES)
+    if reason:
+        value = f"<redacted: {reason}>"
     return {path: value}
 
 
