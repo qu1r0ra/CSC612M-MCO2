@@ -1,4 +1,4 @@
-"""Host control: readiness checks, process affinity, power-plan, HAGS and window probes."""
+"""Host control: readiness checks, process affinity, power-plan and HAGS probes."""
 
 from __future__ import annotations
 
@@ -19,17 +19,8 @@ from stoquant.provenance import collect_git_provenance, query_gpu_state
 # and 1), which ran about 30% slower in the issue #30 diagnosis.
 EXCLUDED_LOGICAL_CPUS = (0, 1)
 
-# Readiness: a sweep starts on a freshly rebooted, quiet machine. Besides these
-# Windows shell hosts, only the processes that launched the sweep may own windows.
-MAX_UPTIME_SECONDS = 30 * 60
-WINDOW_ALLOWLIST = (
-    "explorer",
-    "TextInputHost",
-    "ShellExperienceHost",
-    "StartMenuExperienceHost",
-    "SearchHost",
-    "LockApp",
-)
+# Evidence runs require at least 4 GiB of available physical memory.
+MIN_AVAILABLE_PHYSICAL_BYTES = 4 * 1024**3
 # nvidia-smi clocks_event_reasons bits. GpuIdle is the only benign one.
 CLOCK_EVENT_REASONS = {
     0x1: "GpuIdle",
@@ -78,69 +69,44 @@ def uptime_seconds() -> float:
     return uptime
 
 
-def list_app_windows() -> list[dict[str, str]]:
-    """Top-level windows with a title, as (process, title) pairs."""
-    if os.name != "nt":
-        return []
-    script = (
-        "$ErrorActionPreference = 'Stop'; "
-        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-        "$windows = @(Get-Process | "
-        "Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | "
-        "ForEach-Object { [PSCustomObject]@{ process = $_.ProcessName; title = $_.MainWindowTitle } }); "
-        "ConvertTo-Json -InputObject $windows -Compress"
-    )
-    proc = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", script],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
-    output = _checked_probe_output(proc, "list_app_windows").strip()
-    rows = _parse_json_array(output, "list_app_windows")
-    windows = []
-    for row in rows:
-        if (
-            not isinstance(row, dict)
-            or not isinstance(row.get("process"), str)
-            or not row["process"].strip()
-            or not isinstance(row.get("title"), str)
-            or not row["title"].strip()
-        ):
-            raise RuntimeError("list_app_windows returned an unparseable row")
-        windows.append({"process": row["process"].strip(), "title": row["title"].strip()})
-    return windows
+def physical_memory_status() -> dict[str, int | float]:
+    """Return physical memory totals and used percentage for readiness."""
+    if os.name == "nt":
 
+        class MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
 
-def list_launcher_processes() -> list[str]:
-    """Process names from this driver up its parent chain, innermost first."""
-    if os.name != "nt":
-        return []
-    script = (
-        "$ErrorActionPreference = 'Stop'; "
-        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-        "$byId = @{}; Get-CimInstance Win32_Process | "
-        "ForEach-Object { $byId[[int]$_.ProcessId] = $_ }; "
-        f"$id = {os.getpid()}; $seen = @{{}}; $processes = @(); "
-        "while ($byId.ContainsKey($id) -and -not $seen.ContainsKey($id)) { "
-        "$seen[$id] = 1; $p = $byId[$id]; "
-        "$processes += [IO.Path]::GetFileNameWithoutExtension($p.Name); "
-        "$id = [int]$p.ParentProcessId }; "
-        "ConvertTo-Json -InputObject $processes -Compress"
-    )
-    proc = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", script],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
-    output = _checked_probe_output(proc, "list_launcher_processes").strip()
-    processes = _parse_json_array(output, "list_launcher_processes")
-    if not processes or any(not isinstance(name, str) or not name.strip() for name in processes):
-        raise RuntimeError("list_launcher_processes returned an unparseable process list")
-    return [name.strip() for name in processes]
+        status = MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(status)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        global_memory_status_ex = kernel32.GlobalMemoryStatusEx
+        global_memory_status_ex.argtypes = (ctypes.POINTER(MemoryStatusEx),)
+        global_memory_status_ex.restype = ctypes.c_bool
+        if not global_memory_status_ex(ctypes.byref(status)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        total_bytes = int(status.ullTotalPhys)
+        available_bytes = int(status.ullAvailPhys)
+    else:
+        total_bytes = int(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
+        available_bytes = int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
+
+    if total_bytes <= 0 or available_bytes < 0 or available_bytes > total_bytes:
+        raise ValueError("physical-memory probe returned invalid byte counts")
+    return {
+        "total_bytes": total_bytes,
+        "available_bytes": available_bytes,
+        "used_percent": (total_bytes - available_bytes) * 100.0 / total_bytes,
+    }
 
 
 def list_processes(name: str) -> list[int]:
@@ -208,6 +174,7 @@ def query_hags() -> str:
 def probe_readiness_facts(root: Path, git_prov: dict[str, Any] | None = None) -> dict[str, Any]:
     """Gather the machine facts the readiness check judges, plus context it only records."""
     probe_failures: dict[str, str] = {}
+    context_probe_failures: dict[str, str] = {}
 
     def probe(name: str, call: Any, fallback: Any) -> Any:
         try:
@@ -233,23 +200,27 @@ def probe_readiness_facts(root: Path, git_prov: dict[str, Any] | None = None) ->
         dirty_files = git_info["dirty_files"]
 
     facts: dict[str, Any] = {
-        "uptime_seconds": probe("uptime_seconds", uptime_seconds, 0.0),
-        "app_windows": probe("list_app_windows", list_app_windows, []),
-        "launcher_processes": probe("list_launcher_processes", list_launcher_processes, []),
+        "physical_memory": probe("physical_memory_status", physical_memory_status, {}),
         "stoquant_pids": probe("list_processes", lambda: list_processes("stoquant"), []),
         "git_dirty_files": dirty_files,
         "gpu_clock_event_reasons": gpu_state.get("clocks_event_reasons.active"),
         "power_plan": probe("query_power_plan", query_power_plan, "unavailable"),
         "hags_hwschmode": probe("query_hags", query_hags, "unavailable"),
     }
+    try:
+        facts["uptime_seconds"] = uptime_seconds()
+    except Exception as error:  # noqa: BLE001 - uptime is recorded context, not a readiness gate.
+        detail = str(error).strip() or type(error).__name__
+        context_probe_failures["uptime_seconds"] = f"{type(error).__name__}: {detail}"
+        facts["uptime_seconds"] = None
     if probe_failures:
         facts["probe_failures"] = probe_failures
+    if context_probe_failures:
+        facts["context_probe_failures"] = context_probe_failures
     return facts
 
 
-def check_readiness(
-    facts: dict[str, Any], allowlist: Sequence[str] = WINDOW_ALLOWLIST
-) -> list[str]:
+def check_readiness(facts: dict[str, Any]) -> list[str]:
     """Named reasons the machine is not ready for an evidence sweep; empty when ready."""
     probe_failures = facts.get("probe_failures", {})
     if not isinstance(probe_failures, dict):
@@ -261,15 +232,22 @@ def check_readiness(
             for name, detail in sorted(probe_failures.items())
         ]
         failed_probe_names = set(probe_failures)
-    uptime = facts["uptime_seconds"]
-    if uptime > MAX_UPTIME_SECONDS:
+    memory = facts.get("physical_memory")
+    if (
+        not isinstance(memory, dict)
+        or type(memory.get("total_bytes")) is not int
+        or type(memory.get("available_bytes")) is not int
+        or memory["total_bytes"] <= 0
+        or memory["available_bytes"] < 0
+        or memory["available_bytes"] > memory["total_bytes"]
+    ):
+        if "physical_memory_status" not in failed_probe_names:
+            failures.append("host probe failed: physical_memory_status: invalid memory facts")
+    elif memory["available_bytes"] < MIN_AVAILABLE_PHYSICAL_BYTES:
         failures.append(
-            f"uptime {uptime / 60:.0f} min exceeds {MAX_UPTIME_SECONDS // 60} min; reboot first"
+            f"available physical memory {memory['available_bytes'] / 1024**3:.2f} GiB "
+            f"is below {MIN_AVAILABLE_PHYSICAL_BYTES / 1024**3:.0f} GiB minimum"
         )
-    allowed = {name.lower() for name in [*allowlist, *facts["launcher_processes"]]}
-    for window in facts["app_windows"]:
-        if window["process"].lower() not in allowed:
-            failures.append(f"open app window: {window['process']} ({window['title']})")
     if facts["stoquant_pids"]:
         pids = ", ".join(str(pid) for pid in facts["stoquant_pids"])
         failures.append(f"stoquant already running (pid {pids})")

@@ -47,7 +47,7 @@ def test_driver_cpu_only_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "3.2"
+    assert manifest["manifest_version"] == "3.3"
     assert manifest["build_stamp"]["recipe"] in ("build-cpu", "build-cuda")
     assert manifest["build_stamp"]["binary_sha256"]
     assert manifest["transfer_policies"] == ["pageable"]
@@ -146,7 +146,7 @@ def test_driver_tiny_matrix_produces_valid_snapshot(tmp_path):
     assert manifest_path.is_file()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["manifest_version"] == "3.2"
+    assert manifest["manifest_version"] == "3.3"
     assert "date" in manifest
     assert "created_at_utc" in manifest
     assert "git_provenance" in manifest
