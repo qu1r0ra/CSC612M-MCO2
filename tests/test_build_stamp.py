@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from stoquant.build_stamp import compiler_commands, recipe_commands, sha256, stamp_path
-from stoquant.provenance import find_binary
+from stoquant.provenance import find_binary, query_device_attributes
 
 TEST_JUSTFILE = """
 cuda_arch := "native"
@@ -119,3 +119,86 @@ def test_stamp_detects_source_list_changes(stamped_binary):
     )
     with pytest.raises(RuntimeError, match="recipe flags are stale"):
         find_binary(root, git_prov=git)
+
+
+def _write_probe_stamp(root: Path, binary: Path, *, recipe="build-stream-probe"):
+    commands = recipe_commands(root, recipe)
+    stamp = {
+        "version": 1,
+        "revision": "a" * 40,
+        "tree_dirty": False,
+        "tree_fingerprint": "clean tree",
+        "recipe": recipe,
+        "commands": commands,
+        "compiler_flags": compiler_commands(commands),
+        "binary_sha256": sha256(binary),
+    }
+    stamp_path(binary).write_text(json.dumps(stamp), encoding="utf-8")
+    return stamp
+
+
+def _probe_fixture(stamped_binary):
+    root, _, git = stamped_binary
+    binary = root / "build" / ("stream_probe.exe" if os.name == "nt" else "stream_probe")
+    binary.write_bytes(b"device probe")
+    stamp = _write_probe_stamp(root, binary)
+    return root, binary, git, stamp
+
+
+def test_device_attributes_verify_and_return_probe_identity(stamped_binary, monkeypatch):
+    root, binary, git, stamp = _probe_fixture(stamped_binary)
+    executed = []
+
+    def fake_run_command(args, cwd):
+        executed.append((args, cwd))
+        return '{"device": {"name": "test GPU"}}'
+
+    monkeypatch.setattr("stoquant.provenance.run_command", fake_run_command)
+
+    result = query_device_attributes(root, git_prov=git)
+
+    assert result.attributes == {"device": {"name": "test GPU"}}
+    assert result.stamp == stamp
+    assert executed == [([str(binary), "--device-only"], root)]
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ("missing_binary", "publication stream probe not found"),
+        ("missing_stamp", "build stamp missing"),
+        ("stale", "revision is stale"),
+        ("hash", "binary hash does not match"),
+        ("wrong_recipe", "recipe .* is not one of"),
+        ("test_define", "test-only build define"),
+    ],
+)
+def test_device_attributes_refuse_unverified_probe_before_execution(
+    stamped_binary, monkeypatch, change, message
+):
+    root, binary, git, stamp = _probe_fixture(stamped_binary)
+    if change == "missing_binary":
+        binary.unlink()
+    elif change == "missing_stamp":
+        stamp_path(binary).unlink()
+    elif change == "stale":
+        stamp["revision"] = "b" * 40
+        stamp_path(binary).write_text(json.dumps(stamp), encoding="utf-8")
+    elif change == "hash":
+        binary.write_bytes(b"changed probe")
+    elif change == "wrong_recipe":
+        _write_probe_stamp(root, binary, recipe="build-cuda")
+    elif change == "test_define":
+        stamp["commands"][0] += " -DSQ_CUDA_FAULT_INJECTION"
+        stamp["compiler_flags"] = compiler_commands(stamp["commands"])
+        stamp_path(binary).write_text(json.dumps(stamp), encoding="utf-8")
+    executed = []
+    monkeypatch.setattr(
+        "stoquant.provenance.run_command",
+        lambda args, cwd: executed.append((args, cwd)),
+    )
+
+    with pytest.raises((FileNotFoundError, RuntimeError), match=message):
+        query_device_attributes(root, git_prov=git)
+
+    assert executed == []

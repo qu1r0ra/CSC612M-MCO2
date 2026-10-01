@@ -5,6 +5,7 @@ import subprocess
 import pytest
 from _bench_test_support import CUDA_TEST, READY_FACTS, ROOT
 
+from stoquant import cli as matrix_cli
 from stoquant.design import (
     DEFAULT_COUNTS,
     DEFAULT_TRIALS,
@@ -112,6 +113,10 @@ def test_optimized_k1_reaches_all_cuda_paths_and_is_recorded(tmp_path):
     )
     manifest = json.loads((snapshot / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["matrix_parameters"]["k1"] == "optimized"
+    assert manifest["manifest_version"] == "3.4"
+    assert manifest["probe_build_stamp"]["recipe"] == "build-stream-probe"
+    assert manifest["probe_build_stamp"]["binary_sha256"]
+    assert manifest["device"]
     assert len(manifest["matrix_parameters"]["paths"]) == 10
     assert manifest["all_cases_passed"] is True
     for case_id in manifest["cases"]:
@@ -522,6 +527,67 @@ def test_driver_forced_failure_marks_failed_without_speed_figures(tmp_path):
         assert row["direction_supported"] == ""
         assert row["magnitude_supported"] == ""
         assert row["claim_supported_rev2"] == ""
+
+
+def test_malformed_timed_response_fails_snapshot_and_cli(tmp_path, monkeypatch, capsys):
+    class MalformedTrialProcess:
+        def run(self, argv, *, creationflags=0):
+            proc = subprocess.run(
+                list(argv),
+                capture_output=True,
+                text=True,
+                check=False,
+                creationflags=creationflags,
+            )
+            if argv[1] == "bench" and "--record-output" not in argv:
+                payload = json.loads(proc.stdout)
+                payload["samples_ms"].pop()
+                return subprocess.CompletedProcess(
+                    argv, proc.returncode, json.dumps(payload), proc.stderr
+                )
+            return proc
+
+    output = tmp_path / "malformed-trial"
+    run_matrix = matrix_cli.run_benchmark_matrix
+
+    def injected_matrix(**kwargs):
+        kwargs.update(
+            root=ROOT,
+            output_dir=output,
+            counts=[1024],
+            bit_widths=[4],
+            backends=["cpu"],
+            warmups=1,
+            reps=2,
+            trials=1,
+            gpu_warmup_seconds=0,
+            case_warmup_seconds=0,
+            in_process_warmup_seconds=0,
+            allow_dirty=True,
+            readiness_facts=READY_FACTS,
+            bench_process=MalformedTrialProcess(),
+        )
+        return run_matrix(**kwargs)
+
+    monkeypatch.setattr(matrix_cli, "run_benchmark_matrix", injected_matrix)
+
+    with pytest.raises(SystemExit) as result:
+        matrix_cli.main(["--backends", "cpu", "--allow-dirty"])
+
+    assert result.value.code == 1
+    assert "snapshot is non-evidence" in capsys.readouterr().err
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["all_cases_passed"] is False
+    assert manifest["run_conditions"]["evidence"] is False
+    case = json.loads((output / f"{manifest['cases'][0]}.json").read_text(encoding="utf-8"))
+    assert case["correctness"]["failure_phase"] == "trial"
+    assert "samples_ms has 1 samples; expected 2" in case["correctness"]["error_message"]
+    assert case["trial_runs"] == []
+    assert case["statistics"] is None
+    with (output / "summary.csv").open(encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream))
+    assert row["speedup_vs_c"] == ""
+    assert row["claim_supported_rev2"] == ""
 
 
 def test_driver_refuses_to_overwrite_existing_snapshot(tmp_path):

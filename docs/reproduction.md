@@ -6,7 +6,7 @@ This document is the public entry point for reproducing the course implementatio
 
 ## What exists
 
-The repository builds the command-line tool `build/stoquant`, as a CPU-only or a CUDA-enabled build, and the CUDA RNG check `build/test_rng`.
+The repository builds the command-line tool `build/stoquant`, as a CPU-only or a CUDA-enabled build, the CUDA RNG check `build/test_rng`, and the CPU-only Philox check `build/test_rng_cpu`.
 The CPU tool compresses raw little-endian FP32 vectors into version-1 8-bit or 4-bit records. It decodes each record to raw FP32.
 The NumPy oracle independently implements Philox4x32-10 and the CPU quantization path at both 8-bit and 4-bit widths.
 The CUDA tool supports 8-bit and 4-bit compression and shares the CPU decoder. `just test-cuda` checks byte parity, prescribed-scale parity, the FP64 reconstruction bound, launch-geometry independence, determinism, invalid inputs, and timing output on a local CUDA device.
@@ -38,6 +38,8 @@ just toolchain
 $env:CUDA_ARCH = 'sm_120'
 just test-rng
 $env:CUDA_ARCH = 'native'
+just build-rng-cpu-test
+.\build\test_rng_cpu.exe
 just test-cuda
 ```
 
@@ -52,6 +54,8 @@ It checks:
 - Bitwise CPU/GPU agreement for 1,000,003 elements under six block and grid geometries, including the capped automatic grid.
 - The Bernoulli threshold at `p=0`, `p=1`, `p=1-2^-24`, and `p=0.5` on CPU and GPU.
 
+`just build-rng-cpu-test` builds `build/test_rng_cpu` without CUDA. Running it checks the Philox known-answer vectors, stream mapping, and identifier overflow rejection on CPU.
+
 `just build-cuda` compiles the C host sources as C and the CUDA kernels with precise FP32 division and square root, flush-to-zero disabled, and fused multiply-add disabled. CUDA quantization accepts 8-bit and 4-bit records. Run `just test-cuda` to build that executable and exercise its acceptance suite.
 
 ## CPU pipeline
@@ -62,7 +66,7 @@ Requires `just`, Python 3.11 or newer, `uv`, and a C compiler. On Windows, `tool
 just test-cpu
 ```
 
-`just test-cpu` builds the native CPU CLI and three C test executables, then runs the NumPy/pytest oracle and CLI suite. The first run resolves NumPy and pytest from the checked-in `pyproject.toml` and `uv.lock`.
+`just test-cpu` builds the native CPU CLI and four C test executables, then runs the NumPy/pytest oracle and CLI suite. The first run resolves NumPy and pytest from the checked-in `pyproject.toml` and `uv.lock`.
 
 The CLI consumes and produces raw little-endian FP32 files. A seeded compression computes the FP32 L2 scale and uses the logical Philox stream:
 
@@ -112,17 +116,19 @@ Run the full CPU verification suite or run specific components directly:
    ```powershell
    just test-cpu
    ```
-   Builds `build/stoquant`, `build/test_codec`, `build/test_quantizer`, and `build/test_quantizer_avx2`, executes the native C test binaries, and runs the pytest test suites.
+   Builds `build/stoquant`, `build/test_codec`, `build/test_quantizer`, `build/test_quantizer_avx2`, and `build/test_rng_cpu`, executes the native C test binaries, and runs the pytest test suites.
 
-2. **C unit tests (codec, quantizer and AVX2 quantizer)**:
+2. **C unit tests (codec, quantizer, AVX2 quantizer and Philox RNG)**:
    ```powershell
    just build-cpu
    .\build\test_codec.exe
    .\build\test_quantizer.exe
    .\build\test_quantizer_avx2.exe
+   .\build\test_rng_cpu.exe
    ```
    - `test_codec.exe` verifies 4-bit and 8-bit header encoding, 4-bit nibble decoding, odd-length records, and every decoder rejection branch (magic mismatch, unsupported version, unsupported bit width, nonzero reserved bytes, nonfinite/negative scale, payload length mismatch, nonzero padding nibble, out-of-range codes, and malformed zero-scale records).
    - `test_quantizer.exe` verifies FP32 L2 norm reduction, 4-bit and 8-bit quantization against prescribed words, signed zero (+0 decode), large magnitudes without intermediate overflow via max-rescaling, saturation boundaries, odd lengths (1, 3, 5, 257), and the 4,096-seed C Layer 3 unbiasedness loop.
+   - `test_rng_cpu.exe` verifies Philox known-answer vectors, logical stream mapping, and rejection of tensor and invocation identifiers above `2^32-1` without requiring CUDA.
 
 3. **NumPy oracle tests**:
    ```powershell
@@ -201,7 +207,7 @@ just figures results/<date>-<short_rev>
 Snapshots are stored in `results/<local-date>-<short_rev>/`. Writers create `<name>.partial` first and rename it when the run completes. An interrupted run keeps the partial folder for diagnosis; start a new run with a new name. Raw files remain write-once. Figures and reports regenerate in `derived/`, as specified by [ADR 0005](adr/0005-snapshot-lifecycle.md).
 
 The matrix run also writes `run-plan.json` for progress notifications. Raw files include:
-- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the verified `build_stamp` and build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policies (`transfer_policies`, `["pageable"]` by default), the measured `paths` and `trial_design` (manifest 3.2), GPU state before and after the warm-up and after the run, the case order and its seed, trial orders, the statistics method and claim rule, input hashes, and from revision 3 the affinity mask, readiness facts, the memory threshold, power plan and HAGS state, and `evidence` with its `non_evidence_reasons`. Readiness metadata is in manifest version 3.3; older snapshots keep their original version.
+- `manifest.json`: Run-level provenance including git revision and dirty state, hardware, the verified `build_stamp` and build commands from `just --dry-run build-cuda`, CUDA toolkit, driver, transfer policies (`transfer_policies`, `["pageable"]` by default), the measured `paths` and `trial_design` (manifest 3.2), GPU state before and after the warm-up and after the run, the case order and its seed, trial orders, the statistics method and claim rule, input hashes, and from revision 3 the affinity mask, readiness facts, the memory threshold, power plan and HAGS state, and `evidence` with its `non_evidence_reasons`. Readiness metadata is in manifest version 3.3. Publication manifests that include device-only `stream_probe` attributes use version 3.4 and include the verified `probe_build_stamp`; other matrix manifests remain at 3.3. Readers continue to accept earlier manifests unchanged, and frozen snapshots keep their original version.
 - `summary.csv`: Per-case `boundary`, `transfer_policy`, `path_label`, and `baseline`, pooled median and IQR, trial-median range, `spread_ratio` and `spread_p90_p10`, `speedup_vs_c` with its range, bootstrap CI and verdict, and the `stable`, `unstable_rev2`, `boundary_inversion`, `direction_supported`, `magnitude_supported`, and `claim_supported_rev2` flags. Snapshots before revision 3 carry `unstable` and `claim_supported` instead.
 - `case_*.json`: Per-trial raw samples (`trial_runs[].samples_ms`, `k1_ms`, `k2_ms`, `k3_ms`, for host-origin `h2d_ms` and `d2h_ms`, for GPU-origin `d2h_ms`, and for CPU GPU-origin `cpu_ms`) with each trial's path order and invocation identifiers, the case's `execution_index`, pooled samples, statistics, `stage_medians_ms`, configuration, and correctness validation results.
 - `msvc_vectorization_report.txt`: MSVC `/Qvec-report:2` diagnostics from recompiling the comparator sources with the exact benchmarked host flags; the command is at the top of the file.

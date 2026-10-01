@@ -215,12 +215,12 @@ test-cpu-gcc-ubsan:
 
 # Run the CUDA quantizer acceptance suite on the local GPU
 [windows]
-test-cuda: build-cuda build-cuda-fault build-cuda-api-test
+test-cuda: build-cuda build-cuda-fault build-cuda-api-test build-stream-probe
     ./build/test_cuda_api.exe
     $env:STOQUANT_TEST_CUDA = '1'; uv run --group dev pytest --require-cuda tests\test_cuda.py tests\test_matrix_driver.py tests\test_sweep_avx2.py
 
 [unix]
-test-cuda: build-cuda build-cuda-fault build-cuda-api-test
+test-cuda: build-cuda build-cuda-fault build-cuda-api-test build-stream-probe
     ./build/test_cuda_api
     STOQUANT_TEST_CUDA=1 uv run --group dev pytest --require-cuda tests/test_cuda.py tests/test_matrix_driver.py tests/test_sweep_avx2.py
 

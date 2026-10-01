@@ -129,6 +129,7 @@ class MatrixManifest(TypedDict):
     toolkit_and_driver: NotRequired[dict[str, Any]]
     build_flags: NotRequired[dict[str, Any]]
     build_stamp: NotRequired[dict[str, Any]]
+    probe_build_stamp: NotRequired[dict[str, Any]]
     transfer_policies: NotRequired[list[str]]
     gpu_state: NotRequired[dict[str, Any]]
     matrix_parameters: NotRequired[dict[str, Any]]
