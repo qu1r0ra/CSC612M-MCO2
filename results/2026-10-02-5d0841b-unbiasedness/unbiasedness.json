@@ -1,0 +1,344 @@
+{
+  "created_at_utc": "2026-10-01T20:25:15.057662+00:00",
+  "git_provenance": {
+    "code_revision": "5d0841bfe461dace24f92a9a3cf7a7665c64f9c1",
+    "code_revision_short": "5d0841b",
+    "git_dirty": false,
+    "dirty_files": [],
+    "tree_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build_stamp": {
+    "version": 1,
+    "revision": "5d0841bfe461dace24f92a9a3cf7a7665c64f9c1",
+    "tree_dirty": false,
+    "tree_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "recipe": "build-cuda",
+    "commands": [
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/main.c /Fo:build/cuda/main.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cli.c /Fo:build/cuda/cli.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/bench_report.c /Fo:build/cuda/bench_report.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/sq_status.c /Fo:build/cuda/sq_status.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/codec.c /Fo:build/cuda/codec.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/quantizer.c /Fo:build/cuda/quantizer.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/rng_cpu.c /Fo:build/cuda/rng_cpu.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cpu_compress.c /Fo:build/cuda/cpu_compress.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native/quantizer_avx2.c /Fo:build/cuda/quantizer_avx2.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 -c native/quantizer_cuda.cu -o build/cuda/quantizer_cuda.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include build/cuda/main.obj build/cuda/cli.obj build/cuda/bench_report.obj build/cuda/sq_status.obj build/cuda/codec.obj build/cuda/quantizer.obj build/cuda/rng_cpu.obj build/cuda/cpu_compress.obj build/cuda/quantizer_avx2.obj build/cuda/quantizer_cuda.obj -o build/stoquant.exe"
+    ],
+    "compiler_flags": [
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/main.c /Fo:build/cuda/main.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cli.c /Fo:build/cuda/cli.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/bench_report.c /Fo:build/cuda/bench_report.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/sq_status.c /Fo:build/cuda/sq_status.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/codec.c /Fo:build/cuda/codec.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/quantizer.c /Fo:build/cuda/quantizer.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/rng_cpu.c /Fo:build/cuda/rng_cpu.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cpu_compress.c /Fo:build/cuda/cpu_compress.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native/quantizer_avx2.c /Fo:build/cuda/quantizer_avx2.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 -c native/quantizer_cuda.cu -o build/cuda/quantizer_cuda.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include build/cuda/main.obj build/cuda/cli.obj build/cuda/bench_report.obj build/cuda/sq_status.obj build/cuda/codec.obj build/cuda/quantizer.obj build/cuda/rng_cpu.obj build/cuda/cpu_compress.obj build/cuda/quantizer_avx2.obj build/cuda/quantizer_cuda.obj -o build/stoquant.exe"
+    ],
+    "binary_sha256": "136415cccd441e79ee5ccfcfce0c07966117a3bb89b2165411c1aa5eb5069a7b"
+  },
+  "evidence": true,
+  "non_evidence_reasons": [],
+  "seeds": 4096,
+  "seed_start": 1,
+  "sigma": 5.0,
+  "gate_rule": "each element with realised rounding probability q strictly between 0 and 1 satisfies |mean - E| <= 5 * delta * sqrt(q * (1 - q) / T), where E is the decoded expectation (1 - q) * dec(l) + q * dec(l + 1), delta = |dec(l + 1) - dec(l)|, l = floor(a), a = min(|x| / scale * s, s) in FP32, and q = floor(fl32(p * 2^32)) / 2^32 is the Bernoulli probability the rounding comparison realises for p = a - l; every element with q = 0 has mean exactly dec(l); any non-finite mean or sum fails. The bound is a normal approximation, validated for the pinned suite (T = 4096 seeds, the four suite inputs, the default input seed), and is not an exact bound for small q * T",
+  "variance": "reported as the pooled ratio of observed to expected variance; not gated",
+  "numpy_version": "2.4.6",
+  "figure": "f_unbiasedness.png",
+  "all_passed": true,
+  "cases": [
+    {
+      "count": 1024,
+      "scale": 36.30843734741211,
+      "scale_bits": "0x42113bd7",
+      "signed_limit": 7,
+      "stochastic_elements": 1022,
+      "deterministic_elements": 2,
+      "deterministic_exact": true,
+      "finite": true,
+      "max_error_over_bound": 0.7076271174021688,
+      "elements_over_bound": 0,
+      "max_abs_z": 3.538135587010844,
+      "variance_ratio_pooled": 0.9995576479960534,
+      "max_expectation_gap_steps": 3.082182425369685e-08,
+      "passed": true,
+      "input": "course",
+      "bits": 4,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "course",
+        "generator": "fixed construction: signed zeros, +/-2, +/-2k/7, +/-2k/127, and a ramp inside +/-1.95",
+        "sha256": "2dbfcb85f19f7a5e0ffa4ee6e7ab1b84750cf40e9f27e6348ca1c70b76eb29e6"
+      }
+    },
+    {
+      "count": 1024,
+      "scale": 36.30843734741211,
+      "scale_bits": "0x42113bd7",
+      "signed_limit": 127,
+      "stochastic_elements": 1022,
+      "deterministic_elements": 2,
+      "deterministic_exact": true,
+      "finite": true,
+      "max_error_over_bound": 0.6543148488492319,
+      "elements_over_bound": 0,
+      "max_abs_z": 3.2715742442461595,
+      "variance_ratio_pooled": 0.9994781719839674,
+      "max_expectation_gap_steps": 5.678190016296917e-07,
+      "passed": true,
+      "input": "course",
+      "bits": 8,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "course",
+        "generator": "fixed construction: signed zeros, +/-2, +/-2k/7, +/-2k/127, and a ramp inside +/-1.95",
+        "sha256": "2dbfcb85f19f7a5e0ffa4ee6e7ab1b84750cf40e9f27e6348ca1c70b76eb29e6"
+      }
+    },
+    {
+      "count": 16384,
+      "scale": 128.0627899169922,
+      "scale_bits": "0x43001013",
+      "signed_limit": 7,
+      "stochastic_elements": 16384,
+      "deterministic_elements": 0,
+      "deterministic_exact": true,
+      "finite": true,
+      "max_error_over_bound": 0.9593707247335898,
+      "elements_over_bound": 0,
+      "max_abs_z": 4.796853623667949,
+      "variance_ratio_pooled": 0.9996214377959445,
+      "max_expectation_gap_steps": 2.309690345006505e-08,
+      "passed": true,
+      "input": "dense_n16384",
+      "bits": 4,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "dense",
+        "generator": "numpy.random.default_rng([count, seed])",
+        "bit_generator": "PCG64",
+        "seed": [
+          16384,
+          2026
+        ],
+        "sha256": "c2baf248e0e12ab22ff19cfd21bfc4ed8f57de976fc3b01025f6d5306720b311"
+      }
+    },
+    {
+      "count": 16384,
+      "scale": 128.0627899169922,
+      "scale_bits": "0x43001013",
+      "signed_limit": 127,
+      "stochastic_elements": 16384,
+      "deterministic_elements": 0,
+      "deterministic_exact": true,
+      "finite": true,
+      "max_error_over_bound": 0.8341583352523794,
+      "elements_over_bound": 0,
+      "max_abs_z": 4.170791676261897,
+      "variance_ratio_pooled": 1.000034196143472,
+      "max_expectation_gap_steps": 4.96116754579562e-07,
+      "passed": true,
+      "input": "dense_n16384",
+      "bits": 8,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "dense",
+        "generator": "numpy.random.default_rng([count, seed])",
+        "bit_generator": "PCG64",
+        "seed": [
+          16384,
+          2026
+        ],
+        "sha256": "c2baf248e0e12ab22ff19cfd21bfc4ed8f57de976fc3b01025f6d5306720b311"
+      }
+    },
+    {
+      "count": 16384,
+      "scale": 40.7188720703125,
+      "scale_bits": "0x4222e020",
+      "signed_limit": 7,
+      "stochastic_elements": 1629,
+      "deterministic_elements": 14755,
+      "deterministic_exact": true,
+      "finite": true,
+      "max_error_over_bound": 0.7089617789559062,
+      "elements_over_bound": 0,
+      "max_abs_z": 3.544808894779531,
+      "variance_ratio_pooled": 0.9990893450039181,
+      "max_expectation_gap_steps": 5.734095205500373e-08,
+      "passed": true,
+      "input": "sparse_n16384",
+      "bits": 4,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "sparse",
+        "generator": "numpy.random.default_rng([count, seed])",
+        "bit_generator": "PCG64",
+        "seed": [
+          16384,
+          2026
+        ],
+        "mask_seed": 1021,
+        "zero_fraction_target": 0.9,
+        "zero_fraction_realised": 0.90057373046875,
+        "sha256": "b3a828d7a3ce4bc3d28100999f313c5938da91a6ccdb21d7c4682f15349f411d"
+      }
+    },
+    {
+      "count": 16384,
+      "scale": 40.7188720703125,
+      "scale_bits": "0x4222e020",
+      "signed_limit": 127,
+      "stochastic_elements": 1629,
+      "deterministic_elements": 14755,
+      "deterministic_exact": true,
+      "finite": true,
+      "max_error_over_bound": 0.6273001951015802,
+      "elements_over_bound": 0,
+      "max_abs_z": 3.136500975507901,
+      "variance_ratio_pooled": 1.0001690223778679,
+      "max_expectation_gap_steps": 1.2954307557688342e-06,
+      "passed": true,
+      "input": "sparse_n16384",
+      "bits": 8,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "sparse",
+        "generator": "numpy.random.default_rng([count, seed])",
+        "bit_generator": "PCG64",
+        "seed": [
+          16384,
+          2026
+        ],
+        "mask_seed": 1021,
+        "zero_fraction_target": 0.9,
+        "zero_fraction_realised": 0.90057373046875,
+        "sha256": "b3a828d7a3ce4bc3d28100999f313c5938da91a6ccdb21d7c4682f15349f411d"
+      }
+    },
+    {
+      "count": 36864,
+      "scale": 11.327852249145508,
+      "scale_bits": "0x41353ee2",
+      "signed_limit": 7,
+      "stochastic_elements": 36864,
+      "deterministic_elements": 0,
+      "deterministic_exact": true,
+      "finite": true,
+      "max_error_over_bound": 0.8949166940451545,
+      "elements_over_bound": 0,
+      "max_abs_z": 4.474583470225772,
+      "variance_ratio_pooled": 0.9997394089869508,
+      "max_expectation_gap_steps": 1.689200709868779e-08,
+      "passed": true,
+      "input": "model_layer1.0.conv1.weight",
+      "bits": 4,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "model",
+        "model": "resnet18-cifar10",
+        "tensor_name": "layer1.0.conv1.weight",
+        "tensor_shape": [
+          64,
+          64,
+          3,
+          3
+        ],
+        "seed": [
+          2026,
+          3
+        ],
+        "sha256": "1e64c93c29b0301c0d05dd21150278360fa8cbb818cb4dc012443cbc272f03fa"
+      }
+    },
+    {
+      "count": 36864,
+      "scale": 11.327852249145508,
+      "scale_bits": "0x41353ee2",
+      "signed_limit": 127,
+      "stochastic_elements": 36864,
+      "deterministic_elements": 0,
+      "deterministic_exact": true,
+      "finite": true,
+      "max_error_over_bound": 0.8406662682531798,
+      "elements_over_bound": 0,
+      "max_abs_z": 4.2033313412658995,
+      "variance_ratio_pooled": 0.9996849905168439,
+      "max_expectation_gap_steps": 2.5086247169673577e-07,
+      "passed": true,
+      "input": "model_layer1.0.conv1.weight",
+      "bits": 8,
+      "seeds": 4096,
+      "seed_start": 1,
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "backends_identical": true,
+      "input_provenance": {
+        "input_family": "model",
+        "model": "resnet18-cifar10",
+        "tensor_name": "layer1.0.conv1.weight",
+        "tensor_shape": [
+          64,
+          64,
+          3,
+          3
+        ],
+        "seed": [
+          2026,
+          3
+        ],
+        "sha256": "1e64c93c29b0301c0d05dd21150278360fa8cbb818cb4dc012443cbc272f03fa"
+      }
+    }
+  ]
+}
