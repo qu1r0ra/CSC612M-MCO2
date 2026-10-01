@@ -18,9 +18,11 @@ flags, binary hashes keyed by binary name, and readiness facts.
 Build-stamp revisions and executable hashes are redacted because the golden
 commit and identical rebuilds change them without changing program behavior.
 
-Later stages may change only the INVOCATION table below. Everything else in
-this file, and the configurations it runs, stays fixed so that a baseline
-captured before a stage is comparable with a run after it.
+After a baseline is established, routine stages may change only the INVOCATION
+table below. A comparison or normalization policy change requires a reviewed
+baseline transition: classify the old-to-new differences, document the new
+boundary, and capture a new golden. The configurations run here stay fixed
+between those transitions so each pinned baseline remains comparable.
 
     just equivalence capture
     just equivalence compare [--baseline PATH|COMMIT]
