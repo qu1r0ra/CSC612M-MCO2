@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 STAMP_VERSION = 1
-TEST_ONLY_DEFINES = ("SQ_CUDA_FAULT_INJECTION",)
+TEST_ONLY_DEFINES = ("SQ_CUDA_FAULT_INJECTION", "SQ_CUDA_BUFFER_INSPECTION")
 
 
 def _git(root: Path, *args: str) -> bytes:

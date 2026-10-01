@@ -151,7 +151,7 @@ static sq_status compress_file(int argc, char **argv) {
   if (status != SQ_OK) {
     return status;
   }
-  if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX) {
+  if (!sq_invocation_range_valid(tensor_id, invocation_id, 0, 1, 0)) {
     return SQ_ERR_ID_OVERFLOW;
   }
 
@@ -339,6 +339,7 @@ static sq_status bench_cpu_gpu_origin(
   bench_clock_frequency clock_frequency;
   const float *landing;
   double d2h_ms;
+  int record_written = 0;
   sq_status status;
 
   status = sq_cuda_staging_create(values, count, transfer_policy, &staging);
@@ -358,6 +359,7 @@ static sq_status bench_cpu_gpu_origin(
     status = SQ_ERR_IO;
     goto done;
   }
+  record_written = output_path != NULL;
   if (!bench_clock_init(&clock_frequency)) {
     status = SQ_ERR_CLOCK;
     goto done;
@@ -398,6 +400,9 @@ static sq_status bench_cpu_gpu_origin(
   status = SQ_OK;
 
 done:
+  if (status != SQ_OK && record_written) {
+    (void)remove(output_path);
+  }
   sq_cuda_staging_destroy(staging);
   return status;
 }
@@ -457,18 +462,11 @@ static sq_status bench_file(int argc, char **argv) {
     return status;
   }
 
-  if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX ||
-      warmups > UINT64_MAX - reps) {
+  if (!sq_invocation_range_valid(tensor_id, invocation_id, warmups, reps,
+                                 legality->id_step)) {
     return SQ_ERR_ID_OVERFLOW;
   }
   total_runs = warmups + reps;
-  if (total_runs == 0 ||
-      total_runs - 1 > (uint64_t)UINT32_MAX - invocation_id ||
-      (legality->id_step != 0 &&
-       total_runs - 1 >
-           ((uint64_t)UINT32_MAX - invocation_id) / legality->id_step)) {
-    return SQ_ERR_ID_OVERFLOW;
-  }
   if (reps > (uint64_t)(SIZE_MAX / sizeof *samples)) {
     return SQ_ERR_MEMORY;
   }
@@ -736,7 +734,7 @@ static sq_status expect_file(int argc, char **argv) {
   seed_start = options.seed_start;
   tensor_id = options.tensor_id;
   invocation_id = options.invocation_id;
-  if (tensor_id > UINT32_MAX || invocation_id > UINT32_MAX) {
+  if (!sq_invocation_range_valid(tensor_id, invocation_id, 0, 1, 0)) {
     return SQ_ERR_ID_OVERFLOW;
   }
 

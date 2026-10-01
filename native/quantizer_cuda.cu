@@ -14,8 +14,8 @@
 #define SQ_CUDA_REDUCTION_THREADS 256
 
 #ifdef SQ_CUDA_FAULT_INJECTION
-/* Test build only. STOQUANT_FAULT_CUDA_CALL=n makes the n-th CUDA call of
-   sq_cuda_compress fail with cudaErrorUnknown; unset, the gate never fires. */
+/* Test build only. STOQUANT_FAULT_CUDA_CALL=n makes the n-th checked CUDA call
+   in a public operation fail; unset, the gate never fires. */
 static int fault_countdown;
 
 static void fault_arm(void) {
@@ -893,8 +893,9 @@ sq_status sq_cuda_compress(const sq_cuda_config *config, uint8_t *payload,
       (!isfinite(prescribed_scale) || prescribed_scale < 0.0f)) {
     return SQ_ERR_SCALE;
   }
-  if (sq_rng_stream_init(&stream_state, seed, tensor_id, invocation_id) !=
-      SQ_RNG_OK) {
+  if (!sq_invocation_range_valid(tensor_id, invocation_id, 0, 1, 0) ||
+      sq_rng_stream_init(&stream_state, seed, tensor_id, invocation_id) !=
+          SQ_RNG_OK) {
     return SQ_ERR_ID_OVERFLOW;
   }
 
@@ -1133,7 +1134,14 @@ struct sq_cuda_bench_host {
 static cudaError_t allocate_host(void **pointer, size_t bytes,
                                  sq_cuda_transfer_policy transfer_policy) {
   if (transfer_policy == SQ_CUDA_TRANSFER_PINNED) {
-    return cudaHostAlloc(pointer, bytes, cudaHostAllocDefault);
+#ifdef SQ_CUDA_BUFFER_INSPECTION
+    const char *mutation = getenv("STOQUANT_TEST_PAGEABLE_PINNED");
+    if (mutation != NULL && strcmp(mutation, "1") == 0) {
+      *pointer = malloc(bytes);
+      return *pointer != NULL ? cudaSuccess : cudaErrorMemoryAllocation;
+    }
+#endif
+    return SQ_CUDA_CALL(cudaHostAlloc(pointer, bytes, cudaHostAllocDefault));
   }
   *pointer = malloc(bytes);
   return *pointer != NULL ? cudaSuccess : cudaErrorMemoryAllocation;
@@ -1144,11 +1152,44 @@ static void free_host(void *pointer, sq_cuda_transfer_policy transfer_policy) {
     return;
   }
   if (transfer_policy == SQ_CUDA_TRANSFER_PINNED) {
+#ifdef SQ_CUDA_BUFFER_INSPECTION
+    const char *mutation = getenv("STOQUANT_TEST_PAGEABLE_PINNED");
+    if (mutation != NULL && strcmp(mutation, "1") == 0) {
+      free(pointer);
+      return;
+    }
+#endif
     (void)cudaFreeHost(pointer);
   } else {
     free(pointer);
   }
 }
+
+#ifdef SQ_CUDA_BUFFER_INSPECTION
+static sq_status inspect_host_buffer(const char *name, const void *pointer,
+                                     sq_cuda_transfer_policy transfer_policy) {
+  cudaPointerAttributes attributes = {};
+  cudaError_t error =
+      SQ_CUDA_CALL(cudaPointerGetAttributes(&attributes, pointer));
+  const int is_pinned = attributes.type == cudaMemoryTypeHost;
+  const int is_pageable = attributes.type == cudaMemoryTypeUnregistered;
+
+  if (error != cudaSuccess) {
+    fprintf(stderr, "CUDA memory inspection failed for %s: %s\n", name,
+            cudaGetErrorString(error));
+    return SQ_ERR_CUDA;
+  }
+  if ((transfer_policy == SQ_CUDA_TRANSFER_PINNED && !is_pinned) ||
+      (transfer_policy == SQ_CUDA_TRANSFER_PAGEABLE && !is_pageable)) {
+    fprintf(
+        stderr,
+        "CUDA host buffer %s does not match the requested transfer policy\n",
+        name);
+    return SQ_ERR_CUDA;
+  }
+  return SQ_OK;
+}
+#endif
 
 enum {
   SQ_BENCH_K1_START,
@@ -1621,22 +1662,16 @@ sq_status sq_cuda_bench(const sq_cuda_config *config, uint8_t *base_payload,
       (!std::isfinite(prescribed_scale) || prescribed_scale < 0.0f)) {
     return SQ_ERR_SCALE;
   }
-  if (tensor_id > UINT32_MAX || base_invocation_id > UINT32_MAX ||
-      warmups > UINT64_MAX - reps) {
+  if (!sq_invocation_range_valid(tensor_id, base_invocation_id, warmups, reps,
+                                 invocation_id_step)) {
     return SQ_ERR_ID_OVERFLOW;
   }
   total_runs = warmups + reps;
-  if (total_runs == 0 ||
-      total_runs - 1 > (uint64_t)UINT32_MAX - base_invocation_id ||
-      (invocation_id_step != 0 &&
-       total_runs - 1 >
-           ((uint64_t)UINT32_MAX - base_invocation_id) / invocation_id_step)) {
-    return SQ_ERR_ID_OVERFLOW;
-  }
   if (prescribed_scale_seen && count == 0 && prescribed_scale != 0.0f) {
     return SQ_ERR_SCALE;
   }
 
+  SQ_CUDA_FAULT_ARM();
   if (!cuda_device_available()) {
     return SQ_ERR_CUDA;
   }
@@ -1675,6 +1710,25 @@ sq_status sq_cuda_bench(const sq_cuda_config *config, uint8_t *base_payload,
     memcpy(context.host_values, values, count * sizeof(float));
     context.h2d_source = context.host_values;
   }
+#ifdef SQ_CUDA_BUFFER_INSPECTION
+  {
+    sq_status inspection_status =
+        inspect_host_buffer("payload", context.host_payload, transfer_policy);
+    if (inspection_status == SQ_OK) {
+      inspection_status =
+          inspect_host_buffer("result", context.host, transfer_policy);
+    }
+    if (inspection_status == SQ_OK && boundary == SQ_CUDA_BENCH_HOST_ORIGIN &&
+        count != 0) {
+      inspection_status = inspect_host_buffer(
+          "host-origin input", context.h2d_source, transfer_policy);
+    }
+    if (inspection_status != SQ_OK) {
+      destroy_bench_context(&context);
+      return inspection_status;
+    }
+  }
+#endif
   if (count != 0) {
     SQ_CUDA_TRY(error,
                 cudaMalloc(reinterpret_cast<void **>(&context.device_values),
@@ -1715,8 +1769,10 @@ sq_status sq_cuda_bench(const sq_cuda_config *config, uint8_t *base_payload,
                              count * sizeof(uint32_t)),
                   goto done);
     }
-    result = set_k1_workspace_geometry(&context.k1_workspace, count);
-    if (result != SQ_OK) {
+    const sq_status geometry_status =
+        set_k1_workspace_geometry(&context.k1_workspace, count);
+    if (geometry_status != SQ_OK) {
+      result = geometry_status;
       goto done;
     }
     error = allocate_k1_workspace(&context.k1_workspace);
@@ -1869,6 +1925,7 @@ sq_status sq_cuda_staging_create(const float *values, size_t count,
        transfer_policy != SQ_CUDA_TRANSFER_PINNED)) {
     return SQ_ERR_ARGUMENT;
   }
+  SQ_CUDA_FAULT_ARM();
   if (!cuda_device_available()) {
     return SQ_ERR_CUDA;
   }
@@ -1884,6 +1941,16 @@ sq_status sq_cuda_staging_create(const float *values, size_t count,
     sq_cuda_staging_destroy(created);
     return SQ_ERR_MEMORY;
   }
+#ifdef SQ_CUDA_BUFFER_INSPECTION
+  {
+    const sq_status status = inspect_host_buffer(
+        "CPU GPU-origin landing", created->landing, transfer_policy);
+    if (status != SQ_OK) {
+      sq_cuda_staging_destroy(created);
+      return status;
+    }
+  }
+#endif
   SQ_CUDA_TRY(
       error, cudaStreamCreateWithFlags(&created->stream, cudaStreamNonBlocking),
       {
@@ -1926,6 +1993,7 @@ sq_status sq_cuda_staging_download(sq_cuda_staging *staging,
   if (staging == NULL || landing == NULL || d2h_ms == NULL) {
     return SQ_ERR_ARGUMENT;
   }
+  SQ_CUDA_FAULT_ARM();
   cudaError_t error;
 
   SQ_CUDA_TRY(

@@ -308,6 +308,8 @@ def decode_record(record: bytes | bytearray | memoryview) -> np.ndarray:
         raise ValueError("payload length does not match element count")
     if not math.isfinite(scale) or scale < 0:
         raise ValueError("scale must be finite and non-negative")
+    if count == 0 and scale != 0:
+        raise ValueError("empty records require zero scale")
 
     if bits == 8:
         codes = np.frombuffer(data, dtype=np.uint8, count=count, offset=HEADER_STRUCT.size)

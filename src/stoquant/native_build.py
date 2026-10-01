@@ -15,6 +15,7 @@ SOURCE_LIST_VARIABLES = (
     "native_cuda_sources",
     "native_rng_sources",
     "native_probe_sources",
+    "test_cuda_api_sources",
     "test_codec_sources",
     "test_quantizer_sources",
     "test_avx2_sources",
@@ -32,6 +33,7 @@ BUILD_RECIPES = (
     "build-cpu",
     "build-cuda",
     "build-cuda-fault",
+    "build-cuda-api-test",
     "build-stream-probe",
     "build-rng",
     *(row[0] for row in TEST_TARGETS),
@@ -198,7 +200,7 @@ def _cuda_plan(root: Path) -> tuple[list[list[str]], str]:
 
 
 def _cuda_fault_plan(root: Path) -> tuple[list[list[str]], str]:
-    """Build only the fault-injection kernel and link it to build-cuda objects."""
+    """Build the CUDA fault and host-memory inspection test binary."""
     sources = source_lists(root)
     nvcc_flags = _flags(root, "nvcc_flags")
     nvcc_fp_flags = _flags(root, "nvcc_fp_flags")
@@ -216,6 +218,7 @@ def _cuda_fault_plan(root: Path) -> tuple[list[list[str]], str]:
                 *nvcc_fp_flags,
                 *nvcc_warn_flags,
                 "-DSQ_CUDA_FAULT_INJECTION",
+                "-DSQ_CUDA_BUFFER_INSPECTION",
                 "-c",
                 source,
                 "-o",
@@ -237,6 +240,28 @@ def _cuda_fault_plan(root: Path) -> tuple[list[list[str]], str]:
             ["nvcc", *nvcc_flags, *link_inputs, "-lm", "-Xcompiler", "-fopenmp", "-o", binary]
         )
     return commands, binary
+
+
+def _cuda_api_test_plan(root: Path) -> tuple[list[list[str]], str]:
+    sources = source_lists(root)
+    nvcc_flags = _flags(root, "nvcc_flags")
+    nvcc_fp_flags = _flags(root, "nvcc_fp_flags")
+    nvcc_warn_flags = _flags(root, "nvcc_warn_flags")
+    test_sources = sources["test_cuda_api_sources"]
+    if not test_sources:
+        raise RuntimeError("test_cuda_api_sources is empty")
+    binary = "build/test_cuda_api.exe" if _is_msvc() else "build/test_cuda_api"
+    command = [
+        "nvcc",
+        *nvcc_flags,
+        *nvcc_fp_flags,
+        *nvcc_warn_flags,
+        *test_sources,
+        *sources["native_cuda_sources"],
+        "-o",
+        binary,
+    ]
+    return [command], binary
 
 
 def _probe_plan(root: Path) -> tuple[list[list[str]], str]:
@@ -351,6 +376,8 @@ def command_plan(root: Path, recipe: str) -> tuple[list[list[str]], str]:
         normal_commands, _ = _cuda_plan(root)
         fault_commands, binary = _cuda_fault_plan(root)
         return [*normal_commands, *fault_commands], binary
+    if recipe == "build-cuda-api-test":
+        return _cuda_api_test_plan(root)
     if recipe == "build-stream-probe":
         return _probe_plan(root)
     if recipe == "build-rng":

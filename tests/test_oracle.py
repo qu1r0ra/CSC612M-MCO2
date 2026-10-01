@@ -1,7 +1,10 @@
+import struct
+
 import numpy as np
 import pytest
 
 from stoquant.oracle import (
+    HEADER_STRUCT,
     compress_record_fp32,
     decode_record,
     fp64_error_bounds,
@@ -106,6 +109,37 @@ def test_fp32_oracle_serializes_and_decodes_4bit_prescribed_word_record():
     assert decoded[0] == -2.0
     assert decoded[2] == 0.0
     assert decoded[4] == 2.0
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+def test_oracle_decodes_negative_zero_scale_as_positive_zero(bits):
+    record = bytearray(compress_record_fp32(np.asarray([0.0], dtype=np.float32), bits=bits))
+    struct.pack_into("<I", record, 16, 0x80000000)
+
+    decoded = decode_record(record)
+
+    assert decoded.view(np.uint32).tolist() == [0]
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+def test_oracle_rejects_invalid_codes_with_negative_zero_scale(bits):
+    record = bytearray(compress_record_fp32(np.asarray([0.0], dtype=np.float32), bits=bits))
+    struct.pack_into("<I", record, 16, 0x80000000)
+    record[HEADER_STRUCT.size] = 0
+
+    with pytest.raises(ValueError, match="zero-scale"):
+        decode_record(record)
+
+
+@pytest.mark.parametrize("bits", [4, 8])
+def test_oracle_requires_empty_records_to_have_zero_scale(bits):
+    empty = compress_record_fp32(np.asarray([], dtype=np.float32), bits=bits)
+    assert decode_record(empty).shape == (0,)
+
+    malformed = bytearray(empty)
+    struct.pack_into("<f", malformed, 16, 1.0)
+    with pytest.raises(ValueError, match="empty records require zero scale"):
+        decode_record(malformed)
 
 
 def test_signed_limit_is_one_spec_for_supported_widths():

@@ -29,6 +29,7 @@ native_avx2_sources := "native/quantizer_avx2.c"
 native_cuda_sources := "native/quantizer_cuda.cu"
 native_rng_sources := "native/rng_cpu.c native/rng_cuda.cu tests/test_rng.c"
 native_probe_sources := "native/stream_probe.cu"
+test_cuda_api_sources := "tests/test_cuda_api.cu"
 test_codec_sources := "tests/test_codec.c native/codec.c"
 test_quantizer_sources := "tests/test_quantizer.c native/quantizer.c native/codec.c native/rng_cpu.c"
 test_avx2_sources := "tests/test_quantizer_avx2.c native/quantizer_avx2.c native/quantizer.c native/codec.c native/rng_cpu.c"
@@ -79,6 +80,7 @@ def test_locator_returns_verified_stamp(stamped_binary):
         ("hash", "binary hash does not match"),
         ("cpu", "cannot serve CUDA paths"),
         ("fault", "test-only build define"),
+        ("inspection", "test-only build define"),
     ],
 )
 def test_locator_refuses_unverifiable_build(stamped_binary, change, message):
