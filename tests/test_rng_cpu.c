@@ -71,6 +71,32 @@ static void test_mapping(void) {
   check(ok, "element i uses lane i mod 4 of group floor(i/4)");
 }
 
+static void test_partial_groups(void) {
+  static const uint64_t lengths[] = {0, 1, 2, 3, 4, 5, 7, 8, 9};
+  sq_rng_stream stream;
+  philox4x32_key_t key;
+  uint32_t words[9];
+  size_t length_index;
+  int ok = 1;
+
+  sq_rng_stream_init(&stream, 0xfedcba9876543210ULL, 11, 13);
+  key = sq_philox_key(&stream);
+  for (length_index = 0; length_index < sizeof lengths / sizeof lengths[0];
+       length_index++) {
+    uint64_t i, n = lengths[length_index];
+
+    sq_rng_words_cpu(&stream, n, words);
+    for (i = 0; i < n; i++) {
+      philox4x32_ctr_t counter = {{(uint32_t)(i / 4), 0, 11, 13}};
+      philox4x32_ctr_t result = philox4x32_R(SQ_PHILOX_ROUNDS, counter, key);
+      if (words[i] != result.v[i % 4]) {
+        ok = 0;
+      }
+    }
+  }
+  check(ok, "partial groups preserve Philox word mapping");
+}
+
 static void test_overflow(void) {
   sq_rng_stream stream;
 
@@ -87,6 +113,7 @@ static void test_overflow(void) {
 int main(void) {
   test_kat();
   test_mapping();
+  test_partial_groups();
   test_overflow();
 
   printf("# %d failure(s)\n", failures);

@@ -6,9 +6,9 @@
 #include "byteorder.h"
 #include "cli.h"
 #include "codec.h"
+#include "cpu_compress.h"
 #include "quantizer.h"
 #include "quantizer_avx2.h"
-#include "rng_cpu.h"
 #include "run_invocation.h"
 #ifdef SQ_ENABLE_CUDA
 #include "quantizer_cuda.h"
@@ -141,52 +141,21 @@ static sq_status resolve_cpu_threads(sq_backend backend, int threads_seen,
   return SQ_OK;
 }
 
-/* One CPU compression; threads 0 runs the scalar comparator, otherwise the AVX2
- * one. */
-static sq_status cpu_compute_scale(const float *values, size_t count,
-                                   float *scale, float *partials,
-                                   size_t partial_capacity, int threads) {
-  if (threads == 0) {
-    return sq_compute_scale_with_workspace(values, count, scale, partials,
-                                           partial_capacity);
-  }
-  return sq_avx2_compute_scale_with_workspace(values, count, scale, partials,
-                                              partial_capacity, threads);
-}
-
-static void cpu_rng_words(const sq_rng_stream *stream, size_t count,
-                          uint32_t *words, int threads) {
-  if (threads == 0) {
-    sq_rng_words_cpu(stream, (uint64_t)count, words);
-  } else {
-    sq_avx2_rng_words(stream, (uint64_t)count, words, threads);
-  }
-}
-
-static sq_status cpu_encode_payload(uint8_t bits, const float *values,
-                                    size_t count, float scale,
-                                    const uint32_t *words, uint8_t *payload,
-                                    int threads) {
-  if (threads == 0) {
-    return sq_encode_payload(bits, values, count, scale, words, payload);
-  }
-  return sq_avx2_encode_payload(bits, values, count, scale, words, payload,
-                                threads);
-}
-
 static sq_status compress_file(int argc, char **argv) {
   sq_options options;
   const char *input_path, *output_path, *words_path;
   const char *backend;
   uint64_t seed, tensor_id, invocation_id, bits;
-  float prescribed_scale, scale;
+  float prescribed_scale;
+#ifdef SQ_ENABLE_CUDA
+  float scale;
+#endif
   int scale_seen, threads;
   uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
-  float *values = NULL, *scale_partials = NULL;
+  float *values = NULL;
   uint32_t *words = NULL;
-  uint8_t *codes;
   size_t input_size = 0, word_size = 0, count;
-  sq_rng_stream stream;
+  sq_cpu_compress_workspace cpu_workspace = {0};
   sq_status status;
 
   status = sq_cli_parse(SQ_COMMAND_COMPRESS, argc, argv, &options);
@@ -294,35 +263,6 @@ static sq_status compress_file(int argc, char **argv) {
 #endif
   }
 
-  if (scale_seen) {
-    scale = prescribed_scale;
-  } else if (threads == 0) {
-    status = sq_compute_scale(values, count, &scale);
-    if (status != SQ_OK) {
-      goto done;
-    }
-  } else {
-    size_t partial_count = sq_scale_workspace_elements(count);
-
-    if (partial_count == SIZE_MAX ||
-        partial_count > SIZE_MAX / sizeof *scale_partials) {
-      status = SQ_ERR_MEMORY;
-      goto done;
-    }
-    if (partial_count != 0) {
-      scale_partials = (float *)malloc(partial_count * sizeof *scale_partials);
-      if (scale_partials == NULL) {
-        status = SQ_ERR_MEMORY;
-        goto done;
-      }
-    }
-    status = cpu_compute_scale(values, count, &scale, scale_partials,
-                               partial_count, threads);
-    if (status != SQ_OK) {
-      goto done;
-    }
-  }
-
   if (words_path != NULL) {
     if (!sq_read_file(words_path, &word_bytes, &word_size)) {
       status = SQ_ERR_IO;
@@ -335,20 +275,13 @@ static sq_status compress_file(int argc, char **argv) {
     }
   }
 
-  words = count == 0 ? NULL : (uint32_t *)malloc(count * sizeof *words);
-  if (count != 0 && words == NULL) {
-    status = SQ_ERR_MEMORY;
-    goto done;
-  }
   if (words_path != NULL) {
-    sq_load_u32_array_le(words, word_bytes, count);
-  } else {
-    if (sq_rng_stream_init(&stream, seed, tensor_id, invocation_id) !=
-        SQ_RNG_OK) {
-      status = SQ_ERR_ID_OVERFLOW;
+    words = count == 0 ? NULL : (uint32_t *)malloc(count * sizeof *words);
+    if (count != 0 && words == NULL) {
+      status = SQ_ERR_MEMORY;
       goto done;
     }
-    cpu_rng_words(&stream, count, words, threads);
+    sq_load_u32_array_le(words, word_bytes, count);
   }
 
   {
@@ -358,13 +291,15 @@ static sq_status compress_file(int argc, char **argv) {
       status = SQ_ERR_MEMORY;
       goto done;
     }
-    status = sq_header_encode((uint8_t)bits, (uint64_t)count, scale, record);
+    status = sq_cpu_compress_workspace_reserve(&cpu_workspace, options.backend,
+                                               threads, count);
     if (status != SQ_OK) {
       goto done;
     }
-    codes = record + SQ_HEADER_SIZE;
-    status = cpu_encode_payload((uint8_t)bits, values, count, scale, words,
-                                codes, threads);
+    status = sq_cpu_compress(
+        options.backend, (uint8_t)bits, values, count, seed, tensor_id,
+        invocation_id, scale_seen, prescribed_scale,
+        words_path != NULL ? words : NULL, threads, &cpu_workspace, record);
     if (status != SQ_OK) {
       goto done;
     }
@@ -374,48 +309,13 @@ static sq_status compress_file(int argc, char **argv) {
   }
 
 done:
-  free(scale_partials);
+  sq_cpu_compress_workspace_destroy(&cpu_workspace);
   free(record);
   free(words);
   free(word_bytes);
   free(values);
   free(input_bytes);
   return status;
-}
-
-static sq_status bench_cpu_compress_one(
-    uint8_t bit_width, const float *values, size_t count, uint64_t seed,
-    uint64_t tensor_id, uint64_t invocation_id, int prescribed_scale_seen,
-    float prescribed_scale, const uint32_t *prescribed_words,
-    uint32_t *generated_words, float *scale_partials,
-    size_t scale_partial_capacity, int threads, uint8_t *record) {
-  float scale;
-  sq_rng_stream stream;
-  sq_status status;
-  if (prescribed_scale_seen) {
-    scale = prescribed_scale;
-  } else {
-    status = cpu_compute_scale(values, count, &scale, scale_partials,
-                               scale_partial_capacity, threads);
-    if (status != SQ_OK) {
-      return status;
-    }
-  }
-  if (prescribed_words == NULL) {
-    if (sq_rng_stream_init(&stream, seed, tensor_id, invocation_id) !=
-        SQ_RNG_OK) {
-      return SQ_ERR_ID_OVERFLOW;
-    }
-    cpu_rng_words(&stream, count, generated_words, threads);
-  }
-  status = sq_header_encode(bit_width, (uint64_t)count, scale, record);
-  if (status != SQ_OK) {
-    return status;
-  }
-  return cpu_encode_payload(bit_width, values, count, scale,
-                            prescribed_words != NULL ? prescribed_words
-                                                     : generated_words,
-                            record + SQ_HEADER_SIZE, threads);
 }
 
 #ifdef SQ_ENABLE_CUDA
@@ -458,13 +358,13 @@ static sq_cuda_config make_cuda_config(const sq_options *options,
  * D2H into the landing buffer (d2h_ms), then CPU compression from it (cpu_ms).
  */
 static sq_status bench_cpu_gpu_origin(
-    uint8_t bits, const float *values, size_t count, uint64_t seed,
-    uint64_t tensor_id, uint64_t invocation_id, int scale_seen,
+    sq_backend backend, uint8_t bits, const float *values, size_t count,
+    uint64_t seed, uint64_t tensor_id, uint64_t invocation_id, int scale_seen,
     float prescribed_scale, const uint32_t *prescribed_words,
-    uint32_t *generated_words, float *scale_partials,
-    size_t scale_partial_count, sq_cuda_transfer_policy transfer_policy,
-    uint64_t warmups, uint64_t reps, uint8_t *record, const char *output_path,
-    size_t record_size, sq_bench_sample *samples, uint64_t invocation_id_step) {
+    sq_cpu_compress_workspace *workspace,
+    sq_cuda_transfer_policy transfer_policy, uint64_t warmups, uint64_t reps,
+    uint8_t *record, const char *output_path, size_t record_size,
+    sq_bench_sample *samples, uint64_t invocation_id_step) {
   sq_cuda_staging *staging = NULL;
   bench_clock_frequency clock_frequency;
   const float *landing;
@@ -477,10 +377,9 @@ static sq_status bench_cpu_gpu_origin(
   }
   status = sq_cuda_staging_download(staging, &landing, &d2h_ms);
   if (status == SQ_OK) {
-    status = bench_cpu_compress_one(
-        bits, landing, count, seed, tensor_id, invocation_id, scale_seen,
-        prescribed_scale, prescribed_words, generated_words, scale_partials,
-        scale_partial_count, 0, record);
+    status = sq_cpu_compress(backend, bits, landing, count, seed, tensor_id,
+                             invocation_id, scale_seen, prescribed_scale,
+                             prescribed_words, 0, workspace, record);
   }
   if (status != SQ_OK) {
     goto done;
@@ -509,10 +408,9 @@ static sq_status bench_cpu_gpu_origin(
       status = SQ_ERR_CLOCK;
       goto done;
     }
-    status = bench_cpu_compress_one(
-        bits, landing, count, seed, tensor_id, current_invocation, scale_seen,
-        prescribed_scale, prescribed_words, generated_words, scale_partials,
-        scale_partial_count, 0, record);
+    status = sq_cpu_compress(backend, bits, landing, count, seed, tensor_id,
+                             current_invocation, scale_seen, prescribed_scale,
+                             prescribed_words, 0, workspace, record);
     if (status != SQ_OK) {
       goto done;
     }
@@ -550,12 +448,13 @@ static sq_status bench_file(int argc, char **argv) {
   int scale_seen, threads, team_size = 0, cpu_gpu_origin;
   int k1;
   uint8_t *input_bytes = NULL, *word_bytes = NULL, *record = NULL;
-  float *values = NULL, *scale_partials = NULL;
-  uint32_t *words = NULL, *generated_words = NULL;
+  float *values = NULL;
+  uint32_t *words = NULL;
+  sq_cpu_compress_workspace cpu_workspace = {0};
   sq_bench_sample *samples = NULL;
   sq_bench_result result;
   size_t input_size = 0, word_size = 0, count = 0, payload_bytes;
-  size_t record_size, scale_partial_count;
+  size_t record_size;
   bench_clock_frequency clock_frequency;
   sq_status status;
 
@@ -624,24 +523,10 @@ static sq_status bench_file(int argc, char **argv) {
   record_size = SQ_HEADER_SIZE + payload_bytes;
   values = count == 0 ? NULL : (float *)malloc(count * sizeof *values);
   words = count == 0 ? NULL : (uint32_t *)malloc(count * sizeof *words);
-  generated_words =
-      count == 0 ? NULL : (uint32_t *)malloc(count * sizeof *generated_words);
   record = (uint8_t *)malloc(record_size);
   samples = (sq_bench_sample *)calloc((size_t)reps, sizeof *samples);
-  scale_partial_count = sq_scale_workspace_elements(count);
-  if (scale_partial_count == SIZE_MAX ||
-      scale_partial_count > SIZE_MAX / sizeof *scale_partials) {
-    status = SQ_ERR_MEMORY;
-    goto done;
-  }
-  if (scale_partial_count != 0) {
-    scale_partials =
-        (float *)malloc(scale_partial_count * sizeof *scale_partials);
-  }
-  if ((count != 0 &&
-       (values == NULL || words == NULL || generated_words == NULL)) ||
-      record == NULL || samples == NULL ||
-      (scale_partial_count != 0 && scale_partials == NULL)) {
+  if ((count != 0 && (values == NULL || words == NULL)) || record == NULL ||
+      samples == NULL) {
     status = SQ_ERR_MEMORY;
     goto done;
   }
@@ -669,14 +554,21 @@ static sq_status bench_file(int argc, char **argv) {
 
   cpu_gpu_origin = options.backend == SQ_BACKEND_CPU &&
                    options.boundary == SQ_BOUNDARY_GPU_ORIGIN;
+  if (options.backend != SQ_BACKEND_CUDA) {
+    status = sq_cpu_compress_workspace_reserve(&cpu_workspace, options.backend,
+                                               threads, count);
+    if (status != SQ_OK) {
+      goto done;
+    }
+  }
   if (options.backend != SQ_BACKEND_CUDA && !cpu_gpu_origin) {
     if (threads != 0) {
       team_size = sq_avx2_team_size(threads);
     }
-    status = bench_cpu_compress_one(
-        (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
-        scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
-        generated_words, scale_partials, scale_partial_count, threads, record);
+    status = sq_cpu_compress(
+        options.backend, (uint8_t)bits, values, count, seed, tensor_id,
+        invocation_id, scale_seen, prescribed_scale,
+        words_path != NULL ? words : NULL, threads, &cpu_workspace, record);
     if (status != SQ_OK) {
       goto done;
     }
@@ -697,11 +589,10 @@ static sq_status bench_file(int argc, char **argv) {
         status = SQ_ERR_CLOCK;
         goto done;
       }
-      status = bench_cpu_compress_one(
-          (uint8_t)bits, values, count, seed, tensor_id, current_invocation,
-          scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
-          generated_words, scale_partials, scale_partial_count, threads,
-          record);
+      status = sq_cpu_compress(
+          options.backend, (uint8_t)bits, values, count, seed, tensor_id,
+          current_invocation, scale_seen, prescribed_scale,
+          words_path != NULL ? words : NULL, threads, &cpu_workspace, record);
       if (status != SQ_OK) {
         goto done;
       }
@@ -718,9 +609,9 @@ static sq_status bench_file(int argc, char **argv) {
 #ifdef SQ_ENABLE_CUDA
   else if (cpu_gpu_origin) {
     status = bench_cpu_gpu_origin(
-        (uint8_t)bits, values, count, seed, tensor_id, invocation_id,
-        scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
-        generated_words, scale_partials, scale_partial_count,
+        options.backend, (uint8_t)bits, values, count, seed, tensor_id,
+        invocation_id, scale_seen, prescribed_scale,
+        words_path != NULL ? words : NULL, &cpu_workspace,
         cuda_transfer_policy(options.transfer_policy), warmups, reps, record,
         output_path, record_size, samples, legality->id_step);
     if (status != SQ_OK) {
@@ -773,8 +664,7 @@ static sq_status bench_file(int argc, char **argv) {
 
 done:
   free(samples);
-  free(scale_partials);
-  free(generated_words);
+  sq_cpu_compress_workspace_destroy(&cpu_workspace);
   free(words);
   free(record);
   free(values);
@@ -853,8 +743,8 @@ static sq_status expect_file(int argc, char **argv) {
   uint64_t bits, seeds, seed_start, tensor_id, invocation_id, t;
   uint8_t *input_bytes = NULL, *record = NULL, *output = NULL;
   float *values = NULL, *decoded = NULL;
-  uint32_t *words = NULL;
   double *sums = NULL, *squares = NULL;
+  sq_cpu_compress_workspace cpu_workspace = {0};
   size_t input_size = 0, count = 0, payload_size, i_size, decoded_count;
   size_t output_size;
   float scale = 0.0f;
@@ -895,14 +785,10 @@ static sq_status expect_file(int argc, char **argv) {
     goto done;
   }
   values = (float *)malloc(count * sizeof *values);
-  if (strcmp(backend, "cpu") == 0) {
-    words = (uint32_t *)malloc(count * sizeof *words);
-  }
   record = (uint8_t *)malloc(SQ_HEADER_SIZE + payload_size);
   sums = (double *)calloc(count, sizeof *sums);
   squares = (double *)calloc(count, sizeof *squares);
-  if (values == NULL || (strcmp(backend, "cpu") == 0 && words == NULL) ||
-      record == NULL || sums == NULL || squares == NULL) {
+  if (values == NULL || record == NULL || sums == NULL || squares == NULL) {
     status = SQ_ERR_MEMORY;
     goto done;
   }
@@ -911,10 +797,19 @@ static sq_status expect_file(int argc, char **argv) {
   if (status != SQ_OK) {
     goto done;
   }
+  if (strcmp(backend, "cpu") == 0) {
+    status = sq_cpu_compress_workspace_reserve(&cpu_workspace, SQ_BACKEND_CPU,
+                                               0, count);
+    if (status != SQ_OK) {
+      goto done;
+    }
+  }
 
   for (t = 0; t < seeds; t++) {
     uint64_t seed = seed_start + t;
+#ifdef SQ_ENABLE_CUDA
     float record_scale = scale;
+#endif
 
     if (strcmp(backend, "cuda") == 0) {
 #ifdef SQ_ENABLE_CUDA
@@ -929,25 +824,19 @@ static sq_status expect_file(int argc, char **argv) {
         status = SQ_ERR_SCALE;
         goto done;
       }
-#endif
-    } else {
-      sq_rng_stream stream;
-      if (sq_rng_stream_init(&stream, seed, tensor_id, invocation_id) !=
-          SQ_RNG_OK) {
-        status = SQ_ERR_ID_OVERFLOW;
-        goto done;
-      }
-      sq_rng_words_cpu(&stream, (uint64_t)count, words);
-      status = sq_encode_payload((uint8_t)bits, values, count, scale, words,
-                                 record + SQ_HEADER_SIZE);
+      status = sq_header_encode((uint8_t)bits, (uint64_t)count, record_scale,
+                                record);
       if (status != SQ_OK) {
         goto done;
       }
-    }
-    status =
-        sq_header_encode((uint8_t)bits, (uint64_t)count, record_scale, record);
-    if (status != SQ_OK) {
-      goto done;
+#endif
+    } else {
+      status = sq_cpu_compress(SQ_BACKEND_CPU, (uint8_t)bits, values, count,
+                               seed, tensor_id, invocation_id, 1, scale, NULL,
+                               0, &cpu_workspace, record);
+      if (status != SQ_OK) {
+        goto done;
+      }
     }
     status = sq_decode_record(record, SQ_HEADER_SIZE + payload_size, &decoded,
                               &decoded_count);
@@ -996,7 +885,7 @@ done:
   free(squares);
   free(sums);
   free(record);
-  free(words);
+  sq_cpu_compress_workspace_destroy(&cpu_workspace);
   free(values);
   free(input_bytes);
   return status;

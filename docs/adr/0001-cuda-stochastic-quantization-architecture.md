@@ -15,3 +15,7 @@ Before implementation or benchmarking, read the public technical contract and be
 ## Considered options
 
 An end-to-end training integration would add substantial system dependencies before the CUDA question is answered. A broad quantizer or optimization sweep would dilute the term's correctness and measurement work. Python-only speedup comparisons would leave interpreter overhead as a major confounder. These options are excluded from the course baseline.
+
+## Scalar comparator decision (issue #72)
+
+The scalar C comparator evaluates one Philox4x32-10 block per group of four logical elements and emits its lanes in order. The element-to-counter mapping stays fixed, so records and decoded values remain byte-identical while the comparator avoids recalculating the same block for each lane. The separate finiteness and first-nonzero scans remain in the timed path because they are part of the established baseline and are disclosed in the benchmark protocol.

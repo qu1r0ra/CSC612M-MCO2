@@ -53,14 +53,14 @@ nvcc_flags := "-O2 -arch=" + cuda_arch + " " + cc_includes
 # for the nvcc diag_suppress pragmas in Random123/array.h.
 nvcc_warn_flags := if os() == "windows" { "--Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068" } else { "--Werror all-warnings" }
 nvcc_fp_flags := "--fmad=false --ftz=false --prec-div=true --prec-sqrt=true"
-native_host_sources := "native/main.c native/cli.c native/bench_report.c native/sq_status.c native/codec.c native/quantizer.c native/rng_cpu.c"
+native_host_sources := "native/main.c native/cli.c native/bench_report.c native/sq_status.c native/codec.c native/quantizer.c native/rng_cpu.c native/cpu_compress.c"
 native_avx2_sources := "native/quantizer_avx2.c"
 native_cuda_sources := "native/quantizer_cuda.cu"
 native_rng_sources := "native/rng_cpu.c native/rng_cuda.cu tests/test_rng.c"
 native_probe_sources := "native/stream_probe.cu"
 test_codec_sources := "tests/test_codec.c native/codec.c"
 test_quantizer_sources := "tests/test_quantizer.c native/quantizer.c native/codec.c native/rng_cpu.c"
-test_avx2_sources := "tests/test_quantizer_avx2.c native/quantizer_avx2.c native/quantizer.c native/codec.c native/rng_cpu.c"
+test_avx2_sources := "tests/test_quantizer_avx2.c native/cpu_compress.c native/quantizer_avx2.c native/quantizer.c native/codec.c native/rng_cpu.c"
 test_avx2_driver_sources := "tests/test_quantizer_avx2.c"
 test_rng_cpu_sources := "tests/test_rng_cpu.c native/rng_cpu.c"
 test_asan_probe_sources := "tests/asan_overread_probe.c"
