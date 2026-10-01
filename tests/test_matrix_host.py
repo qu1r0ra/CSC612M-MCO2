@@ -95,6 +95,7 @@ def test_dirty_tree_is_judged_only_by_the_sweep_gate():
 def test_readiness_fails_while_a_stoquant_process_runs(monkeypatch):
     monkeypatch.setattr(host, "query_gpu_state", lambda: {"clocks_event_reasons.active": "0x1"})
     monkeypatch.setattr(host, "uptime_seconds", lambda: 600.0)
+    monkeypatch.setattr(host, "physical_memory_status", lambda: READY_FACTS["physical_memory"])
     monkeypatch.setattr(host, "collect_git_provenance", lambda root: {"dirty_files": []})
     monkeypatch.setattr(host, "query_power_plan", lambda: "Balanced")
     monkeypatch.setattr(host, "query_hags", lambda: "unset")
