@@ -349,7 +349,11 @@ def records(work: Path) -> dict[str, Any]:
 def frozen_snapshots(work: Path) -> dict[str, Any]:
     """Content hashes of every frozen snapshot and of what each renderer makes from it."""
     results = REPO / "results"
-    snapshots = sorted(p for p in results.iterdir() if p.is_dir() and p.name != "pilots")
+    snapshots = (
+        sorted(p for p in results.iterdir() if p.is_dir() and p.name != "pilots")
+        if results.is_dir()
+        else []
+    )
     out: dict[str, Any] = {"content": {p.name: hash_tree(p) for p in snapshots}}
     renders: dict[str, Any] = {}
     renders_root = work / "renders"

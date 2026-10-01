@@ -294,13 +294,11 @@ static void philox_chunk(const sq_rng_stream *s, uint64_t first_group,
     }
   }
   for (j = 0; j < PHILOX_CHUNK; j++) {
-    // 4 * j < 4 * PHILOX_CHUNK cannot overflow int, and rewriting the index
-    // changes the MSVC vectorization report recorded as evidence.
     // NOLINTBEGIN(bugprone-implicit-widening-of-multiplication-result)
-    out[4 * j] = c0[j];
-    out[4 * j + 1] = c1[j];
-    out[4 * j + 2] = c2[j];
-    out[4 * j + 3] = c3[j];
+    out[SQ_PHILOX_GROUP_WORD(j, SQ_PHILOX_RESULT_0)] = c0[j];
+    out[SQ_PHILOX_GROUP_WORD(j, SQ_PHILOX_RESULT_1)] = c1[j];
+    out[SQ_PHILOX_GROUP_WORD(j, SQ_PHILOX_RESULT_2)] = c2[j];
+    out[SQ_PHILOX_GROUP_WORD(j, SQ_PHILOX_RESULT_3)] = c3[j];
     // NOLINTEND(bugprone-implicit-widening-of-multiplication-result)
   }
 }
