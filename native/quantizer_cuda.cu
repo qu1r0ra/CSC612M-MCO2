@@ -1,4 +1,5 @@
 #include "quantizer_cuda.h"
+#include "run_invocation.h"
 
 #include <cuda_runtime.h>
 
@@ -352,16 +353,6 @@ static_assert(SQ_CUDA_REDUCTION_THREADS % SQ_CUDA_WARP == 0 &&
                       SQ_CUDA_K1_TREE_SPAN,
               "optimized K1 geometry");
 
-static int k1_variant = SQ_CUDA_K1_REFERENCE;
-
-extern "C" int sq_cuda_select_k1(int variant) {
-  if (variant != SQ_CUDA_K1_REFERENCE && variant != SQ_CUDA_K1_OPTIMIZED) {
-    return (int)cudaErrorInvalidValue;
-  }
-  k1_variant = variant;
-  return (int)cudaSuccess;
-}
-
 __device__ static void absorb_max(float value, float *local_max,
                                   uint32_t *local_invalid) {
   if (!isfinite(value)) {
@@ -671,7 +662,7 @@ static int launch_k1_optimized(const float *device_values, uint64_t count,
   return (int)cudaSuccess;
 }
 
-static int launch_k1(const float *device_values, uint64_t count,
+static int launch_k1(int k1_variant, const float *device_values, uint64_t count,
                      const sq_cuda_k1_workspace *workspace, float *device_scale,
                      int *device_status, int grid_size, cudaStream_t stream) {
   if (count == 0) {
@@ -847,13 +838,24 @@ static sq_status finish_kernel_timing(cudaEvent_t start, cudaEvent_t stop,
   return SQ_OK;
 }
 
-sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
-                           uint64_t seed, uint64_t tensor_id,
-                           uint64_t invocation_id, int prescribed_scale_seen,
-                           float prescribed_scale,
-                           const uint32_t *prescribed_words, int block_size,
-                           int grid_size, uint8_t *payload, float *scale,
-                           int collect_timings, sq_cuda_timings *timings) {
+sq_status sq_cuda_compress(const sq_cuda_config *config, uint8_t *payload,
+                           float *scale, sq_cuda_timings *timings) {
+  if (config == NULL) {
+    return SQ_ERR_ARGUMENT;
+  }
+  const uint8_t bit_width = config->bit_width;
+  const float *values = config->values;
+  const size_t count = config->count;
+  const uint64_t seed = config->seed;
+  const uint64_t tensor_id = config->tensor_id;
+  const uint64_t invocation_id = config->invocation_id;
+  const int prescribed_scale_seen = config->prescribed_scale_seen;
+  const float prescribed_scale = config->prescribed_scale;
+  const uint32_t *prescribed_words = config->prescribed_words;
+  const int block_size = config->block_size;
+  const int grid_size = config->grid_size;
+  const int k1_variant = config->k1_variant;
+  const int collect_timings = timings != NULL;
   cudaStream_t stream = NULL;
   cudaEvent_t timing_events[SQ_CUDA_TIMING_COUNT] = {};
   float *device_values = NULL, *device_scale = NULL;
@@ -878,7 +880,8 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
   }
   if (scale == NULL || (count != 0 && (values == NULL || payload == NULL)) ||
       count > SIZE_MAX / sizeof(float) || count > SIZE_MAX / sizeof(uint32_t) ||
-      (collect_timings && timings == NULL)) {
+      (k1_variant != SQ_CUDA_K1_REFERENCE &&
+       k1_variant != SQ_CUDA_K1_OPTIMIZED)) {
     return SQ_ERR_ARGUMENT;
   }
   if (!valid_launch_geometry(block_size, grid_size)) {
@@ -999,9 +1002,9 @@ sq_status sq_cuda_compress(uint8_t bit_width, const float *values, size_t count,
                   goto done);
     }
     SQ_CUDA_TRY(error,
-                (cudaError_t)launch_k1(device_values, count, &k1_workspace,
-                                       device_scale, device_status, grid_size,
-                                       stream),
+                (cudaError_t)launch_k1(k1_variant, device_values, count,
+                                       &k1_workspace, device_scale,
+                                       device_status, grid_size, stream),
                 goto done);
     if (collect_timings) {
       result = finish_kernel_timing(timing_events[SQ_CUDA_TIMING_START],
@@ -1161,6 +1164,7 @@ enum {
 
 struct sq_cuda_bench_context {
   sq_cuda_transfer_policy transfer_policy;
+  int k1_variant;
   cudaStream_t stream;
   cudaEvent_t events[SQ_BENCH_EVENT_COUNT];
   float *device_values;
@@ -1245,7 +1249,8 @@ static cudaError_t enqueue_resident(sq_cuda_bench_context *context,
   }
   SQ_CUDA_TRY(error,
               (cudaError_t)launch_k1(
-                  context->device_values, count, &context->k1_workspace,
+                  context->k1_variant, context->device_values, count,
+                  &context->k1_workspace,
                   prescribed_scale_seen ? context->device_k1_scale
                                         : context->device_scale,
                   context->device_status, grid_size, context->stream),
@@ -1553,16 +1558,29 @@ done:
   return result;
 }
 
-sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
-                        uint64_t seed, uint64_t tensor_id,
-                        uint64_t base_invocation_id, int prescribed_scale_seen,
-                        float prescribed_scale,
-                        const uint32_t *prescribed_words, int block_size,
-                        int grid_size, sq_cuda_bench_boundary boundary,
-                        sq_cuda_transfer_policy transfer_policy,
-                        uint64_t warmups, uint64_t reps, uint8_t *base_payload,
+sq_status sq_cuda_bench(const sq_cuda_config *config, uint8_t *base_payload,
                         float *base_scale, sq_bench_sample *samples,
                         double *capture_ms) {
+  if (config == NULL) {
+    return SQ_ERR_ARGUMENT;
+  }
+  const uint8_t bit_width = config->bit_width;
+  const float *values = config->values;
+  const size_t count = config->count;
+  const uint64_t seed = config->seed;
+  const uint64_t tensor_id = config->tensor_id;
+  const uint64_t base_invocation_id = config->invocation_id;
+  const int prescribed_scale_seen = config->prescribed_scale_seen;
+  const float prescribed_scale = config->prescribed_scale;
+  const uint32_t *prescribed_words = config->prescribed_words;
+  const int block_size = config->block_size;
+  const int grid_size = config->grid_size;
+  const int k1_variant = config->k1_variant;
+  const sq_cuda_bench_boundary boundary = config->boundary;
+  const sq_cuda_transfer_policy transfer_policy = config->transfer_policy;
+  const uint64_t warmups = config->warmups;
+  const uint64_t reps = config->reps;
+  const uint64_t invocation_id_step = config->invocation_id_step;
   sq_cuda_bench_context context = {};
   const int transfers = boundary == SQ_CUDA_BENCH_HOST_ORIGIN ||
                         boundary == SQ_CUDA_BENCH_GPU_ORIGIN;
@@ -1582,6 +1600,10 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
       count > SIZE_MAX / sizeof(float) || count > SIZE_MAX / sizeof(uint32_t)) {
     return SQ_ERR_ARGUMENT;
   }
+  if (k1_variant != SQ_CUDA_K1_REFERENCE &&
+      k1_variant != SQ_CUDA_K1_OPTIMIZED) {
+    return SQ_ERR_ARGUMENT;
+  }
   if (!valid_launch_geometry(block_size, grid_size) ||
       (boundary != SQ_CUDA_BENCH_RESIDENT &&
        boundary != SQ_CUDA_BENCH_HOST_ORIGIN &&
@@ -1589,7 +1611,8 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
        boundary != SQ_CUDA_BENCH_GPU_ORIGIN) ||
       (transfer_policy != SQ_CUDA_TRANSFER_PAGEABLE &&
        transfer_policy != SQ_CUDA_TRANSFER_PINNED) ||
-      (!transfers && transfer_policy != SQ_CUDA_TRANSFER_PAGEABLE)) {
+      (!transfers && transfer_policy != SQ_CUDA_TRANSFER_PAGEABLE) ||
+      (boundary == SQ_CUDA_BENCH_RESIDENT_GRAPH && invocation_id_step != 0)) {
     return SQ_ERR_ARGUMENT;
   }
   if (prescribed_scale_seen &&
@@ -1602,7 +1625,10 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
   }
   total_runs = warmups + reps;
   if (total_runs == 0 ||
-      total_runs - 1 > (uint64_t)UINT32_MAX - base_invocation_id) {
+      total_runs - 1 > (uint64_t)UINT32_MAX - base_invocation_id ||
+      (invocation_id_step != 0 &&
+       total_runs - 1 >
+           ((uint64_t)UINT32_MAX - base_invocation_id) / invocation_id_step)) {
     return SQ_ERR_ID_OVERFLOW;
   }
   if (prescribed_scale_seen && count == 0 && prescribed_scale != 0.0f) {
@@ -1621,6 +1647,7 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
   }
 
   payload_bytes = bit_width == SQ_Q4_BITS ? count / 2 + (count & 1) : count;
+  context.k1_variant = k1_variant;
   context.transfer_policy = transfer_policy;
   context.h2d_source = values;
   if (allocate_host(reinterpret_cast<void **>(&context.host_payload),
@@ -1724,10 +1751,12 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
     *base_scale = 0.0f;
     if (boundary == SQ_CUDA_BENCH_RESIDENT_GRAPH) {
       result = run_bench_graph(&context, bit_width, count, seed, tensor_id,
-                               base_invocation_id, prescribed_scale_seen,
-                               prescribed_words != NULL, block_size, grid_size,
-                               warmups, reps, base_payload, *base_scale,
-                               samples, capture_ms);
+                               sq_run_invocation_id(base_invocation_id, warmups,
+                                                    reps, warmups,
+                                                    invocation_id_step),
+                               prescribed_scale_seen, prescribed_words != NULL,
+                               block_size, grid_size, warmups, reps,
+                               base_payload, *base_scale, samples, capture_ms);
       goto done;
     }
     for (index = 0; index < warmups + reps; index++) {
@@ -1767,7 +1796,9 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
 
   if (boundary == SQ_CUDA_BENCH_RESIDENT_GRAPH) {
     result = run_bench_graph(
-        &context, bit_width, count, seed, tensor_id, base_invocation_id,
+        &context, bit_width, count, seed, tensor_id,
+        sq_run_invocation_id(base_invocation_id, warmups, reps, warmups,
+                             invocation_id_step),
         prescribed_scale_seen, prescribed_words != NULL, block_size, grid_size,
         warmups, reps, base_payload, *base_scale, samples, capture_ms);
     goto done;
@@ -1776,9 +1807,8 @@ sq_status sq_cuda_bench(uint8_t bit_width, const float *values, size_t count,
   for (index = 0; index < total_runs; index++) {
     sq_bench_sample *sample =
         index < warmups ? NULL : &samples[index - warmups];
-    const uint64_t run_offset =
-        index < warmups ? reps + index : index - warmups;
-    const uint64_t invocation_id = base_invocation_id + run_offset;
+    const uint64_t invocation_id = sq_run_invocation_id(
+        base_invocation_id, warmups, reps, index, invocation_id_step);
     result = run_bench_pipeline(&context, bit_width, count, seed, tensor_id,
                                 invocation_id, prescribed_scale_seen,
                                 prescribed_words != NULL, block_size, grid_size,

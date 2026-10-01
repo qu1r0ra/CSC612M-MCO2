@@ -9,6 +9,7 @@
 #include "quantizer.h"
 #include "quantizer_avx2.h"
 #include "rng_cpu.h"
+#include "run_invocation.h"
 #ifdef SQ_ENABLE_CUDA
 #include "quantizer_cuda.h"
 #endif
@@ -25,12 +26,18 @@
 #include <time.h>
 #include <unistd.h>
 #endif
+#include "bench_clock.h"
 #ifdef _MSC_VER
 #include <intrin.h>
 #endif
 
 #ifdef SQ_ENABLE_CUDA
 #define SQ_HAS_CUDA 1
+static sq_cuda_config make_cuda_config(const sq_options *options,
+                                       uint8_t bit_width, const float *values,
+                                       size_t count, uint64_t seed,
+                                       const uint32_t *prescribed_words,
+                                       uint64_t invocation_id_step);
 #else
 #define SQ_HAS_CUDA 0
 #endif
@@ -257,15 +264,13 @@ static sq_status compress_file(int argc, char **argv) {
       status = SQ_ERR_MEMORY;
       goto done;
     }
-    if (sq_cuda_select_k1(options.k1) != 0) {
-      status = SQ_ERR_ARGUMENT;
-      goto done;
+    {
+      sq_cuda_config config =
+          make_cuda_config(&options, (uint8_t)bits, values, count, seed,
+                           words_path != NULL ? words : NULL, 1);
+      status = sq_cuda_compress(&config, record + SQ_HEADER_SIZE, &scale,
+                                timings_seen ? &cuda_timings : NULL);
     }
-    status = sq_cuda_compress((uint8_t)bits, values, count, seed, tensor_id,
-                              invocation_id, scale_seen, prescribed_scale,
-                              words, (int)options.block_size,
-                              (int)options.grid_size, record + SQ_HEADER_SIZE,
-                              &scale, timings_seen, &cuda_timings);
     if (status != SQ_OK) {
       goto done;
     }
@@ -378,40 +383,6 @@ done:
   return status;
 }
 
-#ifdef _WIN32
-typedef LARGE_INTEGER bench_clock_frequency;
-static int bench_clock_init(bench_clock_frequency *frequency) {
-  return QueryPerformanceFrequency(frequency) != 0;
-}
-static int bench_clock_now_ms(const bench_clock_frequency *frequency,
-                              double *milliseconds) {
-  LARGE_INTEGER counter;
-  if (QueryPerformanceCounter(&counter) == 0) {
-    return 0;
-  }
-  *milliseconds =
-      (double)counter.QuadPart * 1000.0 / (double)frequency->QuadPart;
-  return 1;
-}
-#else
-typedef int bench_clock_frequency;
-static int bench_clock_init(bench_clock_frequency *frequency) {
-  (void)frequency;
-  return 1;
-}
-static int bench_clock_now_ms(const bench_clock_frequency *frequency,
-                              double *milliseconds) {
-  struct timespec current;
-  (void)frequency;
-  if (clock_gettime(CLOCK_MONOTONIC, &current) != 0) {
-    return 0;
-  }
-  *milliseconds =
-      (double)current.tv_sec * 1000.0 + (double)current.tv_nsec / 1000000.0;
-  return 1;
-}
-#endif
-
 static sq_status bench_cpu_compress_one(
     uint8_t bit_width, const float *values, size_t count, uint64_t seed,
     uint64_t tensor_id, uint64_t invocation_id, int prescribed_scale_seen,
@@ -455,6 +426,33 @@ static sq_cuda_transfer_policy cuda_transfer_policy(sq_transfer_policy policy) {
                                       : SQ_CUDA_TRANSFER_PAGEABLE;
 }
 
+static sq_cuda_config make_cuda_config(const sq_options *options,
+                                       uint8_t bit_width, const float *values,
+                                       size_t count, uint64_t seed,
+                                       const uint32_t *prescribed_words,
+                                       uint64_t invocation_id_step) {
+  sq_cuda_config config = {0};
+
+  config.bit_width = bit_width;
+  config.values = values;
+  config.count = count;
+  config.seed = seed;
+  config.tensor_id = options->tensor_id;
+  config.invocation_id = options->invocation_id;
+  config.prescribed_scale_seen = (options->seen & SQ_SEEN_SCALE) != 0;
+  config.prescribed_scale = options->scale;
+  config.prescribed_words = prescribed_words;
+  config.block_size = (int)options->block_size;
+  config.grid_size = (int)options->grid_size;
+  config.k1_variant = options->k1;
+  config.boundary = (sq_cuda_bench_boundary)options->boundary;
+  config.transfer_policy = cuda_transfer_policy(options->transfer_policy);
+  config.warmups = options->warmups;
+  config.reps = options->reps;
+  config.invocation_id_step = invocation_id_step;
+  return config;
+}
+
 /*
  * GPU-origin CPU path: the input starts on the device. Each run times one full
  * D2H into the landing buffer (d2h_ms), then CPU compression from it (cpu_ms).
@@ -466,7 +464,7 @@ static sq_status bench_cpu_gpu_origin(
     uint32_t *generated_words, float *scale_partials,
     size_t scale_partial_count, sq_cuda_transfer_policy transfer_policy,
     uint64_t warmups, uint64_t reps, uint8_t *record, const char *output_path,
-    size_t record_size, sq_bench_sample *samples) {
+    size_t record_size, sq_bench_sample *samples, uint64_t invocation_id_step) {
   sq_cuda_staging *staging = NULL;
   bench_clock_frequency clock_frequency;
   const float *landing;
@@ -497,7 +495,8 @@ static sq_status bench_cpu_gpu_origin(
   }
   for (uint64_t run = 0; run < warmups + reps; run++) {
     double start_ms, cpu_start_ms, stop_ms;
-    uint64_t run_offset = run < warmups ? reps + run : run - warmups;
+    uint64_t current_invocation = sq_run_invocation_id(
+        invocation_id, warmups, reps, run, invocation_id_step);
     if (!bench_clock_now_ms(&clock_frequency, &start_ms)) {
       status = SQ_ERR_CLOCK;
       goto done;
@@ -511,9 +510,9 @@ static sq_status bench_cpu_gpu_origin(
       goto done;
     }
     status = bench_cpu_compress_one(
-        bits, landing, count, seed, tensor_id, invocation_id + run_offset,
-        scale_seen, prescribed_scale, prescribed_words, generated_words,
-        scale_partials, scale_partial_count, 0, record);
+        bits, landing, count, seed, tensor_id, current_invocation, scale_seen,
+        prescribed_scale, prescribed_words, generated_words, scale_partials,
+        scale_partial_count, 0, record);
     if (status != SQ_OK) {
       goto done;
     }
@@ -595,7 +594,10 @@ static sq_status bench_file(int argc, char **argv) {
   }
   total_runs = warmups + reps;
   if (total_runs == 0 ||
-      total_runs - 1 > (uint64_t)UINT32_MAX - invocation_id) {
+      total_runs - 1 > (uint64_t)UINT32_MAX - invocation_id ||
+      (legality->id_step != 0 &&
+       total_runs - 1 >
+           ((uint64_t)UINT32_MAX - invocation_id) / legality->id_step)) {
     return SQ_ERR_ID_OVERFLOW;
   }
   if (reps > (uint64_t)(SIZE_MAX / sizeof *samples)) {
@@ -689,8 +691,8 @@ static sq_status bench_file(int argc, char **argv) {
     }
     for (uint64_t run = 0; run < total_runs; run++) {
       double start_ms, stop_ms;
-      uint64_t run_offset = run < warmups ? reps + run : run - warmups;
-      uint64_t current_invocation = invocation_id + run_offset;
+      uint64_t current_invocation = sq_run_invocation_id(
+          invocation_id, warmups, reps, run, legality->id_step);
       if (!bench_clock_now_ms(&clock_frequency, &start_ms)) {
         status = SQ_ERR_CLOCK;
         goto done;
@@ -720,23 +722,16 @@ static sq_status bench_file(int argc, char **argv) {
         scale_seen, prescribed_scale, words_path != NULL ? words : NULL,
         generated_words, scale_partials, scale_partial_count,
         cuda_transfer_policy(options.transfer_policy), warmups, reps, record,
-        output_path, record_size, samples);
+        output_path, record_size, samples, legality->id_step);
     if (status != SQ_OK) {
       goto done;
     }
   } else {
     uint8_t *base_payload = record + SQ_HEADER_SIZE;
-    if (sq_cuda_select_k1(k1) != 0) {
-      status = SQ_ERR_ARGUMENT;
-      goto done;
-    }
-    status =
-        sq_cuda_bench((uint8_t)bits, values, count, seed, tensor_id,
-                      invocation_id, scale_seen, prescribed_scale,
-                      words_path != NULL ? words : NULL, (int)block_size,
-                      (int)grid_size, (sq_cuda_bench_boundary)options.boundary,
-                      cuda_transfer_policy(options.transfer_policy), warmups,
-                      reps, base_payload, &scale, samples, &capture_ms);
+    sq_cuda_config config =
+        make_cuda_config(&options, (uint8_t)bits, values, count, seed,
+                         words_path != NULL ? words : NULL, legality->id_step);
+    status = sq_cuda_bench(&config, base_payload, &scale, samples, &capture_ms);
     if (status != SQ_OK) {
       goto done;
     }
@@ -923,10 +918,10 @@ static sq_status expect_file(int argc, char **argv) {
 
     if (strcmp(backend, "cuda") == 0) {
 #ifdef SQ_ENABLE_CUDA
-      sq_cuda_timings timings = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-      status = sq_cuda_compress(
-          (uint8_t)bits, values, count, seed, tensor_id, invocation_id, 0, 0.0f,
-          NULL, 256, 0, record + SQ_HEADER_SIZE, &record_scale, 0, &timings);
+      sq_cuda_config config = make_cuda_config(&options, (uint8_t)bits, values,
+                                               count, seed, NULL, 1);
+      status = sq_cuda_compress(&config, record + SQ_HEADER_SIZE, &record_scale,
+                                NULL);
       if (status != SQ_OK) {
         goto done;
       }
