@@ -1,0 +1,1519 @@
+{
+  "manifest_version": "3.4",
+  "date": "2026-10-04",
+  "created_at_utc": "2026-10-04T03:18:11.678983+00:00",
+  "git_provenance": {
+    "code_revision": "ec319475cd56f246f0110442dc0ee80c2eb0d60d",
+    "code_revision_short": "ec31947",
+    "git_dirty": false,
+    "dirty_files": [],
+    "tree_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "monitoring": {
+    "provider": "ntfy",
+    "heartbeat_interval_seconds": 3600
+  },
+  "hardware": {
+    "gpu_name": "NVIDIA GeForce RTX 5060",
+    "compute_capability": "12.0",
+    "host_cpu": "AMD64 Family 25 Model 33 Stepping 2, AuthenticAMD"
+  },
+  "device": {
+    "name": "NVIDIA GeForce RTX 5060",
+    "compute_capability": "12.0",
+    "memory_clock_khz": 14001000,
+    "bus_width_bits": 128,
+    "l2_bytes": 25165824,
+    "multiprocessors": 30,
+    "cuda_runtime_version": 13030,
+    "cuda_driver_version": 13030
+  },
+  "toolkit_and_driver": {
+    "cuda_toolkit": "Cuda compilation tools, release 13.4, V13.4.59",
+    "driver_version": "610.88",
+    "c_compiler": "Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36260 for x64"
+  },
+  "build_flags": {
+    "source": "verified build stamp (build-cuda)",
+    "commands": [
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/main.c /Fo:build/cuda/main.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cli.c /Fo:build/cuda/cli.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/bench_report.c /Fo:build/cuda/bench_report.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/sq_status.c /Fo:build/cuda/sq_status.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/codec.c /Fo:build/cuda/codec.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/quantizer.c /Fo:build/cuda/quantizer.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/rng_cpu.c /Fo:build/cuda/rng_cpu.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cpu_compress.c /Fo:build/cuda/cpu_compress.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native/quantizer_avx2.c /Fo:build/cuda/quantizer_avx2.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 -c native/quantizer_cuda.cu -o build/cuda/quantizer_cuda.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include build/cuda/main.obj build/cuda/cli.obj build/cuda/bench_report.obj build/cuda/sq_status.obj build/cuda/codec.obj build/cuda/quantizer.obj build/cuda/rng_cpu.obj build/cuda/cpu_compress.obj build/cuda/quantizer_avx2.obj build/cuda/quantizer_cuda.obj -o build/stoquant.exe"
+    ],
+    "comparator_c": "/nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include",
+    "avx2_c": "/nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include",
+    "cuda_nvcc": "-O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068"
+  },
+  "build_stamp": {
+    "version": 1,
+    "revision": "ec319475cd56f246f0110442dc0ee80c2eb0d60d",
+    "tree_dirty": false,
+    "tree_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "recipe": "build-cuda",
+    "commands": [
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/main.c /Fo:build/cuda/main.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cli.c /Fo:build/cuda/cli.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/bench_report.c /Fo:build/cuda/bench_report.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/sq_status.c /Fo:build/cuda/sq_status.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/codec.c /Fo:build/cuda/codec.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/quantizer.c /Fo:build/cuda/quantizer.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/rng_cpu.c /Fo:build/cuda/rng_cpu.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cpu_compress.c /Fo:build/cuda/cpu_compress.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native/quantizer_avx2.c /Fo:build/cuda/quantizer_avx2.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 -c native/quantizer_cuda.cu -o build/cuda/quantizer_cuda.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include build/cuda/main.obj build/cuda/cli.obj build/cuda/bench_report.obj build/cuda/sq_status.obj build/cuda/codec.obj build/cuda/quantizer.obj build/cuda/rng_cpu.obj build/cuda/cpu_compress.obj build/cuda/quantizer_avx2.obj build/cuda/quantizer_cuda.obj -o build/stoquant.exe"
+    ],
+    "compiler_flags": [
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/main.c /Fo:build/cuda/main.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cli.c /Fo:build/cuda/cli.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/bench_report.c /Fo:build/cuda/bench_report.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/sq_status.c /Fo:build/cuda/sq_status.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/codec.c /Fo:build/cuda/codec.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/quantizer.c /Fo:build/cuda/quantizer.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/rng_cpu.c /Fo:build/cuda/rng_cpu.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /c native/cpu_compress.c /Fo:build/cuda/cpu_compress.obj",
+      "cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /c native/quantizer_avx2.c /Fo:build/cuda/quantizer_avx2.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --fmad=false --ftz=false --prec-div=true --prec-sqrt=true --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 -c native/quantizer_cuda.cu -o build/cuda/quantizer_cuda.obj",
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include build/cuda/main.obj build/cuda/cli.obj build/cuda/bench_report.obj build/cuda/sq_status.obj build/cuda/codec.obj build/cuda/quantizer.obj build/cuda/rng_cpu.obj build/cuda/cpu_compress.obj build/cuda/quantizer_avx2.obj build/cuda/quantizer_cuda.obj -o build/stoquant.exe"
+    ],
+    "binary_sha256": "de680d764dcd05559ddfae4f119026d8a0b84e8867955a19bf637e4b7fd9527b"
+  },
+  "probe_build_stamp": {
+    "version": 1,
+    "revision": "ec319475cd56f246f0110442dc0ee80c2eb0d60d",
+    "tree_dirty": false,
+    "tree_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "recipe": "build-stream-probe",
+    "commands": [
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 native/stream_probe.cu -o build/stream_probe.exe"
+    ],
+    "compiler_flags": [
+      "nvcc -O2 -arch=native -Inative -Ithird_party/random123/include --Werror all-warnings -Xcompiler /W4 -Xcompiler /WX -Xcompiler /wd4068 native/stream_probe.cu -o build/stream_probe.exe"
+    ],
+    "binary_sha256": "c340bee7876cb3e27837c7b219954c73a8e25693774ebdcaca3820000356fced"
+  },
+  "transfer_policies": [
+    "pageable",
+    "pinned"
+  ],
+  "gpu_state": {
+    "note": "Instantaneous nvidia-smi readings before the warm-up, after it, and after the last timed process; they describe the GPU around the run, not clock stability during it.",
+    "start": {
+      "pstate": "P8",
+      "clocks.sm": "217 MHz",
+      "clocks.mem": "405 MHz",
+      "clocks.max.sm": "3090 MHz",
+      "temperature.gpu": "40",
+      "power.draw": "13.25 W",
+      "clocks_event_reasons.active": "0x0000000000000000",
+      "captured_at_utc": "2026-10-03T23:51:23.443265+00:00"
+    },
+    "warmup": {
+      "seconds_requested": 20.0,
+      "seconds_elapsed": 20.04699999996228,
+      "workload": "cuda resident, 8-bit, input_model_layer4.0.conv2.weight, 100 reps per process",
+      "processes": 138
+    },
+    "after_warmup": {
+      "pstate": "P0",
+      "clocks.sm": "2632 MHz",
+      "clocks.mem": "14001 MHz",
+      "clocks.max.sm": "3090 MHz",
+      "temperature.gpu": "44",
+      "power.draw": "33.16 W",
+      "clocks_event_reasons.active": "0x0000000000000000",
+      "captured_at_utc": "2026-10-03T23:51:48.118198+00:00"
+    },
+    "end": {
+      "pstate": "P0",
+      "clocks.sm": "2767 MHz",
+      "clocks.mem": "14201 MHz",
+      "clocks.max.sm": "3090 MHz",
+      "temperature.gpu": "56",
+      "power.draw": "43.68 W",
+      "clocks_event_reasons.active": "0x0000000000000000",
+      "captured_at_utc": "2026-10-04T03:18:11.595791+00:00"
+    }
+  },
+  "matrix_parameters": {
+    "k1": "optimized",
+    "input_family": "model",
+    "counts": [
+      1728,
+      64,
+      36864,
+      73728,
+      128,
+      147456,
+      8192,
+      294912,
+      256,
+      589824,
+      32768,
+      1179648,
+      512,
+      2359296,
+      131072,
+      5120,
+      10
+    ],
+    "model_tensors": "distinct",
+    "model_limit": null,
+    "bit_widths": [
+      4,
+      8
+    ],
+    "backends": [
+      "cpu",
+      "cpu-avx2",
+      "cuda"
+    ],
+    "warmup": 10,
+    "in_process_warmup_seconds": 1.0,
+    "in_process_warmup_rule": "per path: max(warmup, ceil(target_seconds * 1000 / probe median ms)), probe = one untimed stoquant bench process with the base warmup and reps",
+    "reps": 30,
+    "trials": 30,
+    "paths": [
+      "cpu-comparator",
+      "cpu-avx2-optimized",
+      "cuda-resident",
+      "cuda-resident-graph",
+      "cuda-host-origin",
+      "cuda-host-origin-pinned",
+      "cpu-gpu-origin",
+      "cuda-gpu-origin",
+      "cpu-gpu-origin-pinned",
+      "cuda-gpu-origin-pinned"
+    ],
+    "cpu_avx2_threads": [
+      10
+    ],
+    "cpu_avx2_threads_rule": "stoquant default: logical processors in the inherited affinity mask (Windows; online processors elsewhere)",
+    "trial_design": "williams",
+    "trial_orders": [
+      [
+        "cpu-comparator",
+        "cpu-avx2-optimized",
+        "cuda-gpu-origin-pinned",
+        "cuda-resident",
+        "cpu-gpu-origin-pinned",
+        "cuda-resident-graph",
+        "cuda-gpu-origin",
+        "cuda-host-origin",
+        "cpu-gpu-origin",
+        "cuda-host-origin-pinned"
+      ],
+      [
+        "cpu-avx2-optimized",
+        "cuda-resident",
+        "cpu-comparator",
+        "cuda-resident-graph",
+        "cuda-gpu-origin-pinned",
+        "cuda-host-origin",
+        "cpu-gpu-origin-pinned",
+        "cuda-host-origin-pinned",
+        "cuda-gpu-origin",
+        "cpu-gpu-origin"
+      ],
+      [
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cpu-avx2-optimized",
+        "cuda-host-origin",
+        "cpu-comparator",
+        "cuda-host-origin-pinned",
+        "cuda-gpu-origin-pinned",
+        "cpu-gpu-origin",
+        "cpu-gpu-origin-pinned",
+        "cuda-gpu-origin"
+      ],
+      [
+        "cuda-resident-graph",
+        "cuda-host-origin",
+        "cuda-resident",
+        "cuda-host-origin-pinned",
+        "cpu-avx2-optimized",
+        "cpu-gpu-origin",
+        "cpu-comparator",
+        "cuda-gpu-origin",
+        "cuda-gpu-origin-pinned",
+        "cpu-gpu-origin-pinned"
+      ],
+      [
+        "cuda-host-origin",
+        "cuda-host-origin-pinned",
+        "cuda-resident-graph",
+        "cpu-gpu-origin",
+        "cuda-resident",
+        "cuda-gpu-origin",
+        "cpu-avx2-optimized",
+        "cpu-gpu-origin-pinned",
+        "cpu-comparator",
+        "cuda-gpu-origin-pinned"
+      ],
+      [
+        "cuda-host-origin-pinned",
+        "cpu-gpu-origin",
+        "cuda-host-origin",
+        "cuda-gpu-origin",
+        "cuda-resident-graph",
+        "cpu-gpu-origin-pinned",
+        "cuda-resident",
+        "cuda-gpu-origin-pinned",
+        "cpu-avx2-optimized",
+        "cpu-comparator"
+      ],
+      [
+        "cpu-gpu-origin",
+        "cuda-gpu-origin",
+        "cuda-host-origin-pinned",
+        "cpu-gpu-origin-pinned",
+        "cuda-host-origin",
+        "cuda-gpu-origin-pinned",
+        "cuda-resident-graph",
+        "cpu-comparator",
+        "cuda-resident",
+        "cpu-avx2-optimized"
+      ],
+      [
+        "cuda-gpu-origin",
+        "cpu-gpu-origin-pinned",
+        "cpu-gpu-origin",
+        "cuda-gpu-origin-pinned",
+        "cuda-host-origin-pinned",
+        "cpu-comparator",
+        "cuda-host-origin",
+        "cpu-avx2-optimized",
+        "cuda-resident-graph",
+        "cuda-resident"
+      ],
+      [
+        "cpu-gpu-origin-pinned",
+        "cuda-gpu-origin-pinned",
+        "cuda-gpu-origin",
+        "cpu-comparator",
+        "cpu-gpu-origin",
+        "cpu-avx2-optimized",
+        "cuda-host-origin-pinned",
+        "cuda-resident",
+        "cuda-host-origin",
+        "cuda-resident-graph"
+      ],
+      [
+        "cuda-gpu-origin-pinned",
+        "cpu-comparator",
+        "cpu-gpu-origin-pinned",
+        "cpu-avx2-optimized",
+        "cuda-gpu-origin",
+        "cuda-resident",
+        "cpu-gpu-origin",
+        "cuda-resident-graph",
+        "cuda-host-origin-pinned",
+        "cuda-host-origin"
+      ],
+      [
+        "cpu-comparator",
+        "cpu-avx2-optimized",
+        "cuda-gpu-origin-pinned",
+        "cuda-resident",
+        "cpu-gpu-origin-pinned",
+        "cuda-resident-graph",
+        "cuda-gpu-origin",
+        "cuda-host-origin",
+        "cpu-gpu-origin",
+        "cuda-host-origin-pinned"
+      ],
+      [
+        "cpu-avx2-optimized",
+        "cuda-resident",
+        "cpu-comparator",
+        "cuda-resident-graph",
+        "cuda-gpu-origin-pinned",
+        "cuda-host-origin",
+        "cpu-gpu-origin-pinned",
+        "cuda-host-origin-pinned",
+        "cuda-gpu-origin",
+        "cpu-gpu-origin"
+      ],
+      [
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cpu-avx2-optimized",
+        "cuda-host-origin",
+        "cpu-comparator",
+        "cuda-host-origin-pinned",
+        "cuda-gpu-origin-pinned",
+        "cpu-gpu-origin",
+        "cpu-gpu-origin-pinned",
+        "cuda-gpu-origin"
+      ],
+      [
+        "cuda-resident-graph",
+        "cuda-host-origin",
+        "cuda-resident",
+        "cuda-host-origin-pinned",
+        "cpu-avx2-optimized",
+        "cpu-gpu-origin",
+        "cpu-comparator",
+        "cuda-gpu-origin",
+        "cuda-gpu-origin-pinned",
+        "cpu-gpu-origin-pinned"
+      ],
+      [
+        "cuda-host-origin",
+        "cuda-host-origin-pinned",
+        "cuda-resident-graph",
+        "cpu-gpu-origin",
+        "cuda-resident",
+        "cuda-gpu-origin",
+        "cpu-avx2-optimized",
+        "cpu-gpu-origin-pinned",
+        "cpu-comparator",
+        "cuda-gpu-origin-pinned"
+      ],
+      [
+        "cuda-host-origin-pinned",
+        "cpu-gpu-origin",
+        "cuda-host-origin",
+        "cuda-gpu-origin",
+        "cuda-resident-graph",
+        "cpu-gpu-origin-pinned",
+        "cuda-resident",
+        "cuda-gpu-origin-pinned",
+        "cpu-avx2-optimized",
+        "cpu-comparator"
+      ],
+      [
+        "cpu-gpu-origin",
+        "cuda-gpu-origin",
+        "cuda-host-origin-pinned",
+        "cpu-gpu-origin-pinned",
+        "cuda-host-origin",
+        "cuda-gpu-origin-pinned",
+        "cuda-resident-graph",
+        "cpu-comparator",
+        "cuda-resident",
+        "cpu-avx2-optimized"
+      ],
+      [
+        "cuda-gpu-origin",
+        "cpu-gpu-origin-pinned",
+        "cpu-gpu-origin",
+        "cuda-gpu-origin-pinned",
+        "cuda-host-origin-pinned",
+        "cpu-comparator",
+        "cuda-host-origin",
+        "cpu-avx2-optimized",
+        "cuda-resident-graph",
+        "cuda-resident"
+      ],
+      [
+        "cpu-gpu-origin-pinned",
+        "cuda-gpu-origin-pinned",
+        "cuda-gpu-origin",
+        "cpu-comparator",
+        "cpu-gpu-origin",
+        "cpu-avx2-optimized",
+        "cuda-host-origin-pinned",
+        "cuda-resident",
+        "cuda-host-origin",
+        "cuda-resident-graph"
+      ],
+      [
+        "cuda-gpu-origin-pinned",
+        "cpu-comparator",
+        "cpu-gpu-origin-pinned",
+        "cpu-avx2-optimized",
+        "cuda-gpu-origin",
+        "cuda-resident",
+        "cpu-gpu-origin",
+        "cuda-resident-graph",
+        "cuda-host-origin-pinned",
+        "cuda-host-origin"
+      ],
+      [
+        "cpu-comparator",
+        "cpu-avx2-optimized",
+        "cuda-gpu-origin-pinned",
+        "cuda-resident",
+        "cpu-gpu-origin-pinned",
+        "cuda-resident-graph",
+        "cuda-gpu-origin",
+        "cuda-host-origin",
+        "cpu-gpu-origin",
+        "cuda-host-origin-pinned"
+      ],
+      [
+        "cpu-avx2-optimized",
+        "cuda-resident",
+        "cpu-comparator",
+        "cuda-resident-graph",
+        "cuda-gpu-origin-pinned",
+        "cuda-host-origin",
+        "cpu-gpu-origin-pinned",
+        "cuda-host-origin-pinned",
+        "cuda-gpu-origin",
+        "cpu-gpu-origin"
+      ],
+      [
+        "cuda-resident",
+        "cuda-resident-graph",
+        "cpu-avx2-optimized",
+        "cuda-host-origin",
+        "cpu-comparator",
+        "cuda-host-origin-pinned",
+        "cuda-gpu-origin-pinned",
+        "cpu-gpu-origin",
+        "cpu-gpu-origin-pinned",
+        "cuda-gpu-origin"
+      ],
+      [
+        "cuda-resident-graph",
+        "cuda-host-origin",
+        "cuda-resident",
+        "cuda-host-origin-pinned",
+        "cpu-avx2-optimized",
+        "cpu-gpu-origin",
+        "cpu-comparator",
+        "cuda-gpu-origin",
+        "cuda-gpu-origin-pinned",
+        "cpu-gpu-origin-pinned"
+      ],
+      [
+        "cuda-host-origin",
+        "cuda-host-origin-pinned",
+        "cuda-resident-graph",
+        "cpu-gpu-origin",
+        "cuda-resident",
+        "cuda-gpu-origin",
+        "cpu-avx2-optimized",
+        "cpu-gpu-origin-pinned",
+        "cpu-comparator",
+        "cuda-gpu-origin-pinned"
+      ],
+      [
+        "cuda-host-origin-pinned",
+        "cpu-gpu-origin",
+        "cuda-host-origin",
+        "cuda-gpu-origin",
+        "cuda-resident-graph",
+        "cpu-gpu-origin-pinned",
+        "cuda-resident",
+        "cuda-gpu-origin-pinned",
+        "cpu-avx2-optimized",
+        "cpu-comparator"
+      ],
+      [
+        "cpu-gpu-origin",
+        "cuda-gpu-origin",
+        "cuda-host-origin-pinned",
+        "cpu-gpu-origin-pinned",
+        "cuda-host-origin",
+        "cuda-gpu-origin-pinned",
+        "cuda-resident-graph",
+        "cpu-comparator",
+        "cuda-resident",
+        "cpu-avx2-optimized"
+      ],
+      [
+        "cuda-gpu-origin",
+        "cpu-gpu-origin-pinned",
+        "cpu-gpu-origin",
+        "cuda-gpu-origin-pinned",
+        "cuda-host-origin-pinned",
+        "cpu-comparator",
+        "cuda-host-origin",
+        "cpu-avx2-optimized",
+        "cuda-resident-graph",
+        "cuda-resident"
+      ],
+      [
+        "cpu-gpu-origin-pinned",
+        "cuda-gpu-origin-pinned",
+        "cuda-gpu-origin",
+        "cpu-comparator",
+        "cpu-gpu-origin",
+        "cpu-avx2-optimized",
+        "cuda-host-origin-pinned",
+        "cuda-resident",
+        "cuda-host-origin",
+        "cuda-resident-graph"
+      ],
+      [
+        "cuda-gpu-origin-pinned",
+        "cpu-comparator",
+        "cpu-gpu-origin-pinned",
+        "cpu-avx2-optimized",
+        "cuda-gpu-origin",
+        "cuda-resident",
+        "cpu-gpu-origin",
+        "cuda-resident-graph",
+        "cuda-host-origin-pinned",
+        "cuda-host-origin"
+      ]
+    ],
+    "case_order_seed": 612,
+    "case_order": [
+      {
+        "input": "model_layer3.0.conv2.weight",
+        "count": 589824,
+        "bits": 4
+      },
+      {
+        "input": "model_layer1.0.conv1.weight",
+        "count": 36864,
+        "bits": 8
+      },
+      {
+        "input": "model_linear.weight",
+        "count": 5120,
+        "bits": 8
+      },
+      {
+        "input": "model_linear.weight",
+        "count": 5120,
+        "bits": 4
+      },
+      {
+        "input": "model_bn1.weight",
+        "count": 64,
+        "bits": 4
+      },
+      {
+        "input": "model_layer2.0.shortcut.0.weight",
+        "count": 8192,
+        "bits": 4
+      },
+      {
+        "input": "model_conv1.weight",
+        "count": 1728,
+        "bits": 4
+      },
+      {
+        "input": "model_conv1.weight",
+        "count": 1728,
+        "bits": 8
+      },
+      {
+        "input": "model_layer2.0.conv1.weight",
+        "count": 73728,
+        "bits": 8
+      },
+      {
+        "input": "model_layer3.0.conv1.weight",
+        "count": 294912,
+        "bits": 4
+      },
+      {
+        "input": "model_layer4.0.shortcut.0.weight",
+        "count": 131072,
+        "bits": 8
+      },
+      {
+        "input": "model_layer2.0.shortcut.0.weight",
+        "count": 8192,
+        "bits": 8
+      },
+      {
+        "input": "model_layer2.0.conv1.weight",
+        "count": 73728,
+        "bits": 4
+      },
+      {
+        "input": "model_layer2.0.bn1.weight",
+        "count": 128,
+        "bits": 8
+      },
+      {
+        "input": "model_layer3.0.bn1.weight",
+        "count": 256,
+        "bits": 8
+      },
+      {
+        "input": "model_layer4.0.conv2.weight",
+        "count": 2359296,
+        "bits": 4
+      },
+      {
+        "input": "model_bn1.weight",
+        "count": 64,
+        "bits": 8
+      },
+      {
+        "input": "model_layer2.0.conv2.weight",
+        "count": 147456,
+        "bits": 8
+      },
+      {
+        "input": "model_layer4.0.conv2.weight",
+        "count": 2359296,
+        "bits": 8
+      },
+      {
+        "input": "model_layer1.0.conv1.weight",
+        "count": 36864,
+        "bits": 4
+      },
+      {
+        "input": "model_linear.bias",
+        "count": 10,
+        "bits": 8
+      },
+      {
+        "input": "model_layer2.0.conv2.weight",
+        "count": 147456,
+        "bits": 4
+      },
+      {
+        "input": "model_layer3.0.shortcut.0.weight",
+        "count": 32768,
+        "bits": 8
+      },
+      {
+        "input": "model_layer3.0.bn1.weight",
+        "count": 256,
+        "bits": 4
+      },
+      {
+        "input": "model_layer4.0.conv1.weight",
+        "count": 1179648,
+        "bits": 8
+      },
+      {
+        "input": "model_layer4.0.conv1.weight",
+        "count": 1179648,
+        "bits": 4
+      },
+      {
+        "input": "model_layer2.0.bn1.weight",
+        "count": 128,
+        "bits": 4
+      },
+      {
+        "input": "model_layer4.0.shortcut.0.weight",
+        "count": 131072,
+        "bits": 4
+      },
+      {
+        "input": "model_layer3.0.conv2.weight",
+        "count": 589824,
+        "bits": 8
+      },
+      {
+        "input": "model_layer3.0.conv1.weight",
+        "count": 294912,
+        "bits": 8
+      },
+      {
+        "input": "model_layer3.0.shortcut.0.weight",
+        "count": 32768,
+        "bits": 4
+      },
+      {
+        "input": "model_layer4.0.bn1.weight",
+        "count": 512,
+        "bits": 8
+      },
+      {
+        "input": "model_layer4.0.bn1.weight",
+        "count": 512,
+        "bits": 4
+      },
+      {
+        "input": "model_linear.bias",
+        "count": 10,
+        "bits": 4
+      }
+    ],
+    "invocation_scheme": "every trial reuses base invocation 0; identifiers per repetition are copied from each stoquant bench configuration",
+    "input_seed": 2026,
+    "compression_seed": 42
+  },
+  "statistics_method": {
+    "pooled": "median and IQR over all measured repetitions of all trials",
+    "quantile_method": "numpy.percentile(method='linear')",
+    "numpy_version": "2.4.6",
+    "speedup_point": "baseline pooled median / candidate pooled median",
+    "speedup_range": "[baseline min trial median / candidate max trial median, baseline max trial median / candidate min trial median]",
+    "spread_ratio": "max trial median / min trial median",
+    "spread_threshold": 1.25,
+    "spread_p90_p10": "p90 / p10 of the trial medians",
+    "stability_threshold": 1.25,
+    "claim_rules": {
+      "verdict": "verdict is 'faster' when baseline trial-median minimum / candidate trial-median maximum > 1, 'slower' when baseline trial-median maximum / candidate trial-median minimum < 1, and 'inconclusive' otherwise",
+      "direction_supported": "direction_supported: verdict is not 'inconclusive' and boundary_inversion is false (host-origin pooled median is not below the pooled median of any resident path)",
+      "magnitude_supported": "magnitude_supported: direction_supported and both the candidate and the baseline have spread_p90_p10 <= 1.25 (90th over 10th percentile of trial medians, numpy method 'linear')",
+      "claim_supported_rev2": "claim_supported_rev2: verdict is not 'inconclusive', boundary_inversion is false, and both the candidate and the baseline have spread_ratio <= 1.25 (maximum over minimum trial median)",
+      "baselines": "every path is measured against a policy-matched CPU baseline: resident, resident-graph, host-origin, and CPU gpu-origin paths against the CPU comparator (host-host); CUDA gpu-origin against CPU gpu-origin of the same transfer policy. Pinned paths add vs_pageable against their pageable twin; CUDA gpu-origin adds a descriptive vs_comparator with no claim flags"
+    },
+    "bootstrap": {
+      "resamples": 10000,
+      "seed": 31,
+      "level": 0.95,
+      "rule": "95% percentile bootstrap: resample each path's trial medians with replacement, independently, 10000 times from numpy.random.default_rng(31); the statistic is the baseline median of resampled trial medians over the candidate median of resampled trial medians"
+    }
+  },
+  "run_conditions": {
+    "evidence": true,
+    "non_evidence_reasons": [],
+    "pilot": false,
+    "readiness": {
+      "passed": true,
+      "failures": [],
+      "overridden": false,
+      "enforced": true,
+      "facts": {
+        "physical_memory": {
+          "total_bytes": 17120149504,
+          "available_bytes": 7913463808,
+          "used_percent": 53.776900101537805
+        },
+        "stoquant_pids": [],
+        "git_dirty_files": [],
+        "gpu_clock_event_reasons": "0x0000000000000000",
+        "power_plan": "Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)",
+        "hags_hwschmode": "unset",
+        "uptime_seconds": 278152.14
+      },
+      "min_available_physical_bytes": 4294967296
+    },
+    "affinity": {
+      "excluded_logical_cpus": [
+        0,
+        1
+      ],
+      "mask": "0xffc",
+      "previous_mask": "0xfff",
+      "applied_to": "driver process before any benchmark or probe process; inherited"
+    }
+  },
+  "inputs": {
+    "model_conv1.weight": {
+      "input_family": "model",
+      "input_key": "model_conv1.weight",
+      "count": 1728,
+      "filename": "input_model_conv1.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        0
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "conv1.weight",
+      "tensor_shape": [
+        64,
+        3,
+        3,
+        3
+      ],
+      "tensor_kind": "conv",
+      "std": 0.2721655269759087,
+      "sha256": "ba0ef3ae4a06229dd86a3f19e35fa1849285cc60185e00c98f5a3684b695a6be"
+    },
+    "model_bn1.weight": {
+      "input_family": "model",
+      "input_key": "model_bn1.weight",
+      "count": 64,
+      "filename": "input_model_bn1.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        1
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "bn1.weight",
+      "tensor_shape": [
+        64
+      ],
+      "tensor_kind": "bn",
+      "std": 0.01,
+      "sha256": "24fb65a23648d5f95a766917fb9e5d22f65cd5c486b5e6a957d62f9d6c901752"
+    },
+    "model_layer1.0.conv1.weight": {
+      "input_family": "model",
+      "input_key": "model_layer1.0.conv1.weight",
+      "count": 36864,
+      "filename": "input_model_layer1.0.conv1.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        3
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer1.0.conv1.weight",
+      "tensor_shape": [
+        64,
+        64,
+        3,
+        3
+      ],
+      "tensor_kind": "conv",
+      "std": 0.05892556509887896,
+      "sha256": "1e64c93c29b0301c0d05dd21150278360fa8cbb818cb4dc012443cbc272f03fa"
+    },
+    "model_layer2.0.conv1.weight": {
+      "input_family": "model",
+      "input_key": "model_layer2.0.conv1.weight",
+      "count": 73728,
+      "filename": "input_model_layer2.0.conv1.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        15
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer2.0.conv1.weight",
+      "tensor_shape": [
+        128,
+        64,
+        3,
+        3
+      ],
+      "tensor_kind": "conv",
+      "std": 0.05892556509887896,
+      "sha256": "8e150cf045b7a9bd3f2949a2a70f8e187a3059d26496efd744fa793680cfd2a0"
+    },
+    "model_layer2.0.bn1.weight": {
+      "input_family": "model",
+      "input_key": "model_layer2.0.bn1.weight",
+      "count": 128,
+      "filename": "input_model_layer2.0.bn1.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        16
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer2.0.bn1.weight",
+      "tensor_shape": [
+        128
+      ],
+      "tensor_kind": "bn",
+      "std": 0.01,
+      "sha256": "f25803bcaa9858c17201a857f188936384fac0c33a63396a55b6b6070eefd5a4"
+    },
+    "model_layer2.0.conv2.weight": {
+      "input_family": "model",
+      "input_key": "model_layer2.0.conv2.weight",
+      "count": 147456,
+      "filename": "input_model_layer2.0.conv2.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        18
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer2.0.conv2.weight",
+      "tensor_shape": [
+        128,
+        128,
+        3,
+        3
+      ],
+      "tensor_kind": "conv",
+      "std": 0.041666666666666664,
+      "sha256": "8dba6b6f97d8ab6f21afc866d11ba98c2bcf6f7fc95b6fea4182ab534382e5a3"
+    },
+    "model_layer2.0.shortcut.0.weight": {
+      "input_family": "model",
+      "input_key": "model_layer2.0.shortcut.0.weight",
+      "count": 8192,
+      "filename": "input_model_layer2.0.shortcut.0.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        21
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer2.0.shortcut.0.weight",
+      "tensor_shape": [
+        128,
+        64,
+        1,
+        1
+      ],
+      "tensor_kind": "conv",
+      "std": 0.1767766952966369,
+      "sha256": "c96eedacaad9b02fbf580872ba1b3e5e979b9cd91ac2ca5d780379c8dea22567"
+    },
+    "model_layer3.0.conv1.weight": {
+      "input_family": "model",
+      "input_key": "model_layer3.0.conv1.weight",
+      "count": 294912,
+      "filename": "input_model_layer3.0.conv1.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        30
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer3.0.conv1.weight",
+      "tensor_shape": [
+        256,
+        128,
+        3,
+        3
+      ],
+      "tensor_kind": "conv",
+      "std": 0.041666666666666664,
+      "sha256": "f20eb65c4bac17b2cb1bf1ed14e3de798b1a9bc19725a0b4d18d9034fb11a4c3"
+    },
+    "model_layer3.0.bn1.weight": {
+      "input_family": "model",
+      "input_key": "model_layer3.0.bn1.weight",
+      "count": 256,
+      "filename": "input_model_layer3.0.bn1.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        31
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer3.0.bn1.weight",
+      "tensor_shape": [
+        256
+      ],
+      "tensor_kind": "bn",
+      "std": 0.01,
+      "sha256": "27737d28782afb873ac07f59dd0b7a4ac79c95da460fd09ac0ca737c4335ce61"
+    },
+    "model_layer3.0.conv2.weight": {
+      "input_family": "model",
+      "input_key": "model_layer3.0.conv2.weight",
+      "count": 589824,
+      "filename": "input_model_layer3.0.conv2.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        33
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer3.0.conv2.weight",
+      "tensor_shape": [
+        256,
+        256,
+        3,
+        3
+      ],
+      "tensor_kind": "conv",
+      "std": 0.02946278254943948,
+      "sha256": "6d9e335097a1064e8fc0cf58de3f4c42dc3f0c0aadf8edd32703741d69084b79"
+    },
+    "model_layer3.0.shortcut.0.weight": {
+      "input_family": "model",
+      "input_key": "model_layer3.0.shortcut.0.weight",
+      "count": 32768,
+      "filename": "input_model_layer3.0.shortcut.0.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        36
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer3.0.shortcut.0.weight",
+      "tensor_shape": [
+        256,
+        128,
+        1,
+        1
+      ],
+      "tensor_kind": "conv",
+      "std": 0.125,
+      "sha256": "5804d8b45ecaf09ef66d8c75cfcecbfb52fd5edef1e80ebff5f955eb05192e84"
+    },
+    "model_layer4.0.conv1.weight": {
+      "input_family": "model",
+      "input_key": "model_layer4.0.conv1.weight",
+      "count": 1179648,
+      "filename": "input_model_layer4.0.conv1.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        45
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer4.0.conv1.weight",
+      "tensor_shape": [
+        512,
+        256,
+        3,
+        3
+      ],
+      "tensor_kind": "conv",
+      "std": 0.02946278254943948,
+      "sha256": "0cf078db4d88d03e6ca259a7cf38f81e7309c2ad2771796a8a802821c47797e8"
+    },
+    "model_layer4.0.bn1.weight": {
+      "input_family": "model",
+      "input_key": "model_layer4.0.bn1.weight",
+      "count": 512,
+      "filename": "input_model_layer4.0.bn1.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        46
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer4.0.bn1.weight",
+      "tensor_shape": [
+        512
+      ],
+      "tensor_kind": "bn",
+      "std": 0.01,
+      "sha256": "317a16b43381494281526ed7141e42a09c074bc7c0c2afcedb5748322c7b4933"
+    },
+    "model_layer4.0.conv2.weight": {
+      "input_family": "model",
+      "input_key": "model_layer4.0.conv2.weight",
+      "count": 2359296,
+      "filename": "input_model_layer4.0.conv2.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        48
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer4.0.conv2.weight",
+      "tensor_shape": [
+        512,
+        512,
+        3,
+        3
+      ],
+      "tensor_kind": "conv",
+      "std": 0.020833333333333332,
+      "sha256": "86afc431187b9a61faab61e24c81d73c44444af4a00d80837ddb132595fc7134"
+    },
+    "model_layer4.0.shortcut.0.weight": {
+      "input_family": "model",
+      "input_key": "model_layer4.0.shortcut.0.weight",
+      "count": 131072,
+      "filename": "input_model_layer4.0.shortcut.0.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        51
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "layer4.0.shortcut.0.weight",
+      "tensor_shape": [
+        512,
+        256,
+        1,
+        1
+      ],
+      "tensor_kind": "conv",
+      "std": 0.08838834764831845,
+      "sha256": "1f29730e2add301fa5d4c3299b5f6a41d58e24e0f206b81312a5faca427e8863"
+    },
+    "model_linear.weight": {
+      "input_family": "model",
+      "input_key": "model_linear.weight",
+      "count": 5120,
+      "filename": "input_model_linear.weight.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        60
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "linear.weight",
+      "tensor_shape": [
+        10,
+        512
+      ],
+      "tensor_kind": "linear",
+      "std": 0.0625,
+      "sha256": "7e430066d518e9038a3bd577a4d38d60ddcbe530097a916274263d83e753f92e"
+    },
+    "model_linear.bias": {
+      "input_family": "model",
+      "input_key": "model_linear.bias",
+      "count": 10,
+      "filename": "input_model_linear.bias.f32",
+      "generator": "numpy.random.default_rng",
+      "bit_generator": "PCG64",
+      "seed": [
+        2026,
+        61
+      ],
+      "model": "resnet18-cifar10",
+      "tensor_name": "linear.bias",
+      "tensor_shape": [
+        10
+      ],
+      "tensor_kind": "bias",
+      "std": 0.01,
+      "sha256": "b452dd83f83ba4852bfdd6f36de7c6a91ae72fc2bd27bb28ebc77f1adec5b651"
+    }
+  },
+  "summary_csv": "summary.csv",
+  "msvc_vectorization_report": "msvc_vectorization_report.txt",
+  "cases": [
+    "case_cpu_comparator_bits4_model_linear.bias",
+    "case_cpu-avx2_optimized_bits4_model_linear.bias",
+    "case_cuda_resident_bits4_model_linear.bias",
+    "case_cuda_resident-graph_bits4_model_linear.bias",
+    "case_cuda_host-origin_bits4_model_linear.bias",
+    "case_cuda_host-origin-pinned_bits4_model_linear.bias",
+    "case_cpu_gpu-origin_bits4_model_linear.bias",
+    "case_cuda_gpu-origin_bits4_model_linear.bias",
+    "case_cpu_gpu-origin-pinned_bits4_model_linear.bias",
+    "case_cuda_gpu-origin-pinned_bits4_model_linear.bias",
+    "case_cpu_comparator_bits8_model_linear.bias",
+    "case_cpu-avx2_optimized_bits8_model_linear.bias",
+    "case_cuda_resident_bits8_model_linear.bias",
+    "case_cuda_resident-graph_bits8_model_linear.bias",
+    "case_cuda_host-origin_bits8_model_linear.bias",
+    "case_cuda_host-origin-pinned_bits8_model_linear.bias",
+    "case_cpu_gpu-origin_bits8_model_linear.bias",
+    "case_cuda_gpu-origin_bits8_model_linear.bias",
+    "case_cpu_gpu-origin-pinned_bits8_model_linear.bias",
+    "case_cuda_gpu-origin-pinned_bits8_model_linear.bias",
+    "case_cpu_comparator_bits4_model_bn1.weight",
+    "case_cpu-avx2_optimized_bits4_model_bn1.weight",
+    "case_cuda_resident_bits4_model_bn1.weight",
+    "case_cuda_resident-graph_bits4_model_bn1.weight",
+    "case_cuda_host-origin_bits4_model_bn1.weight",
+    "case_cuda_host-origin-pinned_bits4_model_bn1.weight",
+    "case_cpu_gpu-origin_bits4_model_bn1.weight",
+    "case_cuda_gpu-origin_bits4_model_bn1.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_bn1.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_bn1.weight",
+    "case_cpu_comparator_bits8_model_bn1.weight",
+    "case_cpu-avx2_optimized_bits8_model_bn1.weight",
+    "case_cuda_resident_bits8_model_bn1.weight",
+    "case_cuda_resident-graph_bits8_model_bn1.weight",
+    "case_cuda_host-origin_bits8_model_bn1.weight",
+    "case_cuda_host-origin-pinned_bits8_model_bn1.weight",
+    "case_cpu_gpu-origin_bits8_model_bn1.weight",
+    "case_cuda_gpu-origin_bits8_model_bn1.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_bn1.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_bn1.weight",
+    "case_cpu_comparator_bits4_model_layer2.0.bn1.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer2.0.bn1.weight",
+    "case_cuda_resident_bits4_model_layer2.0.bn1.weight",
+    "case_cuda_resident-graph_bits4_model_layer2.0.bn1.weight",
+    "case_cuda_host-origin_bits4_model_layer2.0.bn1.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer2.0.bn1.weight",
+    "case_cpu_gpu-origin_bits4_model_layer2.0.bn1.weight",
+    "case_cuda_gpu-origin_bits4_model_layer2.0.bn1.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer2.0.bn1.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer2.0.bn1.weight",
+    "case_cpu_comparator_bits8_model_layer2.0.bn1.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer2.0.bn1.weight",
+    "case_cuda_resident_bits8_model_layer2.0.bn1.weight",
+    "case_cuda_resident-graph_bits8_model_layer2.0.bn1.weight",
+    "case_cuda_host-origin_bits8_model_layer2.0.bn1.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer2.0.bn1.weight",
+    "case_cpu_gpu-origin_bits8_model_layer2.0.bn1.weight",
+    "case_cuda_gpu-origin_bits8_model_layer2.0.bn1.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer2.0.bn1.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer2.0.bn1.weight",
+    "case_cpu_comparator_bits4_model_layer3.0.bn1.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer3.0.bn1.weight",
+    "case_cuda_resident_bits4_model_layer3.0.bn1.weight",
+    "case_cuda_resident-graph_bits4_model_layer3.0.bn1.weight",
+    "case_cuda_host-origin_bits4_model_layer3.0.bn1.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer3.0.bn1.weight",
+    "case_cpu_gpu-origin_bits4_model_layer3.0.bn1.weight",
+    "case_cuda_gpu-origin_bits4_model_layer3.0.bn1.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer3.0.bn1.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer3.0.bn1.weight",
+    "case_cpu_comparator_bits8_model_layer3.0.bn1.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer3.0.bn1.weight",
+    "case_cuda_resident_bits8_model_layer3.0.bn1.weight",
+    "case_cuda_resident-graph_bits8_model_layer3.0.bn1.weight",
+    "case_cuda_host-origin_bits8_model_layer3.0.bn1.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer3.0.bn1.weight",
+    "case_cpu_gpu-origin_bits8_model_layer3.0.bn1.weight",
+    "case_cuda_gpu-origin_bits8_model_layer3.0.bn1.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer3.0.bn1.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer3.0.bn1.weight",
+    "case_cpu_comparator_bits4_model_layer4.0.bn1.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer4.0.bn1.weight",
+    "case_cuda_resident_bits4_model_layer4.0.bn1.weight",
+    "case_cuda_resident-graph_bits4_model_layer4.0.bn1.weight",
+    "case_cuda_host-origin_bits4_model_layer4.0.bn1.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer4.0.bn1.weight",
+    "case_cpu_gpu-origin_bits4_model_layer4.0.bn1.weight",
+    "case_cuda_gpu-origin_bits4_model_layer4.0.bn1.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer4.0.bn1.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer4.0.bn1.weight",
+    "case_cpu_comparator_bits8_model_layer4.0.bn1.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer4.0.bn1.weight",
+    "case_cuda_resident_bits8_model_layer4.0.bn1.weight",
+    "case_cuda_resident-graph_bits8_model_layer4.0.bn1.weight",
+    "case_cuda_host-origin_bits8_model_layer4.0.bn1.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer4.0.bn1.weight",
+    "case_cpu_gpu-origin_bits8_model_layer4.0.bn1.weight",
+    "case_cuda_gpu-origin_bits8_model_layer4.0.bn1.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer4.0.bn1.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer4.0.bn1.weight",
+    "case_cpu_comparator_bits4_model_conv1.weight",
+    "case_cpu-avx2_optimized_bits4_model_conv1.weight",
+    "case_cuda_resident_bits4_model_conv1.weight",
+    "case_cuda_resident-graph_bits4_model_conv1.weight",
+    "case_cuda_host-origin_bits4_model_conv1.weight",
+    "case_cuda_host-origin-pinned_bits4_model_conv1.weight",
+    "case_cpu_gpu-origin_bits4_model_conv1.weight",
+    "case_cuda_gpu-origin_bits4_model_conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_conv1.weight",
+    "case_cpu_comparator_bits8_model_conv1.weight",
+    "case_cpu-avx2_optimized_bits8_model_conv1.weight",
+    "case_cuda_resident_bits8_model_conv1.weight",
+    "case_cuda_resident-graph_bits8_model_conv1.weight",
+    "case_cuda_host-origin_bits8_model_conv1.weight",
+    "case_cuda_host-origin-pinned_bits8_model_conv1.weight",
+    "case_cpu_gpu-origin_bits8_model_conv1.weight",
+    "case_cuda_gpu-origin_bits8_model_conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_conv1.weight",
+    "case_cpu_comparator_bits4_model_linear.weight",
+    "case_cpu-avx2_optimized_bits4_model_linear.weight",
+    "case_cuda_resident_bits4_model_linear.weight",
+    "case_cuda_resident-graph_bits4_model_linear.weight",
+    "case_cuda_host-origin_bits4_model_linear.weight",
+    "case_cuda_host-origin-pinned_bits4_model_linear.weight",
+    "case_cpu_gpu-origin_bits4_model_linear.weight",
+    "case_cuda_gpu-origin_bits4_model_linear.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_linear.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_linear.weight",
+    "case_cpu_comparator_bits8_model_linear.weight",
+    "case_cpu-avx2_optimized_bits8_model_linear.weight",
+    "case_cuda_resident_bits8_model_linear.weight",
+    "case_cuda_resident-graph_bits8_model_linear.weight",
+    "case_cuda_host-origin_bits8_model_linear.weight",
+    "case_cuda_host-origin-pinned_bits8_model_linear.weight",
+    "case_cpu_gpu-origin_bits8_model_linear.weight",
+    "case_cuda_gpu-origin_bits8_model_linear.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_linear.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_linear.weight",
+    "case_cpu_comparator_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cuda_resident_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cuda_resident-graph_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cuda_host-origin_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cpu_gpu-origin_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cuda_gpu-origin_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer2.0.shortcut.0.weight",
+    "case_cpu_comparator_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cuda_resident_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cuda_resident-graph_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cuda_host-origin_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cpu_gpu-origin_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cuda_gpu-origin_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer2.0.shortcut.0.weight",
+    "case_cpu_comparator_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cuda_resident_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cuda_resident-graph_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cuda_host-origin_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cpu_gpu-origin_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cuda_gpu-origin_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer3.0.shortcut.0.weight",
+    "case_cpu_comparator_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cuda_resident_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cuda_resident-graph_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cuda_host-origin_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cpu_gpu-origin_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cuda_gpu-origin_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer3.0.shortcut.0.weight",
+    "case_cpu_comparator_bits4_model_layer1.0.conv1.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer1.0.conv1.weight",
+    "case_cuda_resident_bits4_model_layer1.0.conv1.weight",
+    "case_cuda_resident-graph_bits4_model_layer1.0.conv1.weight",
+    "case_cuda_host-origin_bits4_model_layer1.0.conv1.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer1.0.conv1.weight",
+    "case_cpu_gpu-origin_bits4_model_layer1.0.conv1.weight",
+    "case_cuda_gpu-origin_bits4_model_layer1.0.conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer1.0.conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer1.0.conv1.weight",
+    "case_cpu_comparator_bits8_model_layer1.0.conv1.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer1.0.conv1.weight",
+    "case_cuda_resident_bits8_model_layer1.0.conv1.weight",
+    "case_cuda_resident-graph_bits8_model_layer1.0.conv1.weight",
+    "case_cuda_host-origin_bits8_model_layer1.0.conv1.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer1.0.conv1.weight",
+    "case_cpu_gpu-origin_bits8_model_layer1.0.conv1.weight",
+    "case_cuda_gpu-origin_bits8_model_layer1.0.conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer1.0.conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer1.0.conv1.weight",
+    "case_cpu_comparator_bits4_model_layer2.0.conv1.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer2.0.conv1.weight",
+    "case_cuda_resident_bits4_model_layer2.0.conv1.weight",
+    "case_cuda_resident-graph_bits4_model_layer2.0.conv1.weight",
+    "case_cuda_host-origin_bits4_model_layer2.0.conv1.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer2.0.conv1.weight",
+    "case_cpu_gpu-origin_bits4_model_layer2.0.conv1.weight",
+    "case_cuda_gpu-origin_bits4_model_layer2.0.conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer2.0.conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer2.0.conv1.weight",
+    "case_cpu_comparator_bits8_model_layer2.0.conv1.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer2.0.conv1.weight",
+    "case_cuda_resident_bits8_model_layer2.0.conv1.weight",
+    "case_cuda_resident-graph_bits8_model_layer2.0.conv1.weight",
+    "case_cuda_host-origin_bits8_model_layer2.0.conv1.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer2.0.conv1.weight",
+    "case_cpu_gpu-origin_bits8_model_layer2.0.conv1.weight",
+    "case_cuda_gpu-origin_bits8_model_layer2.0.conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer2.0.conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer2.0.conv1.weight",
+    "case_cpu_comparator_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cuda_resident_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cuda_resident-graph_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cuda_host-origin_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cpu_gpu-origin_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cuda_gpu-origin_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer4.0.shortcut.0.weight",
+    "case_cpu_comparator_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cuda_resident_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cuda_resident-graph_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cuda_host-origin_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cpu_gpu-origin_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cuda_gpu-origin_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer4.0.shortcut.0.weight",
+    "case_cpu_comparator_bits4_model_layer2.0.conv2.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer2.0.conv2.weight",
+    "case_cuda_resident_bits4_model_layer2.0.conv2.weight",
+    "case_cuda_resident-graph_bits4_model_layer2.0.conv2.weight",
+    "case_cuda_host-origin_bits4_model_layer2.0.conv2.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer2.0.conv2.weight",
+    "case_cpu_gpu-origin_bits4_model_layer2.0.conv2.weight",
+    "case_cuda_gpu-origin_bits4_model_layer2.0.conv2.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer2.0.conv2.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer2.0.conv2.weight",
+    "case_cpu_comparator_bits8_model_layer2.0.conv2.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer2.0.conv2.weight",
+    "case_cuda_resident_bits8_model_layer2.0.conv2.weight",
+    "case_cuda_resident-graph_bits8_model_layer2.0.conv2.weight",
+    "case_cuda_host-origin_bits8_model_layer2.0.conv2.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer2.0.conv2.weight",
+    "case_cpu_gpu-origin_bits8_model_layer2.0.conv2.weight",
+    "case_cuda_gpu-origin_bits8_model_layer2.0.conv2.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer2.0.conv2.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer2.0.conv2.weight",
+    "case_cpu_comparator_bits4_model_layer3.0.conv1.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer3.0.conv1.weight",
+    "case_cuda_resident_bits4_model_layer3.0.conv1.weight",
+    "case_cuda_resident-graph_bits4_model_layer3.0.conv1.weight",
+    "case_cuda_host-origin_bits4_model_layer3.0.conv1.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer3.0.conv1.weight",
+    "case_cpu_gpu-origin_bits4_model_layer3.0.conv1.weight",
+    "case_cuda_gpu-origin_bits4_model_layer3.0.conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer3.0.conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer3.0.conv1.weight",
+    "case_cpu_comparator_bits8_model_layer3.0.conv1.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer3.0.conv1.weight",
+    "case_cuda_resident_bits8_model_layer3.0.conv1.weight",
+    "case_cuda_resident-graph_bits8_model_layer3.0.conv1.weight",
+    "case_cuda_host-origin_bits8_model_layer3.0.conv1.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer3.0.conv1.weight",
+    "case_cpu_gpu-origin_bits8_model_layer3.0.conv1.weight",
+    "case_cuda_gpu-origin_bits8_model_layer3.0.conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer3.0.conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer3.0.conv1.weight",
+    "case_cpu_comparator_bits4_model_layer3.0.conv2.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer3.0.conv2.weight",
+    "case_cuda_resident_bits4_model_layer3.0.conv2.weight",
+    "case_cuda_resident-graph_bits4_model_layer3.0.conv2.weight",
+    "case_cuda_host-origin_bits4_model_layer3.0.conv2.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer3.0.conv2.weight",
+    "case_cpu_gpu-origin_bits4_model_layer3.0.conv2.weight",
+    "case_cuda_gpu-origin_bits4_model_layer3.0.conv2.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer3.0.conv2.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer3.0.conv2.weight",
+    "case_cpu_comparator_bits8_model_layer3.0.conv2.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer3.0.conv2.weight",
+    "case_cuda_resident_bits8_model_layer3.0.conv2.weight",
+    "case_cuda_resident-graph_bits8_model_layer3.0.conv2.weight",
+    "case_cuda_host-origin_bits8_model_layer3.0.conv2.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer3.0.conv2.weight",
+    "case_cpu_gpu-origin_bits8_model_layer3.0.conv2.weight",
+    "case_cuda_gpu-origin_bits8_model_layer3.0.conv2.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer3.0.conv2.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer3.0.conv2.weight",
+    "case_cpu_comparator_bits4_model_layer4.0.conv1.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer4.0.conv1.weight",
+    "case_cuda_resident_bits4_model_layer4.0.conv1.weight",
+    "case_cuda_resident-graph_bits4_model_layer4.0.conv1.weight",
+    "case_cuda_host-origin_bits4_model_layer4.0.conv1.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer4.0.conv1.weight",
+    "case_cpu_gpu-origin_bits4_model_layer4.0.conv1.weight",
+    "case_cuda_gpu-origin_bits4_model_layer4.0.conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer4.0.conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer4.0.conv1.weight",
+    "case_cpu_comparator_bits8_model_layer4.0.conv1.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer4.0.conv1.weight",
+    "case_cuda_resident_bits8_model_layer4.0.conv1.weight",
+    "case_cuda_resident-graph_bits8_model_layer4.0.conv1.weight",
+    "case_cuda_host-origin_bits8_model_layer4.0.conv1.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer4.0.conv1.weight",
+    "case_cpu_gpu-origin_bits8_model_layer4.0.conv1.weight",
+    "case_cuda_gpu-origin_bits8_model_layer4.0.conv1.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer4.0.conv1.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer4.0.conv1.weight",
+    "case_cpu_comparator_bits4_model_layer4.0.conv2.weight",
+    "case_cpu-avx2_optimized_bits4_model_layer4.0.conv2.weight",
+    "case_cuda_resident_bits4_model_layer4.0.conv2.weight",
+    "case_cuda_resident-graph_bits4_model_layer4.0.conv2.weight",
+    "case_cuda_host-origin_bits4_model_layer4.0.conv2.weight",
+    "case_cuda_host-origin-pinned_bits4_model_layer4.0.conv2.weight",
+    "case_cpu_gpu-origin_bits4_model_layer4.0.conv2.weight",
+    "case_cuda_gpu-origin_bits4_model_layer4.0.conv2.weight",
+    "case_cpu_gpu-origin-pinned_bits4_model_layer4.0.conv2.weight",
+    "case_cuda_gpu-origin-pinned_bits4_model_layer4.0.conv2.weight",
+    "case_cpu_comparator_bits8_model_layer4.0.conv2.weight",
+    "case_cpu-avx2_optimized_bits8_model_layer4.0.conv2.weight",
+    "case_cuda_resident_bits8_model_layer4.0.conv2.weight",
+    "case_cuda_resident-graph_bits8_model_layer4.0.conv2.weight",
+    "case_cuda_host-origin_bits8_model_layer4.0.conv2.weight",
+    "case_cuda_host-origin-pinned_bits8_model_layer4.0.conv2.weight",
+    "case_cpu_gpu-origin_bits8_model_layer4.0.conv2.weight",
+    "case_cuda_gpu-origin_bits8_model_layer4.0.conv2.weight",
+    "case_cpu_gpu-origin-pinned_bits8_model_layer4.0.conv2.weight",
+    "case_cuda_gpu-origin-pinned_bits8_model_layer4.0.conv2.weight"
+  ],
+  "all_cases_passed": true
+}

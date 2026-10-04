@@ -347,6 +347,115 @@ This amendment supersedes the application-window, app-closing, reboot-age, and p
 - **Machine settings:** GPU clocks, power plan, HAGS, and other system settings stay as the user left them. No reboot or app closing is required solely to satisfy readiness.
 - **Manifest:** this readiness metadata change is recorded as manifest version 3.3. It does not alter prior snapshots or paper claims.
 
+### Publication matrix results (2026-10-03–04)
+
+The three full runs use clean merged source revision `ec319475cd56f246f0110442dc0ee80c2eb0d60d` (`ec31947`), superseding the launch pin `5d0841bfe461dace24f92a9a3cf7a7665c64f9c1` by an approved output-only merge. The benchmark implementation and pre-registered design are unchanged. Each family has 340 passing cases (17 inputs × 2 bit widths × 10 paths), 30 trials in three complete Williams designs, 30 measured repetitions per trial, adaptive in-process warm-ups targeting one second (at least 10 repetitions), case-order seed 612, and optimized K1 on all 204 CUDA cases. The correctness gates are outside timing.
+
+All manifests record `evidence=true`, a clean tree, enforced readiness passed with no override, and no non-evidence reasons. Available physical RAM immediately before launch was 6.953 GiB (dense), 7.140 GiB (sparse), and 7.370 GiB (model), above the 4 GiB floor. The RTX 5060 used driver 610.88, CUDA 13.4.59 and MSVC 19.51.36260. Affinity `0xffc` excludes logical CPUs 0 and 1; the descriptive AVX2 team uses 10 threads. Power plan was Balanced and HAGS was unset; uptime was recorded without imposing a limit.
+
+| Family | Frozen raw snapshot and complete report | Grid |
+|---|---|---|
+| dense | [Raw](../results/2026-10-03-ec31947-dense-full-detached/manifest.json), [report and F1–F4 / bandwidth appendix](../results/2026-10-03-ec31947-dense-full-detached/derived/report.md) | `2^10`–`2^26` |
+| sparse | [Raw](../results/2026-10-03-ec31947-sparse-full-detached/manifest.json), [report and F1–F4 / bandwidth appendix](../results/2026-10-03-ec31947-sparse-full-detached/derived/report.md) | `2^10`–`2^26` |
+| model | [Raw](../results/2026-10-03-ec31947-model-full-detached/manifest.json), [report and F1–F4 / bandwidth appendix](../results/2026-10-03-ec31947-model-full-detached/derived/report.md) | 17 distinct synthetic ResNet-18 shapes, 10–2,359,296 elements |
+
+Reports were rendered with `just figures results/<snapshot> --k1-ab results/2026-10-02-5d0841b-k1-ab`. The named A/B run supplies the 429.7 GB/s streaming-read ceiling; the matrix supplies resident K1 and total-path timings and the device peak of 448.0 GB/s. Effective K1 bandwidth above device peak in cache-sized cells is a two-read accounting measure, not a DRAM throughput claim. F1 retains the blank second-platform row; no second-machine evidence is implied. Model F3 diagnoses the four smallest recorded counts, not representative large tensors.
+
+#### Claims by path
+
+Each table entry is supported faster / supported slower / supported magnitude out of 34 size-or-shape/bit cells. Magnitude counts include both directions and are a subset of supported directions. Remaining cells support no direction. Every per-cell point estimate, 95% bootstrap CI, verdict, stability flag and inversion flag is in its family report or raw case. CUDA GPU-origin uses the policy-matched CPU GPU-origin baseline; CUDA resident, graph and host-origin use the scalar host-host comparator. The CPU GPU-origin rows compare the full-input D2H-plus-CPU path with that scalar host-host comparator, so their slowdowns describe the added boundary cost.
+
+| Path | Dense | Sparse | Model |
+|---|---:|---:|---:|
+| cuda-resident | 27 / 4 / 24 | 26 / 5 / 31 | 20 / 12 / 32 |
+| cuda-resident-graph | 32 / 1 / 33 | 32 / 1 / 33 | 24 / 10 / 34 |
+| cuda-host-origin | 26 / 8 / 33 | 26 / 7 / 33 | 18 / 16 / 34 |
+| cuda-host-origin-pinned | 26 / 8 / 33 | 26 / 8 / 34 | 18 / 16 / 34 |
+| cpu-gpu-origin | 0 / 11 / 10 | 0 / 23 / 21 | 0 / 31 / 27 |
+| cuda-gpu-origin | 26 / 7 / 24 | 26 / 7 / 26 | 18 / 13 / 22 |
+| cpu-gpu-origin-pinned | 0 / 11 / 11 | 0 / 21 / 21 | 0 / 28 / 24 |
+| cuda-gpu-origin-pinned | 26 / 6 / 29 | 26 / 6 / 32 | 18 / 14 / 28 |
+
+The scalar comparator is the reference row. AVX2 ratios have null direction and magnitude fields and remain descriptive. No boundary inversions occurred in any of the 1,020 cases; consequently no claim was vetoed for inversion. Unsupported cells remain unsupported under the recorded conservative trial-range verdict, even when their bootstrap CI lies entirely to one side of 1.
+
+Selected supported magnitudes at the largest input of each family are below. Values are pooled-median baseline/path ratios with 95% bootstrap CIs; the source reports retain higher precision. Dense and sparse use `2^26`; model uses `model_layer4.0.conv2.weight` (2,359,296 elements). The model maximum is smaller, so these rows are not matched-size family comparisons.
+
+| Family | CUDA path | 4-bit ratio [95% CI] | 8-bit ratio [95% CI] |
+|---|---|---|---|
+| dense | cuda-resident | 353× [352, 354] | 328× [326, 330] |
+| dense | cuda-resident-graph | 356× [355, 357] | 331× [329, 332] |
+| dense | cuda-host-origin | 22.6× [22.6, 22.7] | 20.6× [20.5, 20.7] |
+| dense | cuda-host-origin-pinned | 22.9× [22.8, 22.9] | 20.8× [20.7, 20.9] |
+| dense | cuda-gpu-origin | 153× [153, 153] | 93.4× [90.2, 93.8] |
+| dense | cuda-gpu-origin-pinned | 155× [154, 155] | 94.4× [94, 94.4] |
+| sparse | cuda-resident | 317× [317, 317] | 292× [292, 292] |
+| sparse | cuda-resident-graph | 320× [320, 320] | 294× [294, 294] |
+| sparse | cuda-host-origin | 20.1× [20.1, 20.1] | 18.2× [18.2, 18.2] |
+| sparse | cuda-host-origin-pinned | 20.3× [20.3, 20.3] | 18.4× [18.4, 18.4] |
+| sparse | cuda-gpu-origin | 130× [129, 130] | 79.3× [79.1, 82.4] |
+| sparse | cuda-gpu-origin-pinned | 140× [132, 140] | 85.4× [81.5, 85.4] |
+| model | cuda-resident | 233× [232, 233] | 250× [250, 256] |
+| model | cuda-resident-graph | 416× [416, 416] | 396× [395, 396] |
+| model | cuda-host-origin | 20× [20, 20.1] | 18.6× [18.5, 18.6] |
+| model | cuda-host-origin-pinned | 21.4× [21.4, 21.5] | 19.7× [19.6, 19.7] |
+| model | cuda-gpu-origin | 98.6× [98.2, 98.9] | 67.3× [67.2, 67.4] |
+| model | cuda-gpu-origin-pinned | 113× [113, 115] | 73× [72.9, 73.3] |
+
+Graph versus plain resident is a separate same-boundary comparison: supported faster directions occur in 32/34 dense cells (23 magnitude claims), 34/34 sparse cells (34 magnitudes), and 34/34 model cells (34 magnitudes). These counts refer to the stored `vs_resident` comparison, not to the scalar-baseline graph row above.
+
+#### Direction-based crossovers
+
+Only adjacent sizes with opposite supported directions resolve a crossover. The resolved interval below is `2^13`–`2^14`; “unresolved” does not mean that the path never becomes faster. The distinct model shape collection is not the registered power-of-two size sweep, so no model crossover is claimed.
+
+| CUDA path | Dense 4-bit | Dense 8-bit | Sparse 4-bit | Sparse 8-bit |
+|---|---|---|---|---|
+| resident | unresolved | unresolved | unresolved | unresolved |
+| host-origin | `2^13`–`2^14` | `2^13`–`2^14` | `2^13`–`2^14` | unresolved |
+| host-origin-pinned | `2^13`–`2^14` | `2^13`–`2^14` | `2^13`–`2^14` | `2^13`–`2^14` |
+| gpu-origin | `2^13`–`2^14` | unresolved | unresolved | `2^13`–`2^14` |
+| gpu-origin-pinned | unresolved | unresolved | unresolved | unresolved |
+
+Graph is omitted by the current renderer’s crossover listing. Applying the same registered adjacent-direction rule to its raw scalar-baseline statistics resolves the 8-bit graph crossover at `2^10`–`2^11` in both dense and sparse; the 4-bit graph crossover is unresolved in both families because no sampled cell supports a slower direction.
+
+#### Transfer policy and GPU-origin
+
+Pinned-versus-pageable comparisons support faster directions in the following number of cells. Parentheses give supported magnitudes. No pair supports a pinned slowdown; other cells are inconclusive, so pinning is not claimed to help universally.
+
+| Policy-matched pair | Dense | Sparse | Model |
+|---|---:|---:|---:|
+| cuda-host-origin-pinned / pageable twin | 14 (14) | 17 (17) | 16 (16) |
+| cpu-gpu-origin-pinned / pageable twin | 2 (2) | 6 (6) | 18 (16) |
+| cuda-gpu-origin-pinned / pageable twin | 9 (9) | 15 (15) | 12 (12) |
+
+The GPU-origin headline compares CUDA compression plus packed-output D2H with full-input D2H plus CPU compression under the same transfer policy. Its supported faster/slower and magnitude counts are in the path table. The raw `vs_comparator` GPU-origin comparisons and CUDA-versus-AVX2 ratios are descriptive only; they do not replace the registered GPU-origin baseline.
+
+#### Descriptive AVX2 comparison
+
+At the family maximum the scalar/AVX2 pooled-median ratios and bootstrap CIs are:
+
+| Family (largest input) | 4-bit ratio [95% CI] | 8-bit ratio [95% CI] |
+|---|---|---|
+| dense | 13.1× [12, 13.4] | 12.6× [11.9, 13] |
+| sparse | 12.1× [12, 12.2] | 11.6× [11.5, 11.7] |
+| model | 18.8× [18.8, 18.9] | 20.3× [20.3, 20.4] |
+
+The model family also includes very small tensors where the OpenMP path is slower in its point estimate. These observations have no claim fields. The scalar baseline retains its disclosed finiteness scans and first-nonzero scan; these ratios quantify the selected implementations on this machine, not a general CUDA advantage over optimized CPU compression.
+
+#### Input-family comparison and limits
+
+Dense and sparse share all 34 count/bit cells. The model collection matches dense only at 8,192, 32,768 and 131,072 elements (six count/bit cells); the remaining 14 shapes have no dense count match. The table counts matching supported direction outcomes, treating two unsupported cells as agreement. It is a descriptive comparison of separate runs, not a paired causal test of input family.
+
+| CUDA path | Sparse agrees with dense / 34 | Model agrees with dense / 6 matched cells |
+|---|---:|---:|
+| cuda-resident | 32 | 5 |
+| cuda-resident-graph | 34 | 6 |
+| cuda-host-origin | 33 | 6 |
+| cuda-host-origin-pinned | 34 | 6 |
+| cuda-gpu-origin | 32 | 5 |
+| cuda-gpu-origin-pinned | 34 | 6 |
+
+Sparse inputs target 90% zeros; each report lists the realised fraction. Model tensors are synthetic values shaped like the 17 distinct reference-model tensors, not trained weights or a training workload. Separate family runs do not isolate input effects from session variability. Claims are limited to the recorded RTX 5060 system, affinity, compiler flags, implementations and memory boundaries. Stage-event medians are diagnostic and are never summed to form a complete-path timing. Historical snapshots retain their original source revision and rules; these results do not retroactively validate them.
+
 ## Comparison backends
 
 - Build the compiled CPU and CUDA backends as one native executable: a C host driver and single-thread C comparator, with CUDA kernels reached through `extern "C"` launch functions. Use Python for the reference and analysis.
