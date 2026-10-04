@@ -1,0 +1,62 @@
+Command: cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:precise /arch:AVX2 /openmp /D_CRT_SECURE_NO_WARNINGS /Inative /Ithird_party/random123/include /Qvec-report:2 /c native/quantizer_avx2.c /Fo:results/2026-10-03-ec31947-sparse-full-detached.partial/_temp/vec_obj_avx2/
+Exit code: 0
+
+quantizer_avx2.c
+
+--- Analyzing function: reverse_bits
+native\quantizer_avx2.c(56) : info C5002: loop not vectorized due to reason '1300'
+
+--- Analyzing function: add_halves
+native\quantizer_avx2.c(162) : info C5001: loop vectorized
+
+--- Analyzing function: combine_codes
+native\quantizer_avx2.c(365) : info C5001: loop vectorized
+
+--- Analyzing function: pack_nibbles
+native\quantizer_avx2.c(379) : info C5002: loop not vectorized due to reason '1203'
+
+--- Analyzing function: gather_terms
+native\quantizer_avx2.c(150) : info C5001: loop vectorized
+
+--- Analyzing function: split_scaled
+native\quantizer_avx2.c(342) : info C5001: loop vectorized
+
+--- Analyzing function: add_halves
+native\quantizer_avx2.c(163) : info C5003: block vectorized
+
+--- Analyzing function: philox_chunk
+native\quantizer_avx2.c(273) : info C5001: loop vectorized
+native\quantizer_avx2.c(284) : info C5001: loop vectorized
+native\quantizer_avx2.c(280) : info C5002: loop not vectorized due to reason '1106'
+native\quantizer_avx2.c(296) : info C5002: loop not vectorized due to reason '1505'
+
+--- Analyzing function: max_magnitude_bits$omp$1
+native\quantizer_avx2.c(115) : info C5001: loop vectorized
+
+--- Analyzing function: halves_tree
+native\quantizer_avx2.c(170) : info C5002: loop not vectorized due to reason '502'
+
+--- Analyzing function: block_sum
+native\quantizer_avx2.c(170) : info C5002: loop not vectorized due to reason '502'
+
+--- Analyzing function: sq_avx2_compute_scale_with_workspace$omp$1
+native\quantizer_avx2.c(170) : info C5002: loop not vectorized due to reason '502'
+native\quantizer_avx2.c(56) : info C5002: loop not vectorized due to reason '1300'
+native\quantizer_avx2.c(245) : info C5002: loop not vectorized due to reason '1106'
+
+--- Analyzing function: encode_range
+native\quantizer_avx2.c(379) : info C5002: loop not vectorized due to reason '1505'
+native\quantizer_avx2.c(396) : info C5002: loop not vectorized due to reason '1106'
+
+--- Analyzing function: sq_avx2_compute_scale_with_workspace
+native\quantizer_avx2.c(231) : info C5002: loop not vectorized due to reason '502'
+native\quantizer_avx2.c(170) : info C5002: loop not vectorized due to reason '502'
+native\quantizer_avx2.c(56) : info C5002: loop not vectorized due to reason '1300'
+native\quantizer_avx2.c(234) : info C5002: loop not vectorized due to reason '1106'
+
+--- Analyzing function: sq_avx2_encode_payload$omp$1
+native\quantizer_avx2.c(379) : info C5002: loop not vectorized due to reason '1505'
+native\quantizer_avx2.c(396) : info C5002: loop not vectorized due to reason '1106'
+
+--- Analyzing function: sq_avx2_rng_words$omp$1
+native\quantizer_avx2.c(319) : info C5002: loop not vectorized due to reason '1200'
