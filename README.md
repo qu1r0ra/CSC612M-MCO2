@@ -18,6 +18,9 @@ The earlier `ec31947` matrices stay in the tree as the same-code comparator that
 - [Benchmark protocol](docs/benchmark-protocol.md)
 - [Course deliverables](docs/course-deliverables.md)
 - [Architecture ADR](docs/adr/0001-cuda-stochastic-quantization-architecture.md)
+- [Core 0 exclusion and split claims](docs/adr/0002-core-0-exclusion-and-split-claims.md)
+- [GPU-origin boundary and transfer policy](docs/adr/0003-gpu-origin-boundary-and-transfer-policy.md)
+- [Snapshot lifecycle](docs/adr/0005-snapshot-lifecycle.md)
 
 The implementation, build, and reproduction instructions live in this repository. Project planning and issue tracking live in the private paper repository.
 
