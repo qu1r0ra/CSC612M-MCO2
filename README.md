@@ -1,6 +1,8 @@
-# CSC612M-MCO2
+# Stochastic Quantization Backends
 
-Public course implementation repository for the CSC612M-MCO2 data-level-parallelism project. The code, including its Python package, command and binary, is named `stoquant` ([ADR 0004](docs/adr/0004-stoquant-naming.md)).
+Public implementation repository for the CSC612M-MCO2 data-level-parallelism project. It contains scalar CPU, AVX2, and CUDA backends, with the Python package, command, and binary named `stoquant` ([ADR 0004](docs/adr/0004-stoquant-naming.md)).
+
+The course-scoped submission copy is [CSC612M-MCO2-Code](https://github.com/qu1r0ra/CSC612M-MCO2-Code). The repository boundary and synchronization decision is recorded in [ADR 0006](docs/adr/0006-repository-roles-and-names.md).
 
 ## Status
 
@@ -21,6 +23,7 @@ The earlier `ec31947` matrices stay in the tree as the same-code comparator that
 - [Core 0 exclusion and split claims](docs/adr/0002-core-0-exclusion-and-split-claims.md)
 - [GPU-origin boundary and transfer policy](docs/adr/0003-gpu-origin-boundary-and-transfer-policy.md)
 - [Snapshot lifecycle](docs/adr/0005-snapshot-lifecycle.md)
+- [Repository roles and names](docs/adr/0006-repository-roles-and-names.md)
 
 The implementation, build, and reproduction instructions live in this repository. Project planning and issue tracking live in the private paper repository.
 

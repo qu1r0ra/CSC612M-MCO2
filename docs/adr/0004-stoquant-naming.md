@@ -1,6 +1,6 @@
 ---
-status: accepted
-updated: 2026-09-28
+status: superseded by ADR-0006
+updated: 2026-10-06
 ---
 # The code is named `stoquant`; the repository and record magic keep their names
 
