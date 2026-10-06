@@ -4,3 +4,5 @@ results/**/report.md text eol=lf
 # Preserve the publication run's raw CSV and compiler-report bytes.
 results/2026-10-03-ec31947-*-full-detached/*.csv -text whitespace=cr-at-eol
 results/2026-10-03-ec31947-*-full-detached/*.txt -text whitespace=cr-at-eol
+results/2026-10-05-46c1294-*-strict-rerun/*.csv -text whitespace=cr-at-eol
+results/2026-10-05-46c1294-*-strict-rerun/*.txt -text whitespace=cr-at-eol
