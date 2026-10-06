@@ -1,0 +1,156 @@
+Command: cl.exe /nologo /O2 /W4 /WX /std:c11 /fp:strict /D_CRT_SECURE_NO_WARNINGS /DSQ_ENABLE_CUDA /Inative /Ithird_party/random123/include /Qvec-report:2 /c native/main.c native/cli.c native/bench_report.c native/sq_status.c native/codec.c native/quantizer.c native/rng_cpu.c native/cpu_compress.c /Fo:results/2026-10-05-46c1294-sparse-strict-rerun.partial/_temp/vec_obj/
+Exit code: 0
+
+main.c
+cli.c
+bench_report.c
+sq_status.c
+codec.c
+quantizer.c
+rng_cpu.c
+cpu_compress.c
+Generating Code...
+
+--- Analyzing function: sq_rng_words_cpu
+native\rng_cpu.c(7) : info C5002: loop not vectorized due to reason '502'
+
+--- Analyzing function: sq_scale_workspace_elements
+native\quantizer.c(56) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_validate_input
+native\quantizer.c(14) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: reduce_block
+native\quantizer.c(38) : info C5002: loop not vectorized due to reason '502'
+native\quantizer.c(33) : info C5002: loop not vectorized due to reason '1200'
+native\quantizer.c(39) : info C5002: loop not vectorized due to reason '1203'
+
+--- Analyzing function: sq_encode_payload_prologue
+native\quantizer.c(232) : info C5002: loop not vectorized due to reason '1103'
+
+--- Analyzing function: scan_scalar_encode_input
+native\quantizer.c(14) : info C5002: loop not vectorized due to reason '506'
+native\quantizer.c(168) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_compute_scale_with_workspace
+native\quantizer.c(79) : info C5002: loop not vectorized due to reason '506'
+native\quantizer.c(56) : info C5002: loop not vectorized due to reason '506'
+native\quantizer.c(38) : info C5002: loop not vectorized due to reason '502'
+native\quantizer.c(113) : info C5002: loop not vectorized due to reason '502'
+native\quantizer.c(33) : info C5002: loop not vectorized due to reason '1200'
+native\quantizer.c(39) : info C5002: loop not vectorized due to reason '1203'
+native\quantizer.c(110) : info C5002: loop not vectorized due to reason '1106'
+native\quantizer.c(114) : info C5002: loop not vectorized due to reason '1203'
+
+--- Analyzing function: sq_encode_payload
+native\quantizer.c(264) : info C5002: loop not vectorized due to reason '1200'
+native\quantizer.c(283) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: sq_compute_scale
+native\quantizer.c(56) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_decode_record
+native\codec.c(96) : info C5002: loop not vectorized due to reason '506'
+native\codec.c(119) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: print_double_array
+native\bench_report.c(45) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: print_invocation_ids
+native\bench_report.c(59) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: sq_bench_print_json
+native\bench_report.c(45) : info C5002: loop not vectorized due to reason '1200'
+native\bench_report.c(45) : info C5002: loop not vectorized due to reason '1200'
+native\bench_report.c(105) : info C5002: loop not vectorized due to reason '1106'
+
+--- Analyzing function: backend_row_for
+native\cli.c(237) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_transfer_policy_name
+native\cli.c(254) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_parse_u64
+native\cli.c(189) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_cli_legality
+native\cli.c(265) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: default_legality
+native\cli.c(277) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: parse_backend
+native\cli.c(289) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: parse_boundary
+native\cli.c(302) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: parse_policy
+native\cli.c(315) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: find_option
+native\cli.c(328) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_read_file
+native\cli.c(588) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_backend_name
+native\cli.c(237) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: parse_bounded
+native\cli.c(189) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: resolve_bench
+native\cli.c(463) : info C5002: loop not vectorized due to reason '506'
+native\cli.c(278) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: apply_option
+native\cli.c(289) : info C5002: loop not vectorized due to reason '506'
+native\cli.c(302) : info C5002: loop not vectorized due to reason '506'
+native\cli.c(315) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_cli_validate
+native\cli.c(238) : info C5002: loop not vectorized due to reason '506'
+native\cli.c(463) : info C5002: loop not vectorized due to reason '506'
+native\cli.c(278) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: sq_cli_parse
+native\cli.c(328) : info C5002: loop not vectorized due to reason '506'
+native\cli.c(435) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: default_thread_count
+native\main.c(86) : info C5002: loop not vectorized due to reason '501'
+
+--- Analyzing function: sq_load_u32_array_le
+native\byteorder.h(33) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: sq_store_f32_array_le
+native\byteorder.h(50) : info C5002: loop not vectorized due to reason '1300'
+
+--- Analyzing function: sq_load_f32_array_le
+native\byteorder.h(41) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: resolve_cpu_threads
+native\main.c(86) : info C5002: loop not vectorized due to reason '501'
+
+--- Analyzing function: decompress_file
+native\byteorder.h(50) : info C5002: loop not vectorized due to reason '1300'
+
+--- Analyzing function: bench_cpu_gpu_origin
+native\main.c(367) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: expect_file
+native\main.c(809) : info C5002: loop not vectorized due to reason '506'
+native\main.c(818) : info C5001: loop vectorized
+native\main.c(833) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: compress_file
+native\byteorder.h(41) : info C5002: loop not vectorized due to reason '1200'
+native\byteorder.h(33) : info C5002: loop not vectorized due to reason '1200'
+native\byteorder.h(33) : info C5002: loop not vectorized due to reason '1200'
+
+--- Analyzing function: bench_file
+native\main.c(552) : info C5002: loop not vectorized due to reason '506'
+
+--- Analyzing function: main
+native\byteorder.h(50) : info C5002: loop not vectorized due to reason '1300'
