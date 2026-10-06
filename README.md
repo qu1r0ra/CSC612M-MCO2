@@ -6,7 +6,9 @@ Public course implementation repository for the CSC612M-MCO2 data-level-parallel
 
 The public technical contract, benchmark protocol, and course-deliverables guide define how to implement and measure this course project.
 The CPU scalar and AVX2 quantizers, CUDA 8-bit and 4-bit quantizers, record codec, decoder, Philox generator, and NumPy oracle are implemented and verified on the RTX 5060.
-The benchmark matrix with its paper extensions, the Layer 3 unbiasedness suite, and the K1 bandwidth baseline and A/B tools are implemented. Superseded run snapshots are archived in Git history; current publication fixtures are under `tests/golden/`.
+The benchmark matrix with its paper extensions, the Layer 3 unbiasedness suite, and the K1 bandwidth baseline and A/B tools are implemented.
+The publication evidence is the strict rerun at source revision `46c1294`: the dense, sparse and model matrices in `results/2026-10-05-46c1294-*-strict-rerun`, with a comparative review in `results/2026-10-05-46c1294-review`. The K1 A/B and unbiasedness runs at `5d0841b` complete it.
+The earlier `ec31947` matrices stay in the tree as the same-code comparator that the review reads. Other superseded snapshots are archived in Git history ([ADR 0005](docs/adr/0005-snapshot-lifecycle.md)); test fixtures are under `tests/golden/`.
 
 ## Start here
 

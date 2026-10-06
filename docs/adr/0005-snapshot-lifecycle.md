@@ -12,6 +12,7 @@ A snapshot under `results/` is the raw record of one run: its case JSONs, manife
 - **Failed runs leave no half snapshot.** A sweep that fails leaves a partial folder, never one with the final name. That removes the temptation to finish a failed run in place, which is how a snapshot would come to mix two code states.
 - **Raw bytes stay fixed.** Report and figure changes (new plots, corrected labels, revised statistics text) regenerate `derived/`, and the raw files keep their bytes. A reader can trust that the case JSONs and manifest are exactly what the timed run produced.
 - **Only current evidence is in the tree.** A snapshot is deleted in the change that supersedes the pipeline that produced it, even if its replacement lands later; the tree may briefly hold no evidence for an experiment. The paper cites only snapshots that exist at the paper's pinned revision. Deleted snapshots stay retrievable through git history at the revision where they last existed.
+- **Retained comparator.** A snapshot is not superseded when its replacement runs the same benchmark implementation. The `ec31947` matrices stay beside the `46c1294` strict rerun because `results/2026-10-05-46c1294-review/analyze.py` reads both. Delete them in the change that removes or rewrites that review.
 - **Tests do not depend on evidence.** Golden tests read fixtures under the test tree, never a folder under `results/`, so deleting a superseded snapshot never breaks the suite.
 
 ## Considered options
